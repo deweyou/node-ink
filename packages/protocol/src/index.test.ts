@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { createBlankDocument, parseEngineUpdate } from './index';
+import { createBlankDocument, parseEngineUpdate, parsePointerUpdate } from './index';
 
 describe('protocol V1', () => {
   it('creates a blank document with explicit versions', () => {
@@ -75,6 +75,28 @@ describe('protocol V1', () => {
         JSON.stringify(updateFixture(undefined, historyOverride as Record<string, unknown>)),
       ),
     ).toThrow('protocol V1');
+  });
+
+  it('parses pointer processing metadata around a valid engine update', () => {
+    const value = {
+      update: updateFixture(),
+      processedEventCount: 8,
+      ignoredEventCount: 1,
+      didCommit: false,
+    };
+
+    expect(parsePointerUpdate(JSON.stringify(value))).toEqual(value);
+  });
+
+  it.each([
+    null,
+    {},
+    { update: null, processedEventCount: 1, ignoredEventCount: 0, didCommit: false },
+    { update: {}, processedEventCount: '1', ignoredEventCount: 0, didCommit: false },
+    { update: {}, processedEventCount: 1, ignoredEventCount: '0', didCommit: false },
+    { update: {}, processedEventCount: 1, ignoredEventCount: 0, didCommit: 'false' },
+  ])('rejects invalid pointer update metadata', (value) => {
+    expect(() => parsePointerUpdate(JSON.stringify(value))).toThrow('invalid pointer update');
   });
 });
 

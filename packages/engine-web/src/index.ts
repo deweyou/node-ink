@@ -1,14 +1,18 @@
 import {
   parseEngineUpdate,
+  parsePointerUpdate,
   type CommandEnvelopeV1,
   type EnginePortV1,
   type EngineUpdateV1,
   type NodeInkDocumentV1,
+  type NormalizedPointerEventV1,
+  type PointerUpdateV1,
 } from '@nodeink-internal/protocol';
 
 interface WasmEngineHandle {
   currentUpdate(): string;
   executeCommand(commandJson: string): string;
+  handlePointerEvents(eventsJson: string, commandId: string): string;
   undo(): string;
   redo(): string;
   free(): void;
@@ -41,6 +45,19 @@ class WasmEnginePort implements EnginePortV1 {
   async executeCommand(command: CommandEnvelopeV1): Promise<EngineUpdateV1> {
     try {
       return parseEngineUpdate(this.requireHandle().executeCommand(JSON.stringify(command)));
+    } catch (error) {
+      throw normalizeEngineError(error);
+    }
+  }
+
+  async handlePointerEvents(
+    events: NormalizedPointerEventV1[],
+    commandId: string,
+  ): Promise<PointerUpdateV1> {
+    try {
+      return parsePointerUpdate(
+        this.requireHandle().handlePointerEvents(JSON.stringify(events), commandId),
+      );
     } catch (error) {
       throw normalizeEngineError(error);
     }

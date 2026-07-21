@@ -82,9 +82,30 @@ export interface SceneRectV1 {
 export interface EnginePortV1 {
   currentUpdate(): Promise<EngineUpdateV1>;
   executeCommand(command: CommandEnvelopeV1): Promise<EngineUpdateV1>;
+  handlePointerEvents(
+    events: NormalizedPointerEventV1[],
+    commandId: string,
+  ): Promise<PointerUpdateV1>;
   undo(): Promise<EngineUpdateV1>;
   redo(): Promise<EngineUpdateV1>;
   dispose(): void;
+}
+
+export type PointerPhaseV1 = 'down' | 'move' | 'up' | 'cancel';
+
+export interface NormalizedPointerEventV1 {
+  pointerId: number;
+  sequence: number;
+  phase: PointerPhaseV1;
+  point: Vec2;
+  targetElementId: string | null;
+}
+
+export interface PointerUpdateV1 {
+  update: EngineUpdateV1;
+  processedEventCount: number;
+  ignoredEventCount: number;
+  didCommit: boolean;
 }
 
 export interface RendererV1 {
@@ -124,6 +145,25 @@ export function parseEngineUpdate(value: string): EngineUpdateV1 {
     throw new Error('Engine update does not satisfy protocol V1');
   }
   return parsed as unknown as EngineUpdateV1;
+}
+
+export function parsePointerUpdate(value: string): PointerUpdateV1 {
+  const parsed: unknown = JSON.parse(value);
+  if (
+    !isRecord(parsed) ||
+    !isRecord(parsed.update) ||
+    typeof parsed.processedEventCount !== 'number' ||
+    typeof parsed.ignoredEventCount !== 'number' ||
+    typeof parsed.didCommit !== 'boolean'
+  ) {
+    throw new Error('Engine returned an invalid pointer update payload');
+  }
+  return {
+    update: parseEngineUpdate(JSON.stringify(parsed.update)),
+    processedEventCount: parsed.processedEventCount,
+    ignoredEventCount: parsed.ignoredEventCount,
+    didCommit: parsed.didCommit,
+  };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

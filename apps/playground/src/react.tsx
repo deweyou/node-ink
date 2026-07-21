@@ -2,6 +2,7 @@ import { createRoot } from 'react-dom/client';
 
 import { NodeInkEditor } from '@nodeink-internal/editor-react';
 
+import { exposePointerBenchmark } from './benchmark-api';
 import { createController } from './create-controller';
 import './styles.css';
 
@@ -11,4 +12,5 @@ if (!rootElement) {
 }
 
 const controller = await createController();
+exposePointerBenchmark(controller);
 createRoot(rootElement).render(<NodeInkEditor controller={controller} />);

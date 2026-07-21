@@ -1,4 +1,6 @@
-use nodeink_core::{CommandEnvelopeV1, Engine, EngineErrorV1, NodeInkDocumentV1};
+use nodeink_core::{
+    CommandEnvelopeV1, Engine, EngineErrorV1, NodeInkDocumentV1, NormalizedPointerEventV1,
+};
 use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen]
@@ -31,6 +33,21 @@ impl EngineHandle {
 
     pub fn redo(&mut self) -> Result<String, JsValue> {
         let update = self.engine.redo().map_err(engine_error)?;
+        serde_json::to_string(&update).map_err(|error| js_error("serialization_failed", error))
+    }
+
+    #[wasm_bindgen(js_name = handlePointerEvents)]
+    pub fn handle_pointer_events(
+        &mut self,
+        events_json: &str,
+        command_id: String,
+    ) -> Result<String, JsValue> {
+        let events: Vec<NormalizedPointerEventV1> =
+            serde_json::from_str(events_json).map_err(|error| js_error("schema_invalid", error))?;
+        let update = self
+            .engine
+            .handle_pointer_events(command_id, events)
+            .map_err(engine_error)?;
         serde_json::to_string(&update).map_err(|error| js_error("serialization_failed", error))
     }
 

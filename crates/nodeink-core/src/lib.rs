@@ -3,6 +3,11 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+mod pointer;
+
+pub use pointer::{NormalizedPointerEventV1, PointerPhaseV1};
+use pointer::{PointerMachine, PointerPreview, PointerTransition};
+
 pub const PROTOCOL_VERSION: u32 = 1;
 pub const SCHEMA_VERSION: u32 = 1;
 
@@ -124,6 +129,15 @@ pub struct EngineUpdateV1 {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct PointerUpdateV1 {
+    pub update: EngineUpdateV1,
+    pub processed_event_count: usize,
+    pub ignored_event_count: usize,
+    pub did_commit: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SceneSnapshotV1 {
     pub protocol_version: u32,
     pub document_id: DocumentId,
@@ -185,6 +199,7 @@ pub struct Engine {
     scene_revision: u64,
     undo_stack: Vec<NodeInkDocumentV1>,
     redo_stack: Vec<NodeInkDocumentV1>,
+    pointer_machine: PointerMachine,
 }
 
 impl Engine {
@@ -195,6 +210,7 @@ impl Engine {
             scene_revision: 0,
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
+            pointer_machine: PointerMachine::default(),
         })
     }
 
@@ -203,6 +219,61 @@ impl Engine {
     }
 
     pub fn execute_command(
+        &mut self,
+        envelope: CommandEnvelopeV1,
+    ) -> Result<EngineUpdateV1, EngineErrorV1> {
+        self.pointer_machine.cancel();
+        self.execute_command_without_pointer_reset(envelope)
+    }
+
+    pub fn handle_pointer_events(
+        &mut self,
+        command_id: String,
+        events: Vec<NormalizedPointerEventV1>,
+    ) -> Result<PointerUpdateV1, EngineErrorV1> {
+        let outcome = self
+            .pointer_machine
+            .process_batch(self.document.revision, events);
+        let (update, did_commit) = match outcome.transition {
+            PointerTransition::None => (self.current_update(), false),
+            PointerTransition::Preview(preview) => {
+                self.scene_revision += 1;
+                (self.update_with_preview(Some(&preview)), false)
+            }
+            PointerTransition::Cancelled => {
+                self.scene_revision += 1;
+                (self.current_update(), false)
+            }
+            PointerTransition::Commit(commit) => {
+                let has_movement = commit.delta.x != 0.0 || commit.delta.y != 0.0;
+                if !has_movement {
+                    self.scene_revision += 1;
+                    (self.current_update(), false)
+                } else {
+                    let envelope = CommandEnvelopeV1 {
+                        protocol_version: PROTOCOL_VERSION,
+                        command_id,
+                        document_id: self.document.document_id.clone(),
+                        expected_revision: commit.expected_revision,
+                        command: CommandV1::MoveElements {
+                            element_ids: vec![commit.element_id],
+                            delta: commit.delta,
+                        },
+                    };
+                    (self.execute_command_without_pointer_reset(envelope)?, true)
+                }
+            }
+        };
+
+        Ok(PointerUpdateV1 {
+            update,
+            processed_event_count: outcome.processed_event_count,
+            ignored_event_count: outcome.ignored_event_count,
+            did_commit,
+        })
+    }
+
+    fn execute_command_without_pointer_reset(
         &mut self,
         envelope: CommandEnvelopeV1,
     ) -> Result<EngineUpdateV1, EngineErrorV1> {
@@ -229,6 +300,7 @@ impl Engine {
     }
 
     pub fn undo(&mut self) -> Result<EngineUpdateV1, EngineErrorV1> {
+        self.pointer_machine.cancel();
         let mut previous = self
             .undo_stack
             .pop()
@@ -242,6 +314,7 @@ impl Engine {
     }
 
     pub fn redo(&mut self) -> Result<EngineUpdateV1, EngineErrorV1> {
+        self.pointer_machine.cancel();
         let mut next = self
             .redo_stack
             .pop()
@@ -281,9 +354,21 @@ impl Engine {
     }
 
     fn update(&self, operation: Option<OperationResultV1>) -> EngineUpdateV1 {
+        self.update_with_operation_and_preview(operation, None)
+    }
+
+    fn update_with_preview(&self, preview: Option<&PointerPreview>) -> EngineUpdateV1 {
+        self.update_with_operation_and_preview(None, preview)
+    }
+
+    fn update_with_operation_and_preview(
+        &self,
+        operation: Option<OperationResultV1>,
+        preview: Option<&PointerPreview>,
+    ) -> EngineUpdateV1 {
         EngineUpdateV1 {
             operation,
-            scene: resolve_scene(&self.document, self.scene_revision),
+            scene: resolve_scene(&self.document, self.scene_revision, preview),
             history: HistoryStateV1 {
                 can_undo: !self.undo_stack.is_empty(),
                 can_redo: !self.redo_stack.is_empty(),
@@ -386,7 +471,11 @@ fn validate_rectangle(rectangle: &RectElementV1) -> Result<(), EngineErrorV1> {
     Ok(())
 }
 
-fn resolve_scene(document: &NodeInkDocumentV1, scene_revision: u64) -> SceneSnapshotV1 {
+fn resolve_scene(
+    document: &NodeInkDocumentV1,
+    scene_revision: u64,
+    preview: Option<&PointerPreview>,
+) -> SceneSnapshotV1 {
     let mut root_node_ids = Vec::with_capacity(document.root_order.len());
     let mut nodes = BTreeMap::new();
 
@@ -396,6 +485,9 @@ fn resolve_scene(document: &NodeInkDocumentV1, scene_revision: u64) -> SceneSnap
         };
         match element {
             ElementRecordV1::Rect(rectangle) => {
+                let preview_delta = preview
+                    .filter(|candidate| candidate.element_id == rectangle.id)
+                    .map_or(Vec2 { x: 0.0, y: 0.0 }, |candidate| candidate.delta);
                 let scene_node_id = format!("{}:shape", rectangle.id);
                 root_node_ids.push(scene_node_id.clone());
                 nodes.insert(
@@ -403,8 +495,8 @@ fn resolve_scene(document: &NodeInkDocumentV1, scene_revision: u64) -> SceneSnap
                     SceneNodeV1::Rect(SceneRectV1 {
                         id: scene_node_id,
                         source_element_id: rectangle.id.clone(),
-                        x: rectangle.x,
-                        y: rectangle.y,
+                        x: rectangle.x + preview_delta.x,
+                        y: rectangle.y + preview_delta.y,
                         width: rectangle.width,
                         height: rectangle.height,
                         fill: "#d1fae5".to_string(),
@@ -803,5 +895,140 @@ mod tests {
             engine.serialize_document().unwrap(),
             r#"{"schemaVersion":1,"documentId":"doc-1","revision":0,"rootOrder":[],"elements":{}}"#
         );
+    }
+
+    #[test]
+    fn pointer_drag_previews_without_mutation_then_commits_one_undo_entry() {
+        let mut engine = Engine::open(document_with_rectangle()).unwrap();
+
+        let down = engine
+            .handle_pointer_events(
+                "drag-1".to_string(),
+                vec![pointer_event(PointerPhaseV1::Down, 1, 24.0, Some("rect-1"))],
+            )
+            .unwrap();
+        assert!(!down.did_commit);
+        assert_eq!(down.processed_event_count, 1);
+
+        let preview = engine
+            .handle_pointer_events(
+                "drag-1".to_string(),
+                vec![pointer_event(PointerPhaseV1::Move, 2, 56.0, None)],
+            )
+            .unwrap();
+        let SceneNodeV1::Rect(preview_rectangle) = &preview.update.scene.nodes["rect-1:shape"];
+        assert_eq!(preview_rectangle.x, 56.0);
+        assert_eq!(preview.update.scene.document_revision, 0);
+        let ElementRecordV1::Rect(document_rectangle) = &engine.document().elements["rect-1"];
+        assert_eq!(document_rectangle.x, 24.0);
+
+        let committed = engine
+            .handle_pointer_events(
+                "drag-1".to_string(),
+                vec![pointer_event(PointerPhaseV1::Up, 3, 56.0, None)],
+            )
+            .unwrap();
+        assert!(committed.did_commit);
+        assert_eq!(committed.update.scene.document_revision, 1);
+        let SceneNodeV1::Rect(committed_rectangle) = &committed.update.scene.nodes["rect-1:shape"];
+        assert_eq!(committed_rectangle.x, 56.0);
+
+        let undone = engine.undo().unwrap();
+        let SceneNodeV1::Rect(undone_rectangle) = &undone.scene.nodes["rect-1:shape"];
+        assert_eq!(undone_rectangle.x, 24.0);
+        assert!(!undone.history.can_undo);
+    }
+
+    #[test]
+    fn pointer_batches_ignore_other_pointers_and_out_of_order_sequences() {
+        let mut engine = Engine::open(document_with_rectangle()).unwrap();
+        let batch = engine
+            .handle_pointer_events(
+                "drag-batch".to_string(),
+                vec![
+                    pointer_event(PointerPhaseV1::Down, 10, 24.0, Some("rect-1")),
+                    NormalizedPointerEventV1 {
+                        pointer_id: 2,
+                        ..pointer_event(PointerPhaseV1::Move, 11, 40.0, None)
+                    },
+                    pointer_event(PointerPhaseV1::Move, 11, 40.0, None),
+                    pointer_event(PointerPhaseV1::Move, 11, 48.0, None),
+                    pointer_event(PointerPhaseV1::Move, 12, 64.0, None),
+                ],
+            )
+            .unwrap();
+
+        assert_eq!(batch.processed_event_count, 5);
+        assert_eq!(batch.ignored_event_count, 2);
+        let SceneNodeV1::Rect(preview_rectangle) = &batch.update.scene.nodes["rect-1:shape"];
+        assert_eq!(preview_rectangle.x, 64.0);
+        assert_eq!(engine.document().revision, 0);
+    }
+
+    #[test]
+    fn pointer_cancel_and_zero_delta_up_do_not_create_history() {
+        let mut engine = Engine::open(document_with_rectangle()).unwrap();
+        let ignored = engine
+            .handle_pointer_events(
+                "ignored".to_string(),
+                vec![pointer_event(PointerPhaseV1::Move, 1, 40.0, None)],
+            )
+            .unwrap();
+        assert_eq!(ignored.ignored_event_count, 1);
+
+        engine
+            .handle_pointer_events(
+                "cancelled".to_string(),
+                vec![pointer_event(PointerPhaseV1::Down, 2, 24.0, Some("rect-1"))],
+            )
+            .unwrap();
+        let cancelled = engine
+            .handle_pointer_events(
+                "cancelled".to_string(),
+                vec![pointer_event(PointerPhaseV1::Cancel, 3, 48.0, None)],
+            )
+            .unwrap();
+        assert!(!cancelled.did_commit);
+        assert_eq!(cancelled.update.scene.document_revision, 0);
+
+        engine
+            .handle_pointer_events(
+                "zero".to_string(),
+                vec![pointer_event(PointerPhaseV1::Down, 4, 24.0, Some("rect-1"))],
+            )
+            .unwrap();
+        let zero_delta = engine
+            .handle_pointer_events(
+                "zero".to_string(),
+                vec![pointer_event(PointerPhaseV1::Up, 5, 24.0, None)],
+            )
+            .unwrap();
+        assert!(!zero_delta.did_commit);
+        assert_eq!(engine.undo(), Err(EngineErrorV1::UndoUnavailable));
+    }
+
+    fn document_with_rectangle() -> NodeInkDocumentV1 {
+        let mut document = NodeInkDocumentV1::blank("doc-1");
+        let rectangle = rectangle("rect-1", 24.0);
+        document.root_order.push(rectangle.id.clone());
+        document
+            .elements
+            .insert(rectangle.id.clone(), ElementRecordV1::Rect(rectangle));
+        document
+    }
+
+    fn pointer_event(
+        phase: PointerPhaseV1,
+        sequence: u64,
+        x: f64,
+        target_element_id: Option<&str>,
+    ) -> NormalizedPointerEventV1 {
+        NormalizedPointerEventV1 {
+            pointer_id: 1,
+            sequence,
+            phase,
+            point: Vec2 { x, y: 40.0 },
+            target_element_id: target_element_id.map(str::to_string),
+        }
     }
 }

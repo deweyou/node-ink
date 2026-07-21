@@ -75,6 +75,13 @@
 - Rust crate 使用 `nodeink-*`；Phase 0 npm package 使用内部 workspace 名称，不承诺公共 scope。
 - 公共 npm scope 与稳定包名仍在 Phase 3 设计公共 SDK 时决定。
 
+### D-13 Pointer preview 与矩形拖拽传输
+
+- DOM 负责 Pointer Event 采集、坐标规范化、pointer capture 与 coalesced event 读取。
+- Rust 状态机持有 drag session、sequence guard、preview、cancel 和 PointerUp 单次 commit。
+- S1 矩形拖拽保留单事件 JSON；batch-8 未改善约 0.1ms 的 P95，只减少约 0.8% 字节。
+- 该结论只适用于矩形拖拽。S2 仍独立比较自由笔迹的 JSON point、TypedArray 与 batch size。
+
 ## 22. 需要产品负责人决策的问题
 
 以下问题不阻碍继续评审文档，但会阻碍对应功能进入实现。

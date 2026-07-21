@@ -3,10 +3,14 @@ import {
   type CommandEnvelopeV1,
   type EnginePortV1,
   type EngineUpdateV1,
+  type NormalizedPointerEventV1,
+  type PointerUpdateV1,
   type RectElementV1,
   type RendererV1,
   type SceneSnapshotV1,
 } from '@nodeink-internal/protocol';
+
+import { attachPointerInput } from './pointer-input';
 
 export type EditorActionV1 =
   | {
@@ -15,6 +19,7 @@ export type EditorActionV1 =
       position?: { x: number; y: number };
     }
   | { type: 'move_active'; delta: { x: number; y: number } }
+  | { type: 'pointer_events'; events: NormalizedPointerEventV1[] }
   | { type: 'undo' }
   | { type: 'redo' };
 
@@ -32,6 +37,7 @@ export interface EditorUiSnapshotV1 {
 export interface EditorActionResultV1 {
   ok: boolean;
   snapshot: EditorUiSnapshotV1;
+  pointerMetrics?: Pick<PointerUpdateV1, 'processedEventCount' | 'ignoredEventCount' | 'didCommit'>;
 }
 
 export interface EditorWebControllerV1 {
@@ -66,6 +72,7 @@ export class EditorWebController implements EditorWebControllerV1 {
   readonly #listeners = new Set<() => void>();
   #snapshot = initialSnapshot;
   #documentId: string | null = null;
+  #detachPointerInput: (() => void) | null = null;
   #queue = Promise.resolve();
   #isDisposed = false;
 
@@ -78,6 +85,10 @@ export class EditorWebController implements EditorWebControllerV1 {
   async mount(target: HTMLElement): Promise<void> {
     this.ensureActive();
     this.#renderer.mount(target);
+    this.#detachPointerInput?.();
+    this.#detachPointerInput = attachPointerInput(target, (events) => {
+      void this.dispatch({ type: 'pointer_events', events });
+    });
     try {
       this.applyUpdate(await this.#engine.currentUpdate());
     } catch (error) {
@@ -109,6 +120,8 @@ export class EditorWebController implements EditorWebControllerV1 {
       return;
     }
     this.#isDisposed = true;
+    this.#detachPointerInput?.();
+    this.#detachPointerInput = null;
     this.#listeners.clear();
     this.#renderer.unmount();
     this.#engine.dispose();
@@ -118,27 +131,42 @@ export class EditorWebController implements EditorWebControllerV1 {
   private async runAction(action: EditorActionV1): Promise<EditorActionResultV1> {
     this.ensureActive();
     try {
-      const update = await this.executeAction(action);
-      this.applyUpdate(update);
-      return { ok: true, snapshot: this.#snapshot };
+      const execution = await this.executeAction(action);
+      this.applyUpdate(execution.update);
+      return {
+        ok: true,
+        snapshot: this.#snapshot,
+        ...(execution.pointerMetrics ? { pointerMetrics: execution.pointerMetrics } : {}),
+      };
     } catch (error) {
       this.setError(error);
       return { ok: false, snapshot: this.#snapshot };
     }
   }
 
-  private async executeAction(action: EditorActionV1): Promise<EngineUpdateV1> {
+  private async executeAction(action: EditorActionV1): Promise<ActionExecutionResult> {
     if (action.type === 'undo') {
-      return this.#engine.undo();
+      return { update: await this.#engine.undo() };
     }
     if (action.type === 'redo') {
-      return this.#engine.redo();
+      return { update: await this.#engine.redo() };
     }
     if (!this.#documentId) {
       throw new Error('Editor must be mounted before dispatching document actions');
     }
 
     const commandId = this.#createId();
+    if (action.type === 'pointer_events') {
+      const pointerUpdate = await this.#engine.handlePointerEvents(action.events, commandId);
+      return {
+        update: pointerUpdate.update,
+        pointerMetrics: {
+          processedEventCount: pointerUpdate.processedEventCount,
+          ignoredEventCount: pointerUpdate.ignoredEventCount,
+          didCommit: pointerUpdate.didCommit,
+        },
+      };
+    }
     const envelope: CommandEnvelopeV1 = {
       protocolVersion,
       commandId,
@@ -156,7 +184,7 @@ export class EditorWebController implements EditorWebControllerV1 {
               delta: action.delta,
             },
     };
-    return this.#engine.executeCommand(envelope);
+    return { update: await this.#engine.executeCommand(envelope) };
   }
 
   private applyUpdate(update: EngineUpdateV1): void {
@@ -210,6 +238,14 @@ export class EditorWebController implements EditorWebControllerV1 {
     }
   }
 }
+
+interface ActionExecutionResult {
+  update: EngineUpdateV1;
+  pointerMetrics?: Pick<PointerUpdateV1, 'processedEventCount' | 'ignoredEventCount' | 'didCommit'>;
+}
+
+export { runPointerBenchmark } from './pointer-benchmark';
+export type { PointerBenchmarkOptions, PointerBenchmarkResult } from './pointer-benchmark';
 
 function createRectangle(
   id: string,

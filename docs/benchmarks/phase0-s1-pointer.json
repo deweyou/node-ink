@@ -1,0 +1,66 @@
+{
+  "commit": "bdef2e3",
+  "build": "release-wasm-dev-host",
+  "engineAlgorithmVersion": "phase0-s1",
+  "browser": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36",
+  "os": "MacIntel",
+  "hardware": {
+    "logicalProcessors": 18,
+    "deviceMemoryGb": 32,
+    "display": "2056x1329@2x"
+  },
+  "method": {
+    "workload": "3600 synthetic move samples, equivalent to 30 seconds at 120 Hz, dispatched as quickly as the pipeline accepts them",
+    "scope": "normalized pointer event -> TypeScript controller queue -> release WASM Rust preview/commit -> SVG snapshot apply",
+    "excluded": [
+      "operating-system input scheduling",
+      "DOM PointerEvent normalization time"
+    ]
+  },
+  "singleEvent": {
+    "sample": {
+      "durationSeconds": 30,
+      "inputHz": 120,
+      "moveEventCount": 3600,
+      "batchSize": 1
+    },
+    "metrics": {
+      "p50Ms": 0,
+      "p95Ms": 0.10000002384185791,
+      "p99Ms": 0.10000002384185791,
+      "maxMs": 0.7000000476837158,
+      "bytes": 380558,
+      "processedEventCount": 3602,
+      "ignoredEventCount": 0,
+      "commitCount": 1,
+      "longTaskCount": 0
+    },
+    "decision": {
+      "isWithinFrameBudget": true,
+      "hasOrderedSingleCommit": true
+    }
+  },
+  "batch8": {
+    "sample": {
+      "durationSeconds": 30,
+      "inputHz": 120,
+      "moveEventCount": 3600,
+      "batchSize": 8
+    },
+    "metrics": {
+      "p50Ms": 0,
+      "p95Ms": 0.10000002384185791,
+      "p99Ms": 0.10000002384185791,
+      "maxMs": 0.40000009536743164,
+      "bytes": 377408,
+      "processedEventCount": 3602,
+      "ignoredEventCount": 0,
+      "commitCount": 1,
+      "longTaskCount": 0
+    },
+    "decision": {
+      "isWithinFrameBudget": true,
+      "hasOrderedSingleCommit": true
+    }
+  }
+}

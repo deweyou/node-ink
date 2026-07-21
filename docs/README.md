@@ -50,6 +50,7 @@
 ## 工程状态
 
 - [Phase 0 纵向切片结果](planning/phase0-vertical-slice.md)：记录已经实现的边界、验证命令、浏览器证据与尚未覆盖的 Spike。
+- [S1 Pointer benchmark](benchmarks/phase0-s1-pointer.json)：记录 release WASM 环境、P50/P95/P99、字节、错序、commit 与 long task 基线。
 - [根 README](../README.md)：提供本地运行入口与完整检查命令。
 - 本阶段产物仍是可推翻的技术验证，不代表 Phase 1A 产品闭环已经完成。
 

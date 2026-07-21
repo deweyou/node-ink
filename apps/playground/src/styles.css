@@ -139,8 +139,17 @@ button:disabled {
   min-height: 620px;
 }
 
+.nodeink-canvas {
+  touch-action: none;
+}
+
 .nodeink-canvas rect {
+  cursor: grab;
   filter: drop-shadow(0 8px 14px color-mix(in srgb, var(--ui-color-text) 8%, transparent));
+}
+
+.nodeink-canvas rect:active {
+  cursor: grabbing;
 }
 
 .nodeink-status {
@@ -175,6 +184,28 @@ button:disabled {
   color: var(--ui-color-danger-text);
   background: var(--ui-color-danger-soft);
   font-size: 13px;
+}
+
+.nodeink-benchmark {
+  position: absolute;
+  inset: 16px 16px auto auto;
+  max-width: min(680px, calc(100% - 32px));
+  max-height: calc(100% - 84px);
+  margin: 0;
+  padding: 12px;
+  overflow: auto;
+  border: 1px solid var(--ui-color-border);
+  border-radius: var(--ui-radius-auto);
+  color: var(--ui-color-text);
+  background: color-mix(in srgb, var(--ui-color-surface) 96%, transparent);
+  font:
+    11px/1.45 ui-monospace,
+    SFMono-Regular,
+    Menlo,
+    Monaco,
+    Consolas,
+    monospace;
+  white-space: pre-wrap;
 }
 
 @media (prefers-reduced-motion: reduce) {

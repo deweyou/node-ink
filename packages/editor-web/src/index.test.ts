@@ -4,6 +4,8 @@ import type {
   CommandEnvelopeV1,
   EnginePortV1,
   EngineUpdateV1,
+  NormalizedPointerEventV1,
+  PointerUpdateV1,
   RendererV1,
   SceneSnapshotV1,
 } from '@nodeink-internal/protocol';
@@ -57,6 +59,10 @@ describe('EditorWebController', () => {
     });
     await controller.dispatch({ type: 'undo' });
     await controller.dispatch({ type: 'redo' });
+    const pointer = await controller.dispatch({
+      type: 'pointer_events',
+      events: [pointerEvent('down', 1)],
+    });
 
     expect(engine.commands[0]).toMatchObject({
       commandId: 'command-1',
@@ -67,7 +73,12 @@ describe('EditorWebController', () => {
     });
     expect(engine.undoCalls).toBe(1);
     expect(engine.redoCalls).toBe(1);
-    expect(listener).toHaveBeenCalledTimes(4);
+    expect(pointer.pointerMetrics).toEqual({
+      processedEventCount: 1,
+      ignoredEventCount: 0,
+      didCommit: false,
+    });
+    expect(listener).toHaveBeenCalledTimes(5);
 
     unsubscribe();
     controller.dispose();
@@ -185,6 +196,18 @@ class StubEngine implements EnginePortV1 {
     return this.update([this.#rectangleId ?? 'rect-1']);
   }
 
+  async handlePointerEvents(
+    events: NormalizedPointerEventV1[],
+    _commandId: string,
+  ): Promise<PointerUpdateV1> {
+    return {
+      update: this.update(),
+      processedEventCount: events.length,
+      ignoredEventCount: 0,
+      didCommit: false,
+    };
+  }
+
   async undo(): Promise<EngineUpdateV1> {
     this.undoCalls += 1;
     return this.update();
@@ -262,5 +285,18 @@ function stubScene(revision: number, rectangleId: string | null): SceneSnapshotV
     sceneRevision: revision,
     rootNodeIds: sceneNodeId ? [sceneNodeId] : [],
     nodes,
+  };
+}
+
+function pointerEvent(
+  phase: NormalizedPointerEventV1['phase'],
+  sequence: number,
+): NormalizedPointerEventV1 {
+  return {
+    pointerId: 1,
+    sequence,
+    phase,
+    point: { x: 10, y: 20 },
+    targetElementId: phase === 'down' ? 'rect-1' : null,
   };
 }

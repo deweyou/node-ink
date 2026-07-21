@@ -7,6 +7,7 @@ const wasm = vi.hoisted(() => {
   const handle = {
     currentUpdate: vi.fn(),
     executeCommand: vi.fn(),
+    handlePointerEvents: vi.fn(),
     undo: vi.fn(),
     redo: vi.fn(),
     free: vi.fn(),
@@ -31,6 +32,7 @@ describe('createWasmEngine', () => {
     const update = validUpdate();
     wasm.handle.currentUpdate.mockReturnValue(update);
     wasm.handle.executeCommand.mockReturnValue(update);
+    wasm.handle.handlePointerEvents.mockReturnValue(pointerUpdate());
     wasm.handle.undo.mockReturnValue(update);
     wasm.handle.redo.mockReturnValue(update);
   });
@@ -55,12 +57,29 @@ describe('createWasmEngine', () => {
     await expect(engine.executeCommand(command)).resolves.toMatchObject({
       history: { canUndo: false },
     });
+    const pointerEvents = [
+      {
+        pointerId: 1,
+        sequence: 1,
+        phase: 'down' as const,
+        point: { x: 1, y: 2 },
+        targetElementId: 'rect-1',
+      },
+    ];
+    await expect(engine.handlePointerEvents(pointerEvents, 'drag-1')).resolves.toMatchObject({
+      processedEventCount: 1,
+      didCommit: false,
+    });
     await expect(engine.undo()).resolves.toBeDefined();
     await expect(engine.redo()).resolves.toBeDefined();
 
     expect(wasm.default).toHaveBeenCalledOnce();
     expect(wasm.openDocument).toHaveBeenCalledWith(JSON.stringify(document));
     expect(wasm.handle.executeCommand).toHaveBeenCalledWith(JSON.stringify(command));
+    expect(wasm.handle.handlePointerEvents).toHaveBeenCalledWith(
+      JSON.stringify(pointerEvents),
+      'drag-1',
+    );
   });
 
   it('normalizes structured and plain engine failures', async () => {
@@ -81,6 +100,11 @@ describe('createWasmEngine', () => {
       throw new Error('plain engine failure');
     });
     await expect(engine.redo()).rejects.toThrow('plain engine failure');
+
+    wasm.handle.handlePointerEvents.mockImplementation(() => {
+      throw new Error(JSON.stringify({ message: 'pointer rejected' }));
+    });
+    await expect(engine.handlePointerEvents([], 'drag-1')).rejects.toThrow('pointer rejected');
   });
 
   it('frees the handle once and rejects use after disposal', async () => {
@@ -116,5 +140,14 @@ function validUpdate(): string {
       nodes: {},
     },
     history: { canUndo: false, canRedo: false },
+  });
+}
+
+function pointerUpdate(): string {
+  return JSON.stringify({
+    update: JSON.parse(validUpdate()),
+    processedEventCount: 1,
+    ignoredEventCount: 0,
+    didCommit: false,
   });
 }
