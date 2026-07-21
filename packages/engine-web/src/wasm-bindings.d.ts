@@ -3,6 +3,15 @@ declare module '*nodeink_engine.js' {
     currentUpdate(): string;
     executeCommand(commandJson: string): string;
     handlePointerEvents(eventsJson: string, commandId: string): string;
+    handleStrokeBatchJson(batchJson: string, commandId: string): string;
+    handleStrokePoints(
+      pointerId: number,
+      sequenceStart: number,
+      phase: string,
+      coordinates: Float64Array,
+      strokeId: string | undefined,
+      commandId: string,
+    ): string;
     undo(): string;
     redo(): string;
     serializeDocument(): string;

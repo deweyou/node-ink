@@ -1,6 +1,10 @@
 import type { EditorWebControllerV1 } from '@nodeink-internal/editor-web';
 
-import { exposePointerBenchmark, runPlaygroundPointerBenchmark } from './benchmark-api';
+import {
+  exposePointerBenchmark,
+  runPlaygroundPointerBenchmark,
+  runPlaygroundStrokeBenchmark,
+} from './benchmark-api';
 import { createController } from './create-controller';
 import './styles.css';
 
@@ -43,20 +47,23 @@ controller.subscribe(renderControls);
 await controller.mount(canvas);
 renderControls();
 
-if (new URLSearchParams(window.location.search).get('benchmark') === 'pointer') {
+const benchmark = new URLSearchParams(window.location.search).get('benchmark');
+if (benchmark === 'pointer' || benchmark === 'stroke') {
   const benchmarkOutput = document.createElement('pre');
   benchmarkOutput.className = 'nodeink-benchmark';
-  benchmarkOutput.dataset.benchmarkResults = 'pointer';
-  benchmarkOutput.textContent = 'Running pointer benchmark…';
+  benchmarkOutput.dataset.benchmarkResults = benchmark;
+  benchmarkOutput.textContent = `Running ${benchmark} benchmark…`;
   requireElement<HTMLElement>(rootElement, '.nodeink-stage').append(benchmarkOutput);
   try {
     benchmarkOutput.textContent = JSON.stringify(
-      await runPlaygroundPointerBenchmark(controller),
+      benchmark === 'pointer'
+        ? await runPlaygroundPointerBenchmark(controller)
+        : await runPlaygroundStrokeBenchmark(controller),
       null,
       2,
     );
   } catch (benchmarkError) {
-    benchmarkOutput.textContent = `Pointer benchmark failed: ${String(benchmarkError)}`;
+    benchmarkOutput.textContent = `${benchmark} benchmark failed: ${String(benchmarkError)}`;
   }
 }
 

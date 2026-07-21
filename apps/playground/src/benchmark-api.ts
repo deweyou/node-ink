@@ -1,7 +1,9 @@
 import {
   runPointerBenchmark,
+  runStrokeBenchmark,
   type EditorWebControllerV1,
   type PointerBenchmarkResult,
+  type StrokeBenchmarkReportV1,
 } from '@nodeink-internal/editor-web';
 
 export interface PlaygroundPointerBenchmarkReport {
@@ -18,14 +20,31 @@ export interface PlaygroundPointerBenchmarkReport {
   batch8: PointerBenchmarkResult;
 }
 
+export interface PlaygroundStrokeBenchmarkReport {
+  build: 'release-wasm-dev-host';
+  engineAlgorithmVersion: 'phase0-s2';
+  browser: string;
+  os: string;
+  hardware: PlaygroundBenchmarkHardware;
+  benchmark: StrokeBenchmarkReportV1;
+}
+
+interface PlaygroundBenchmarkHardware {
+  logicalProcessors: number;
+  deviceMemoryGb: number | null;
+  display: string;
+}
+
 declare global {
   interface Window {
     nodeInkRunPointerBenchmark?: () => Promise<PlaygroundPointerBenchmarkReport>;
+    nodeInkRunStrokeBenchmark?: () => Promise<PlaygroundStrokeBenchmarkReport>;
   }
 }
 
 export function exposePointerBenchmark(controller: EditorWebControllerV1): void {
   window.nodeInkRunPointerBenchmark = () => runPlaygroundPointerBenchmark(controller);
+  window.nodeInkRunStrokeBenchmark = () => runPlaygroundStrokeBenchmark(controller);
 }
 
 export async function runPlaygroundPointerBenchmark(
@@ -44,10 +63,29 @@ export async function runPlaygroundPointerBenchmark(
 
   const singleEvent = await runPointerBenchmark({ controller, elementId, batchSize: 1 });
   const batch8 = await runPointerBenchmark({ controller, elementId, batchSize: 8 });
-  const navigatorWithMemory = navigator as Navigator & { deviceMemory?: number };
   return {
     build: 'release-wasm-dev-host',
     engineAlgorithmVersion: 'phase0-s1',
+    ...benchmarkEnvironment(),
+    singleEvent,
+    batch8,
+  };
+}
+
+export async function runPlaygroundStrokeBenchmark(
+  controller: EditorWebControllerV1,
+): Promise<PlaygroundStrokeBenchmarkReport> {
+  return {
+    build: 'release-wasm-dev-host',
+    engineAlgorithmVersion: 'phase0-s2',
+    ...benchmarkEnvironment(),
+    benchmark: await runStrokeBenchmark({ controller }),
+  };
+}
+
+function benchmarkEnvironment() {
+  const navigatorWithMemory = navigator as Navigator & { deviceMemory?: number };
+  return {
     browser: navigator.userAgent,
     os: navigator.platform,
     hardware: {
@@ -55,7 +93,5 @@ export async function runPlaygroundPointerBenchmark(
       deviceMemoryGb: navigatorWithMemory.deviceMemory ?? null,
       display: `${screen.width}x${screen.height}@${window.devicePixelRatio}x`,
     },
-    singleEvent,
-    batch8,
   };
 }

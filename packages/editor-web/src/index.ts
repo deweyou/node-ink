@@ -7,7 +7,11 @@ import {
   type PointerUpdateV1,
   type RectElementV1,
   type RendererV1,
+  type RenderApplyResultV1,
   type SceneSnapshotV1,
+  type StrokeInputBatchV1,
+  type StrokeTransportV1,
+  type StrokeUpdateV1,
 } from '@nodeink-internal/protocol';
 
 import { attachPointerInput } from './pointer-input';
@@ -20,6 +24,7 @@ export type EditorActionV1 =
     }
   | { type: 'move_active'; delta: { x: number; y: number } }
   | { type: 'pointer_events'; events: NormalizedPointerEventV1[] }
+  | { type: 'stroke_batch'; batch: StrokeInputBatchV1; transport: StrokeTransportV1 }
   | { type: 'undo' }
   | { type: 'redo' };
 
@@ -38,6 +43,15 @@ export interface EditorActionResultV1 {
   ok: boolean;
   snapshot: EditorUiSnapshotV1;
   pointerMetrics?: Pick<PointerUpdateV1, 'processedEventCount' | 'ignoredEventCount' | 'didCommit'>;
+  strokeMetrics?: Pick<StrokeUpdateV1, 'processedPointCount' | 'ignoredPointCount' | 'didCommit'>;
+  performance?: EditorActionPerformanceV1;
+}
+
+export interface EditorActionPerformanceV1 {
+  inputToVisibleMs: number;
+  rendererApplyMs: number;
+  sceneBytes: number;
+  changedNodeCount: number;
 }
 
 export interface EditorWebControllerV1 {
@@ -130,13 +144,21 @@ export class EditorWebController implements EditorWebControllerV1 {
 
   private async runAction(action: EditorActionV1): Promise<EditorActionResultV1> {
     this.ensureActive();
+    const startedAt = performance.now();
     try {
       const execution = await this.executeAction(action);
-      this.applyUpdate(execution.update);
+      const renderResult = this.applyUpdate(execution.update);
       return {
         ok: true,
         snapshot: this.#snapshot,
         ...(execution.pointerMetrics ? { pointerMetrics: execution.pointerMetrics } : {}),
+        ...(execution.strokeMetrics ? { strokeMetrics: execution.strokeMetrics } : {}),
+        performance: {
+          inputToVisibleMs: performance.now() - startedAt,
+          rendererApplyMs: renderResult.durationMs ?? 0,
+          sceneBytes: new TextEncoder().encode(JSON.stringify(execution.update.scene)).byteLength,
+          changedNodeCount: renderResult.changedNodeCount ?? 0,
+        },
       };
     } catch (error) {
       this.setError(error);
@@ -167,6 +189,21 @@ export class EditorWebController implements EditorWebControllerV1 {
         },
       };
     }
+    if (action.type === 'stroke_batch') {
+      const strokeUpdate = await this.#engine.handleStrokeBatch(
+        action.batch,
+        commandId,
+        action.transport,
+      );
+      return {
+        update: strokeUpdate.update,
+        strokeMetrics: {
+          processedPointCount: strokeUpdate.processedPointCount,
+          ignoredPointCount: strokeUpdate.ignoredPointCount,
+          didCommit: strokeUpdate.didCommit,
+        },
+      };
+    }
     const envelope: CommandEnvelopeV1 = {
       protocolVersion,
       commandId,
@@ -187,7 +224,7 @@ export class EditorWebController implements EditorWebControllerV1 {
     return { update: await this.#engine.executeCommand(envelope) };
   }
 
-  private applyUpdate(update: EngineUpdateV1): void {
+  private applyUpdate(update: EngineUpdateV1): Extract<RenderApplyResultV1, { ok: true }> {
     const renderResult = this.#renderer.applySnapshot(update.scene);
     if (!renderResult.ok) {
       throw new Error(`Renderer rejected scene: ${renderResult.reason}`);
@@ -208,6 +245,7 @@ export class EditorWebController implements EditorWebControllerV1 {
       errorMessage: null,
     };
     this.emit();
+    return renderResult;
   }
 
   private setError(error: unknown): void {
@@ -242,10 +280,18 @@ export class EditorWebController implements EditorWebControllerV1 {
 interface ActionExecutionResult {
   update: EngineUpdateV1;
   pointerMetrics?: Pick<PointerUpdateV1, 'processedEventCount' | 'ignoredEventCount' | 'didCommit'>;
+  strokeMetrics?: Pick<StrokeUpdateV1, 'processedPointCount' | 'ignoredPointCount' | 'didCommit'>;
 }
 
 export { runPointerBenchmark } from './pointer-benchmark';
 export type { PointerBenchmarkOptions, PointerBenchmarkResult } from './pointer-benchmark';
+export { runStrokeBenchmark } from './stroke-benchmark';
+export type {
+  StrokeBenchmarkCaseV1,
+  StrokeBenchmarkOptionsV1,
+  StrokeBenchmarkReportV1,
+  StrokeBenchmarkVariantResultV1,
+} from './stroke-benchmark';
 
 function createRectangle(
   id: string,

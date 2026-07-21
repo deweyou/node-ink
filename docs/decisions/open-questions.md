@@ -82,6 +82,13 @@
 - S1 矩形拖拽保留单事件 JSON；batch-8 未改善约 0.1ms 的 P95，只减少约 0.8% 字节。
 - 该结论只适用于矩形拖拽。S2 仍独立比较自由笔迹的 JSON point、TypedArray 与 batch size。
 
+### D-14 自由笔传输与 batch size
+
+- 自由笔通过 `Float64Array` 传输坐标，实时路径使用 batch-2；Rust 仍持有 preview、顺序过滤与 PointerUp 单次 commit。
+- batch-2 对 120Hz 输入最多引入 8.33ms 聚合等待，release-WASM 基准的首点估算 P95 为 13.03ms。
+- batch-8/32 只保留为吞吐 benchmark，不用于实时绘制，因为其聚合等待超过一帧。
+- 当前返回全量 SceneSnapshot；约 128KB 的 S2 P95 payload 是 S5 引入 ScenePatch 的直接证据，不构成长期协议决定。
+
 ## 22. 需要产品负责人决策的问题
 
 以下问题不阻碍继续评审文档，但会阻碍对应功能进入实现。

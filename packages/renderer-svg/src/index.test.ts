@@ -39,6 +39,26 @@ describe('SvgRenderer', () => {
     expect(secondTarget.querySelector('svg')).toBeNull();
   });
 
+  it('renders and reuses freehand paths with measured DOM work', () => {
+    const target = document.createElement('div');
+    const renderer = new SvgRenderer();
+    renderer.mount(target);
+    const first = renderer.applySnapshot(strokeScene(1, 'M 1 2 L 3 4'));
+    const firstPath = target.querySelector('path');
+
+    const second = renderer.applySnapshot(strokeScene(2, 'M 1 2 L 5 6'));
+    const updatedPath = target.querySelector('path');
+
+    expect(updatedPath).toBe(firstPath);
+    expect(updatedPath?.getAttribute('d')).toBe('M 1 2 L 5 6');
+    expect(updatedPath?.getAttribute('stroke-linecap')).toBe('round');
+    expect(first).toMatchObject({ ok: true, sceneRevision: 1, changedNodeCount: 1 });
+    expect(second).toMatchObject({ ok: true, sceneRevision: 2, changedNodeCount: 1 });
+    if (first.ok) {
+      expect(first.durationMs).toBeGreaterThanOrEqual(0);
+    }
+  });
+
   it('rejects unsupported or missing scene nodes', () => {
     const target = document.createElement('div');
     const renderer = new SvgRenderer();
@@ -77,6 +97,27 @@ function scene(sceneRevision: number, x: number): SceneSnapshotV1 {
         height: 96,
         fill: '#d1fae5',
         stroke: '#047857',
+      },
+    },
+  };
+}
+
+function strokeScene(sceneRevision: number, pathData: string): SceneSnapshotV1 {
+  return {
+    protocolVersion: 1,
+    documentId: 'doc-1',
+    documentRevision: 0,
+    sceneRevision,
+    rootNodeIds: ['stroke-1:path'],
+    nodes: {
+      'stroke-1:path': {
+        kind: 'path',
+        id: 'stroke-1:path',
+        sourceElementId: 'stroke-1',
+        pathData,
+        fill: 'none',
+        stroke: '#0f172a',
+        strokeWidth: 3,
       },
     },
   };

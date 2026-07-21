@@ -1,0 +1,149 @@
+{
+  "commit": "d377f1d",
+  "build": "release-wasm-dev-host",
+  "engineAlgorithmVersion": "phase0-s2",
+  "browser": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36",
+  "os": "MacIntel",
+  "hardware": {
+    "logicalProcessors": 18,
+    "deviceMemoryGb": 32,
+    "display": "2056x1329@2x"
+  },
+  "method": {
+    "workload": "3600 synthetic move points, equivalent to 30 seconds at 120 Hz, dispatched as quickly as the pipeline accepts them",
+    "scope": "normalized stroke batch -> TypeScript controller -> release WASM Rust preview/commit -> full SceneSnapshot -> SVG path update",
+    "latency": "inputToVisible measures service time after a batch is available; estimatedFirstPointVisibleP95 adds worst-case batch accumulation",
+    "outputKind": "full_scene_snapshot",
+    "excluded": [
+      "operating-system input scheduling",
+      "DOM PointerEvent normalization time",
+      "real pen pressure and coalescing behavior"
+    ]
+  },
+  "cases": {
+    "jsonPoint": {
+      "sample": {
+        "durationSeconds": 30,
+        "inputHz": 120,
+        "movePointCount": 3600,
+        "transport": "json",
+        "batchSize": 1
+      },
+      "metrics": {
+        "inputToVisibleP50Ms": 2.5,
+        "inputToVisibleP95Ms": 4.5,
+        "inputToVisibleP99Ms": 4.899999976158142,
+        "inputToVisibleMaxMs": 15.299999952316284,
+        "batchAccumulationMaxMs": 0,
+        "estimatedFirstPointVisibleP95Ms": 4.5,
+        "rendererApplyP95Ms": 0.7000000476837158,
+        "sceneSnapshotP95Bytes": 127371,
+        "sceneSnapshotMaxBytes": 133981,
+        "copiedInputBytes": 442662,
+        "processedPointCount": 3602,
+        "ignoredPointCount": 0,
+        "commitCount": 1,
+        "longTaskCount": 0,
+        "elapsedMs": 9765.899999976158,
+        "pointsPerSecond": 368.62961939081794
+      },
+      "decision": {
+        "isWithinFrameBudget": true,
+        "hasOrderedSingleCommit": true
+      }
+    },
+    "typedArray2": {
+      "sample": {
+        "durationSeconds": 30,
+        "inputHz": 120,
+        "movePointCount": 3600,
+        "transport": "typed_array",
+        "batchSize": 2
+      },
+      "metrics": {
+        "inputToVisibleP50Ms": 2.600000023841858,
+        "inputToVisibleP95Ms": 4.700000047683716,
+        "inputToVisibleP99Ms": 5.200000047683716,
+        "inputToVisibleMaxMs": 15.5,
+        "batchAccumulationMaxMs": 8.333333333333334,
+        "estimatedFirstPointVisibleP95Ms": 13.03333338101705,
+        "rendererApplyP95Ms": 0.7000000476837158,
+        "sceneSnapshotP95Bytes": 127721,
+        "sceneSnapshotMaxBytes": 134310,
+        "copiedInputBytes": 57632,
+        "processedPointCount": 3602,
+        "ignoredPointCount": 0,
+        "commitCount": 1,
+        "longTaskCount": 0,
+        "elapsedMs": 4997.5,
+        "pointsPerSecond": 720.360180090045
+      },
+      "decision": {
+        "isWithinFrameBudget": true,
+        "hasOrderedSingleCommit": true
+      }
+    },
+    "typedArray8": {
+      "sample": {
+        "durationSeconds": 30,
+        "inputHz": 120,
+        "movePointCount": 3600,
+        "transport": "typed_array",
+        "batchSize": 8
+      },
+      "metrics": {
+        "inputToVisibleP50Ms": 2.5,
+        "inputToVisibleP95Ms": 4.600000023841858,
+        "inputToVisibleP99Ms": 5,
+        "inputToVisibleMaxMs": 14.600000023841858,
+        "batchAccumulationMaxMs": 58.333333333333336,
+        "estimatedFirstPointVisibleP95Ms": 62.933333357175194,
+        "rendererApplyP95Ms": 0.7000000476837158,
+        "sceneSnapshotP95Bytes": 128097,
+        "sceneSnapshotMaxBytes": 134310,
+        "copiedInputBytes": 57632,
+        "processedPointCount": 3602,
+        "ignoredPointCount": 0,
+        "commitCount": 1,
+        "longTaskCount": 0,
+        "elapsedMs": 1235.7999999523163,
+        "pointsPerSecond": 2913.0927335644174
+      },
+      "decision": {
+        "isWithinFrameBudget": false,
+        "hasOrderedSingleCommit": true
+      }
+    },
+    "typedArray32": {
+      "sample": {
+        "durationSeconds": 30,
+        "inputHz": 120,
+        "movePointCount": 3600,
+        "transport": "typed_array",
+        "batchSize": 32
+      },
+      "metrics": {
+        "inputToVisibleP50Ms": 2.5,
+        "inputToVisibleP95Ms": 4.099999904632568,
+        "inputToVisibleP99Ms": 4.199999928474426,
+        "inputToVisibleMaxMs": 4.200000047683716,
+        "batchAccumulationMaxMs": 258.3333333333333,
+        "estimatedFirstPointVisibleP95Ms": 262.4333332379659,
+        "rendererApplyP95Ms": 0.6000000238418579,
+        "sceneSnapshotP95Bytes": 130178,
+        "sceneSnapshotMaxBytes": 134314,
+        "copiedInputBytes": 57632,
+        "processedPointCount": 3602,
+        "ignoredPointCount": 0,
+        "commitCount": 1,
+        "longTaskCount": 0,
+        "elapsedMs": 305.39999997615814,
+        "pointsPerSecond": 11787.819254358361
+      },
+      "decision": {
+        "isWithinFrameBudget": false,
+        "hasOrderedSingleCommit": true
+      }
+    }
+  }
+}

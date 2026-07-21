@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
-import { createBlankDocument, parseEngineUpdate, parsePointerUpdate } from './index';
+import {
+  createBlankDocument,
+  parseEngineUpdate,
+  parsePointerUpdate,
+  parseStrokeUpdate,
+} from './index';
 
 describe('protocol V1', () => {
   it('creates a blank document with explicit versions', () => {
@@ -97,6 +102,28 @@ describe('protocol V1', () => {
     { update: {}, processedEventCount: 1, ignoredEventCount: 0, didCommit: 'false' },
   ])('rejects invalid pointer update metadata', (value) => {
     expect(() => parsePointerUpdate(JSON.stringify(value))).toThrow('invalid pointer update');
+  });
+
+  it('parses stroke processing metadata around a valid engine update', () => {
+    const value = {
+      update: updateFixture(),
+      processedPointCount: 32,
+      ignoredPointCount: 2,
+      didCommit: true,
+    };
+
+    expect(parseStrokeUpdate(JSON.stringify(value))).toEqual(value);
+  });
+
+  it.each([
+    null,
+    {},
+    { update: null, processedPointCount: 1, ignoredPointCount: 0, didCommit: false },
+    { update: {}, processedPointCount: '1', ignoredPointCount: 0, didCommit: false },
+    { update: {}, processedPointCount: 1, ignoredPointCount: '0', didCommit: false },
+    { update: {}, processedPointCount: 1, ignoredPointCount: 0, didCommit: 'false' },
+  ])('rejects invalid stroke update metadata', (value) => {
+    expect(() => parseStrokeUpdate(JSON.stringify(value))).toThrow('invalid stroke update');
   });
 });
 

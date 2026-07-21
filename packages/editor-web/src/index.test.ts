@@ -8,6 +8,9 @@ import type {
   PointerUpdateV1,
   RendererV1,
   SceneSnapshotV1,
+  StrokeInputBatchV1,
+  StrokeTransportV1,
+  StrokeUpdateV1,
 } from '@nodeink-internal/protocol';
 
 import { EditorWebController } from './index';
@@ -63,6 +66,17 @@ describe('EditorWebController', () => {
       type: 'pointer_events',
       events: [pointerEvent('down', 1)],
     });
+    const stroke = await controller.dispatch({
+      type: 'stroke_batch',
+      transport: 'typed_array',
+      batch: {
+        pointerId: 2,
+        sequenceStart: 1,
+        phase: 'move',
+        points: [{ x: 4, y: 8 }],
+        strokeId: null,
+      },
+    });
 
     expect(engine.commands[0]).toMatchObject({
       commandId: 'command-1',
@@ -78,7 +92,17 @@ describe('EditorWebController', () => {
       ignoredEventCount: 0,
       didCommit: false,
     });
-    expect(listener).toHaveBeenCalledTimes(5);
+    expect(stroke.strokeMetrics).toEqual({
+      processedPointCount: 1,
+      ignoredPointCount: 0,
+      didCommit: false,
+    });
+    expect(stroke.performance).toMatchObject({
+      rendererApplyMs: 0,
+      changedNodeCount: 0,
+    });
+    expect(stroke.performance?.sceneBytes).toBeGreaterThan(0);
+    expect(listener).toHaveBeenCalledTimes(6);
 
     unsubscribe();
     controller.dispose();
@@ -204,6 +228,19 @@ class StubEngine implements EnginePortV1 {
       update: this.update(),
       processedEventCount: events.length,
       ignoredEventCount: 0,
+      didCommit: false,
+    };
+  }
+
+  async handleStrokeBatch(
+    batch: StrokeInputBatchV1,
+    _commandId: string,
+    _transport: StrokeTransportV1,
+  ): Promise<StrokeUpdateV1> {
+    return {
+      update: this.update(),
+      processedPointCount: batch.points.length,
+      ignoredPointCount: 0,
       didCommit: false,
     };
   }

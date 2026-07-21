@@ -8,6 +8,8 @@ const wasm = vi.hoisted(() => {
     currentUpdate: vi.fn(),
     executeCommand: vi.fn(),
     handlePointerEvents: vi.fn(),
+    handleStrokeBatchJson: vi.fn(),
+    handleStrokePoints: vi.fn(),
     undo: vi.fn(),
     redo: vi.fn(),
     free: vi.fn(),
@@ -33,6 +35,8 @@ describe('createWasmEngine', () => {
     wasm.handle.currentUpdate.mockReturnValue(update);
     wasm.handle.executeCommand.mockReturnValue(update);
     wasm.handle.handlePointerEvents.mockReturnValue(pointerUpdate());
+    wasm.handle.handleStrokeBatchJson.mockReturnValue(strokeUpdate());
+    wasm.handle.handleStrokePoints.mockReturnValue(strokeUpdate());
     wasm.handle.undo.mockReturnValue(update);
     wasm.handle.redo.mockReturnValue(update);
   });
@@ -70,6 +74,22 @@ describe('createWasmEngine', () => {
       processedEventCount: 1,
       didCommit: false,
     });
+    const strokeBatch = {
+      pointerId: 7,
+      sequenceStart: 11,
+      phase: 'move' as const,
+      points: [
+        { x: 1, y: 2 },
+        { x: 3, y: 4 },
+      ],
+      strokeId: null,
+    };
+    await expect(
+      engine.handleStrokeBatch(strokeBatch, 'stroke-json', 'json'),
+    ).resolves.toMatchObject({ processedPointCount: 2, didCommit: false });
+    await expect(
+      engine.handleStrokeBatch(strokeBatch, 'stroke-typed', 'typed_array'),
+    ).resolves.toMatchObject({ processedPointCount: 2, didCommit: false });
     await expect(engine.undo()).resolves.toBeDefined();
     await expect(engine.redo()).resolves.toBeDefined();
 
@@ -79,6 +99,18 @@ describe('createWasmEngine', () => {
     expect(wasm.handle.handlePointerEvents).toHaveBeenCalledWith(
       JSON.stringify(pointerEvents),
       'drag-1',
+    );
+    expect(wasm.handle.handleStrokeBatchJson).toHaveBeenCalledWith(
+      JSON.stringify(strokeBatch),
+      'stroke-json',
+    );
+    expect(wasm.handle.handleStrokePoints).toHaveBeenCalledWith(
+      7,
+      11,
+      'move',
+      new Float64Array([1, 2, 3, 4]),
+      undefined,
+      'stroke-typed',
     );
   });
 
@@ -105,6 +137,23 @@ describe('createWasmEngine', () => {
       throw new Error(JSON.stringify({ message: 'pointer rejected' }));
     });
     await expect(engine.handlePointerEvents([], 'drag-1')).rejects.toThrow('pointer rejected');
+
+    wasm.handle.handleStrokeBatchJson.mockImplementation(() => {
+      throw new Error(JSON.stringify({ message: 'stroke rejected' }));
+    });
+    await expect(
+      engine.handleStrokeBatch(
+        {
+          pointerId: 1,
+          sequenceStart: 1,
+          phase: 'cancel',
+          points: [],
+          strokeId: null,
+        },
+        'stroke-1',
+        'json',
+      ),
+    ).rejects.toThrow('stroke rejected');
   });
 
   it('frees the handle once and rejects use after disposal', async () => {
@@ -148,6 +197,15 @@ function pointerUpdate(): string {
     update: JSON.parse(validUpdate()),
     processedEventCount: 1,
     ignoredEventCount: 0,
+    didCommit: false,
+  });
+}
+
+function strokeUpdate(): string {
+  return JSON.stringify({
+    update: JSON.parse(validUpdate()),
+    processedPointCount: 2,
+    ignoredPointCount: 0,
     didCommit: false,
   });
 }

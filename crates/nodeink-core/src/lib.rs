@@ -4,9 +4,12 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 mod pointer;
+mod stroke;
 
 pub use pointer::{NormalizedPointerEventV1, PointerPhaseV1};
 use pointer::{PointerMachine, PointerPreview, PointerTransition};
+pub use stroke::{StrokeInputBatchV1, StrokePhaseV1};
+use stroke::{StrokeMachine, StrokePreview, StrokeTransition};
 
 pub const PROTOCOL_VERSION: u32 = 1;
 pub const SCHEMA_VERSION: u32 = 1;
@@ -41,12 +44,14 @@ impl NodeInkDocumentV1 {
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ElementRecordV1 {
     Rect(RectElementV1),
+    Stroke(StrokeElementV1),
 }
 
 impl ElementRecordV1 {
     pub fn id(&self) -> &str {
         match self {
             Self::Rect(rectangle) => &rectangle.id,
+            Self::Stroke(stroke) => &stroke.id,
         }
     }
 
@@ -55,6 +60,12 @@ impl ElementRecordV1 {
             Self::Rect(rectangle) => {
                 rectangle.x += delta.x;
                 rectangle.y += delta.y;
+            }
+            Self::Stroke(stroke) => {
+                for point in &mut stroke.points {
+                    point.x += delta.x;
+                    point.y += delta.y;
+                }
             }
         }
     }
@@ -68,6 +79,14 @@ pub struct RectElementV1 {
     pub y: f64,
     pub width: f64,
     pub height: f64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StrokeElementV1 {
+    pub id: ElementId,
+    pub points: Vec<Vec2>,
+    pub stroke_width: f64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -99,6 +118,9 @@ pub enum CommandV1 {
     MoveElements {
         element_ids: Vec<ElementId>,
         delta: Vec2,
+    },
+    CreateStroke {
+        stroke: StrokeElementV1,
     },
 }
 
@@ -138,6 +160,15 @@ pub struct PointerUpdateV1 {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct StrokeUpdateV1 {
+    pub update: EngineUpdateV1,
+    pub processed_point_count: usize,
+    pub ignored_point_count: usize,
+    pub did_commit: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SceneSnapshotV1 {
     pub protocol_version: u32,
     pub document_id: DocumentId,
@@ -151,6 +182,7 @@ pub struct SceneSnapshotV1 {
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum SceneNodeV1 {
     Rect(SceneRectV1),
+    Path(ScenePathV1),
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -164,6 +196,17 @@ pub struct SceneRectV1 {
     pub height: f64,
     pub fill: String,
     pub stroke: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScenePathV1 {
+    pub id: SceneNodeId,
+    pub source_element_id: ElementId,
+    pub path_data: String,
+    pub fill: String,
+    pub stroke: String,
+    pub stroke_width: f64,
 }
 
 #[derive(Debug, Clone, PartialEq, Error, Serialize)]
@@ -185,6 +228,10 @@ pub enum EngineErrorV1 {
     InvalidRectangle { element_id: ElementId },
     #[error("invalid movement delta")]
     InvalidDelta,
+    #[error("invalid stroke geometry for {element_id}")]
+    InvalidStroke { element_id: ElementId },
+    #[error("invalid stroke input: {reason}")]
+    InvalidStrokeInput { reason: String },
     #[error("undo history is empty")]
     UndoUnavailable,
     #[error("redo history is empty")]
@@ -200,6 +247,7 @@ pub struct Engine {
     undo_stack: Vec<NodeInkDocumentV1>,
     redo_stack: Vec<NodeInkDocumentV1>,
     pointer_machine: PointerMachine,
+    stroke_machine: StrokeMachine,
 }
 
 impl Engine {
@@ -211,6 +259,7 @@ impl Engine {
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
             pointer_machine: PointerMachine::default(),
+            stroke_machine: StrokeMachine::default(),
         })
     }
 
@@ -223,6 +272,7 @@ impl Engine {
         envelope: CommandEnvelopeV1,
     ) -> Result<EngineUpdateV1, EngineErrorV1> {
         self.pointer_machine.cancel();
+        self.stroke_machine.cancel();
         self.execute_command_without_pointer_reset(envelope)
     }
 
@@ -231,6 +281,7 @@ impl Engine {
         command_id: String,
         events: Vec<NormalizedPointerEventV1>,
     ) -> Result<PointerUpdateV1, EngineErrorV1> {
+        self.stroke_machine.cancel();
         let outcome = self
             .pointer_machine
             .process_batch(self.document.revision, events);
@@ -273,6 +324,50 @@ impl Engine {
         })
     }
 
+    pub fn handle_stroke_batch(
+        &mut self,
+        command_id: String,
+        batch: StrokeInputBatchV1,
+    ) -> Result<StrokeUpdateV1, EngineErrorV1> {
+        validate_stroke_input(&batch)?;
+        self.pointer_machine.cancel();
+        let outcome = self
+            .stroke_machine
+            .process_batch(self.document.revision, batch);
+        let (update, did_commit) = match outcome.transition {
+            StrokeTransition::None => {
+                let preview = self.stroke_machine.preview();
+                (self.update_with_stroke_preview(preview.as_ref()), false)
+            }
+            StrokeTransition::Preview(preview) => {
+                self.scene_revision += 1;
+                (self.update_with_stroke_preview(Some(&preview)), false)
+            }
+            StrokeTransition::Cancelled => {
+                self.scene_revision += 1;
+                (self.current_update(), false)
+            }
+            StrokeTransition::Commit(commit) => {
+                let envelope = CommandEnvelopeV1 {
+                    protocol_version: PROTOCOL_VERSION,
+                    command_id,
+                    document_id: self.document.document_id.clone(),
+                    expected_revision: commit.expected_revision,
+                    command: CommandV1::CreateStroke {
+                        stroke: commit.stroke,
+                    },
+                };
+                (self.execute_command_without_pointer_reset(envelope)?, true)
+            }
+        };
+        Ok(StrokeUpdateV1 {
+            update,
+            processed_point_count: outcome.processed_point_count,
+            ignored_point_count: outcome.ignored_point_count,
+            did_commit,
+        })
+    }
+
     fn execute_command_without_pointer_reset(
         &mut self,
         envelope: CommandEnvelopeV1,
@@ -301,6 +396,7 @@ impl Engine {
 
     pub fn undo(&mut self) -> Result<EngineUpdateV1, EngineErrorV1> {
         self.pointer_machine.cancel();
+        self.stroke_machine.cancel();
         let mut previous = self
             .undo_stack
             .pop()
@@ -315,6 +411,7 @@ impl Engine {
 
     pub fn redo(&mut self) -> Result<EngineUpdateV1, EngineErrorV1> {
         self.pointer_machine.cancel();
+        self.stroke_machine.cancel();
         let mut next = self
             .redo_stack
             .pop()
@@ -354,21 +451,31 @@ impl Engine {
     }
 
     fn update(&self, operation: Option<OperationResultV1>) -> EngineUpdateV1 {
-        self.update_with_operation_and_preview(operation, None)
+        self.update_with_operation_and_previews(operation, None, None)
     }
 
     fn update_with_preview(&self, preview: Option<&PointerPreview>) -> EngineUpdateV1 {
-        self.update_with_operation_and_preview(None, preview)
+        self.update_with_operation_and_previews(None, preview, None)
     }
 
-    fn update_with_operation_and_preview(
+    fn update_with_stroke_preview(&self, preview: Option<&StrokePreview>) -> EngineUpdateV1 {
+        self.update_with_operation_and_previews(None, None, preview)
+    }
+
+    fn update_with_operation_and_previews(
         &self,
         operation: Option<OperationResultV1>,
-        preview: Option<&PointerPreview>,
+        pointer_preview: Option<&PointerPreview>,
+        stroke_preview: Option<&StrokePreview>,
     ) -> EngineUpdateV1 {
         EngineUpdateV1 {
             operation,
-            scene: resolve_scene(&self.document, self.scene_revision, preview),
+            scene: resolve_scene(
+                &self.document,
+                self.scene_revision,
+                pointer_preview,
+                stroke_preview,
+            ),
             history: HistoryStateV1 {
                 can_undo: !self.undo_stack.is_empty(),
                 can_redo: !self.redo_stack.is_empty(),
@@ -416,6 +523,20 @@ fn apply_command(
             }
             Ok(element_ids)
         }
+        CommandV1::CreateStroke { stroke } => {
+            validate_stroke(&stroke)?;
+            if document.elements.contains_key(&stroke.id) {
+                return Err(EngineErrorV1::ElementAlreadyExists {
+                    element_id: stroke.id,
+                });
+            }
+            let element_id = stroke.id.clone();
+            document.root_order.push(element_id.clone());
+            document
+                .elements
+                .insert(element_id.clone(), ElementRecordV1::Stroke(stroke));
+            Ok(vec![element_id])
+        }
     }
 }
 
@@ -450,6 +571,7 @@ fn validate_document(document: &NodeInkDocumentV1) -> Result<(), EngineErrorV1> 
         }
         match element {
             ElementRecordV1::Rect(rectangle) => validate_rectangle(rectangle)?,
+            ElementRecordV1::Stroke(stroke) => validate_stroke(stroke)?,
         }
     }
     Ok(())
@@ -471,12 +593,54 @@ fn validate_rectangle(rectangle: &RectElementV1) -> Result<(), EngineErrorV1> {
     Ok(())
 }
 
+fn validate_stroke(stroke: &StrokeElementV1) -> Result<(), EngineErrorV1> {
+    let is_valid = !stroke.id.trim().is_empty()
+        && stroke.points.len() >= 2
+        && stroke
+            .points
+            .iter()
+            .all(|point| point.x.is_finite() && point.y.is_finite())
+        && stroke.stroke_width.is_finite()
+        && stroke.stroke_width > 0.0;
+    if !is_valid {
+        return Err(EngineErrorV1::InvalidStroke {
+            element_id: stroke.id.clone(),
+        });
+    }
+    Ok(())
+}
+
+fn validate_stroke_input(batch: &StrokeInputBatchV1) -> Result<(), EngineErrorV1> {
+    if batch
+        .points
+        .iter()
+        .any(|point| !point.x.is_finite() || !point.y.is_finite())
+    {
+        return Err(EngineErrorV1::InvalidStrokeInput {
+            reason: "points must be finite".to_string(),
+        });
+    }
+    if batch.phase == StrokePhaseV1::Down
+        && batch
+            .stroke_id
+            .as_deref()
+            .is_none_or(|stroke_id| stroke_id.trim().is_empty())
+    {
+        return Err(EngineErrorV1::InvalidStrokeInput {
+            reason: "down requires a strokeId".to_string(),
+        });
+    }
+    Ok(())
+}
+
 fn resolve_scene(
     document: &NodeInkDocumentV1,
     scene_revision: u64,
-    preview: Option<&PointerPreview>,
+    pointer_preview: Option<&PointerPreview>,
+    stroke_preview: Option<&StrokePreview>,
 ) -> SceneSnapshotV1 {
-    let mut root_node_ids = Vec::with_capacity(document.root_order.len());
+    let mut root_node_ids =
+        Vec::with_capacity(document.root_order.len() + usize::from(stroke_preview.is_some()));
     let mut nodes = BTreeMap::new();
 
     for element_id in &document.root_order {
@@ -485,7 +649,7 @@ fn resolve_scene(
         };
         match element {
             ElementRecordV1::Rect(rectangle) => {
-                let preview_delta = preview
+                let preview_delta = pointer_preview
                     .filter(|candidate| candidate.element_id == rectangle.id)
                     .map_or(Vec2 { x: 0.0, y: 0.0 }, |candidate| candidate.delta);
                 let scene_node_id = format!("{}:shape", rectangle.id);
@@ -504,7 +668,14 @@ fn resolve_scene(
                     }),
                 );
             }
+            ElementRecordV1::Stroke(stroke) => {
+                insert_stroke_scene_node(&mut root_node_ids, &mut nodes, stroke);
+            }
         }
+    }
+
+    if let Some(preview) = stroke_preview {
+        insert_stroke_scene_node(&mut root_node_ids, &mut nodes, &preview.stroke);
     }
 
     SceneSnapshotV1 {
@@ -515,6 +686,39 @@ fn resolve_scene(
         root_node_ids,
         nodes,
     }
+}
+
+fn insert_stroke_scene_node(
+    root_node_ids: &mut Vec<SceneNodeId>,
+    nodes: &mut BTreeMap<SceneNodeId, SceneNodeV1>,
+    stroke: &StrokeElementV1,
+) {
+    let scene_node_id = format!("{}:path", stroke.id);
+    root_node_ids.push(scene_node_id.clone());
+    nodes.insert(
+        scene_node_id.clone(),
+        SceneNodeV1::Path(ScenePathV1 {
+            id: scene_node_id,
+            source_element_id: stroke.id.clone(),
+            path_data: stroke_path_data(&stroke.points),
+            fill: "none".to_string(),
+            stroke: "#0f172a".to_string(),
+            stroke_width: stroke.stroke_width,
+        }),
+    );
+}
+
+fn stroke_path_data(points: &[Vec2]) -> String {
+    let mut path = String::new();
+    for (index, point) in points.iter().enumerate() {
+        if index == 0 {
+            path.push_str("M ");
+        } else {
+            path.push_str(" L ");
+        }
+        path.push_str(&format!("{} {}", point.x, point.y));
+    }
+    path
 }
 
 #[cfg(test)]
@@ -570,11 +774,15 @@ mod tests {
             },
         );
         let moved = engine.execute_command(movement).unwrap();
-        let SceneNodeV1::Rect(moved_rectangle) = &moved.scene.nodes["rect-1:shape"];
+        let SceneNodeV1::Rect(moved_rectangle) = &moved.scene.nodes["rect-1:shape"] else {
+            panic!("rectangle should resolve to a rectangle scene node");
+        };
         assert_eq!((moved_rectangle.x, moved_rectangle.y), (56.0, 48.0));
 
         let undone = engine.undo().unwrap();
-        let SceneNodeV1::Rect(undone_rectangle) = &undone.scene.nodes["rect-1:shape"];
+        let SceneNodeV1::Rect(undone_rectangle) = &undone.scene.nodes["rect-1:shape"] else {
+            panic!("rectangle should resolve to a rectangle scene node");
+        };
         assert_eq!((undone_rectangle.x, undone_rectangle.y), (24.0, 40.0));
         assert_eq!(undone.scene.document_revision, 3);
         assert!(undone.history.can_redo);
@@ -916,10 +1124,16 @@ mod tests {
                 vec![pointer_event(PointerPhaseV1::Move, 2, 56.0, None)],
             )
             .unwrap();
-        let SceneNodeV1::Rect(preview_rectangle) = &preview.update.scene.nodes["rect-1:shape"];
+        let SceneNodeV1::Rect(preview_rectangle) = &preview.update.scene.nodes["rect-1:shape"]
+        else {
+            panic!("rectangle should resolve to a rectangle scene node");
+        };
         assert_eq!(preview_rectangle.x, 56.0);
         assert_eq!(preview.update.scene.document_revision, 0);
-        let ElementRecordV1::Rect(document_rectangle) = &engine.document().elements["rect-1"];
+        let ElementRecordV1::Rect(document_rectangle) = &engine.document().elements["rect-1"]
+        else {
+            panic!("document element should remain a rectangle");
+        };
         assert_eq!(document_rectangle.x, 24.0);
 
         let committed = engine
@@ -930,11 +1144,16 @@ mod tests {
             .unwrap();
         assert!(committed.did_commit);
         assert_eq!(committed.update.scene.document_revision, 1);
-        let SceneNodeV1::Rect(committed_rectangle) = &committed.update.scene.nodes["rect-1:shape"];
+        let SceneNodeV1::Rect(committed_rectangle) = &committed.update.scene.nodes["rect-1:shape"]
+        else {
+            panic!("rectangle should resolve to a rectangle scene node");
+        };
         assert_eq!(committed_rectangle.x, 56.0);
 
         let undone = engine.undo().unwrap();
-        let SceneNodeV1::Rect(undone_rectangle) = &undone.scene.nodes["rect-1:shape"];
+        let SceneNodeV1::Rect(undone_rectangle) = &undone.scene.nodes["rect-1:shape"] else {
+            panic!("rectangle should resolve to a rectangle scene node");
+        };
         assert_eq!(undone_rectangle.x, 24.0);
         assert!(!undone.history.can_undo);
     }
@@ -960,7 +1179,9 @@ mod tests {
 
         assert_eq!(batch.processed_event_count, 5);
         assert_eq!(batch.ignored_event_count, 2);
-        let SceneNodeV1::Rect(preview_rectangle) = &batch.update.scene.nodes["rect-1:shape"];
+        let SceneNodeV1::Rect(preview_rectangle) = &batch.update.scene.nodes["rect-1:shape"] else {
+            panic!("rectangle should resolve to a rectangle scene node");
+        };
         assert_eq!(preview_rectangle.x, 64.0);
         assert_eq!(engine.document().revision, 0);
     }
@@ -1007,6 +1228,185 @@ mod tests {
         assert_eq!(engine.undo(), Err(EngineErrorV1::UndoUnavailable));
     }
 
+    #[test]
+    fn stroke_batches_preview_without_document_mutation_and_commit_once() {
+        let mut engine = Engine::open(NodeInkDocumentV1::blank("doc-1")).unwrap();
+        let down = engine
+            .handle_stroke_batch(
+                "stroke-command".to_string(),
+                stroke_batch(StrokePhaseV1::Down, 1, &[(10.0, 20.0)], Some("stroke-1")),
+            )
+            .unwrap();
+        assert!(!down.did_commit);
+        assert_eq!(down.update.scene.document_revision, 0);
+        assert!(engine.document().elements.is_empty());
+
+        let preview = engine
+            .handle_stroke_batch(
+                "stroke-command".to_string(),
+                stroke_batch(
+                    StrokePhaseV1::Move,
+                    2,
+                    &[(12.0, 22.0), (14.0, 24.0), (16.0, 26.0)],
+                    None,
+                ),
+            )
+            .unwrap();
+        let SceneNodeV1::Path(preview_path) = &preview.update.scene.nodes["stroke-1:path"] else {
+            panic!("stroke preview should resolve to a path");
+        };
+        assert_eq!(preview_path.path_data, "M 10 20 L 12 22 L 14 24 L 16 26");
+        assert_eq!(preview.processed_point_count, 3);
+        assert!(engine.document().elements.is_empty());
+
+        let committed = engine
+            .handle_stroke_batch(
+                "stroke-command".to_string(),
+                stroke_batch(StrokePhaseV1::Up, 5, &[(16.0, 26.0)], None),
+            )
+            .unwrap();
+        assert!(committed.did_commit);
+        assert_eq!(committed.update.scene.document_revision, 1);
+        assert_eq!(engine.document().elements.len(), 1);
+
+        let undone = engine.undo().unwrap();
+        assert!(undone.scene.nodes.is_empty());
+        assert!(!undone.history.can_undo);
+    }
+
+    #[test]
+    fn stroke_batches_filter_wrong_pointers_and_out_of_order_points() {
+        let mut engine = Engine::open(NodeInkDocumentV1::blank("doc-1")).unwrap();
+        engine
+            .handle_stroke_batch(
+                "stroke-command".to_string(),
+                stroke_batch(StrokePhaseV1::Down, 10, &[(0.0, 0.0)], Some("stroke-1")),
+            )
+            .unwrap();
+        let wrong_pointer = engine
+            .handle_stroke_batch(
+                "stroke-command".to_string(),
+                StrokeInputBatchV1 {
+                    pointer_id: 2,
+                    ..stroke_batch(StrokePhaseV1::Move, 11, &[(1.0, 1.0)], None)
+                },
+            )
+            .unwrap();
+        assert_eq!(wrong_pointer.ignored_point_count, 1);
+
+        engine
+            .handle_stroke_batch(
+                "stroke-command".to_string(),
+                stroke_batch(StrokePhaseV1::Move, 11, &[(1.0, 1.0), (2.0, 2.0)], None),
+            )
+            .unwrap();
+        let overlap = engine
+            .handle_stroke_batch(
+                "stroke-command".to_string(),
+                stroke_batch(StrokePhaseV1::Move, 12, &[(2.0, 2.0), (3.0, 3.0)], None),
+            )
+            .unwrap();
+        assert_eq!(overlap.ignored_point_count, 1);
+        let SceneNodeV1::Path(path) = &overlap.update.scene.nodes["stroke-1:path"] else {
+            panic!("stroke preview should resolve to a path");
+        };
+        assert_eq!(path.path_data, "M 0 0 L 1 1 L 2 2 L 3 3");
+
+        let ignored_cancel = engine
+            .handle_stroke_batch(
+                "stroke-command".to_string(),
+                StrokeInputBatchV1 {
+                    pointer_id: 2,
+                    ..stroke_batch(StrokePhaseV1::Cancel, 14, &[], None)
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            ignored_cancel.update.scene.root_node_ids,
+            vec!["stroke-1:path"]
+        );
+        let cancelled = engine
+            .handle_stroke_batch(
+                "stroke-command".to_string(),
+                stroke_batch(StrokePhaseV1::Cancel, 14, &[], None),
+            )
+            .unwrap();
+        assert!(cancelled.update.scene.nodes.is_empty());
+        assert_eq!(engine.undo(), Err(EngineErrorV1::UndoUnavailable));
+    }
+
+    #[test]
+    fn invalid_stroke_inputs_and_commands_are_atomic() {
+        let mut engine = Engine::open(NodeInkDocumentV1::blank("doc-1")).unwrap();
+        assert_eq!(
+            engine.handle_stroke_batch(
+                "missing-id".to_string(),
+                stroke_batch(StrokePhaseV1::Down, 1, &[(0.0, 0.0)], None),
+            ),
+            Err(EngineErrorV1::InvalidStrokeInput {
+                reason: "down requires a strokeId".to_string(),
+            })
+        );
+        assert_eq!(
+            engine.handle_stroke_batch(
+                "invalid-point".to_string(),
+                stroke_batch(StrokePhaseV1::Down, 1, &[(f64::NAN, 0.0)], Some("stroke-1"),),
+            ),
+            Err(EngineErrorV1::InvalidStrokeInput {
+                reason: "points must be finite".to_string(),
+            })
+        );
+
+        let invalid = envelope(
+            engine.document(),
+            "invalid-stroke",
+            CommandV1::CreateStroke {
+                stroke: StrokeElementV1 {
+                    id: "stroke-1".to_string(),
+                    points: vec![Vec2 { x: 0.0, y: 0.0 }],
+                    stroke_width: 3.0,
+                },
+            },
+        );
+        assert_eq!(
+            engine.execute_command(invalid),
+            Err(EngineErrorV1::InvalidStroke {
+                element_id: "stroke-1".to_string(),
+            })
+        );
+        assert!(engine.document().elements.is_empty());
+    }
+
+    #[test]
+    fn committed_strokes_can_be_translated_by_the_shared_move_command() {
+        let mut engine = Engine::open(NodeInkDocumentV1::blank("doc-1")).unwrap();
+        let create = envelope(
+            engine.document(),
+            "create-stroke",
+            CommandV1::CreateStroke {
+                stroke: StrokeElementV1 {
+                    id: "stroke-1".to_string(),
+                    points: vec![Vec2 { x: 1.0, y: 2.0 }, Vec2 { x: 3.0, y: 4.0 }],
+                    stroke_width: 2.0,
+                },
+            },
+        );
+        engine.execute_command(create).unwrap();
+        let movement = envelope(
+            engine.document(),
+            "move-stroke",
+            CommandV1::MoveElements {
+                element_ids: vec!["stroke-1".to_string()],
+                delta: Vec2 { x: 5.0, y: 6.0 },
+            },
+        );
+        let moved = engine.execute_command(movement).unwrap();
+        let SceneNodeV1::Path(path) = &moved.scene.nodes["stroke-1:path"] else {
+            panic!("stroke should resolve to a path");
+        };
+        assert_eq!(path.path_data, "M 6 8 L 8 10");
+    }
+
     fn document_with_rectangle() -> NodeInkDocumentV1 {
         let mut document = NodeInkDocumentV1::blank("doc-1");
         let rectangle = rectangle("rect-1", 24.0);
@@ -1029,6 +1429,21 @@ mod tests {
             phase,
             point: Vec2 { x, y: 40.0 },
             target_element_id: target_element_id.map(str::to_string),
+        }
+    }
+
+    fn stroke_batch(
+        phase: StrokePhaseV1,
+        sequence_start: u64,
+        points: &[(f64, f64)],
+        stroke_id: Option<&str>,
+    ) -> StrokeInputBatchV1 {
+        StrokeInputBatchV1 {
+            pointer_id: 1,
+            sequence_start,
+            phase,
+            points: points.iter().map(|&(x, y)| Vec2 { x, y }).collect(),
+            stroke_id: stroke_id.map(str::to_string),
         }
     }
 }
