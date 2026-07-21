@@ -7,11 +7,15 @@
     "dev": "vp dev apps/playground",
     "check": "vp check",
     "test": "vp test",
+    "coverage": "pnpm run coverage:web && pnpm run coverage:rust",
+    "coverage:web": "vp test --coverage",
+    "coverage:rust": "./scripts/coverage-rust.sh",
     "build": "vp run wasm:build && vp build apps/playground"
   },
   "devDependencies": {
     "@types/node": "24.10.10",
     "@vitejs/plugin-react": "6.0.3",
+    "@vitest/coverage-v8": "4.1.10",
     "jsdom": "29.1.1",
     "typescript": "7.0.2",
     "vite": "npm:@voidzero-dev/vite-plus-core@0.2.5",

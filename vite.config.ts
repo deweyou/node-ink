@@ -16,6 +16,24 @@ export default defineConfig({
   test: {
     environment: 'jsdom',
     include: ['packages/**/*.test.ts', 'packages/**/*.test.tsx'],
+    coverage: {
+      provider: 'v8',
+      reporter: ['text', 'json-summary'],
+      include: [
+        'packages/protocol/src/**/*.{ts,tsx}',
+        'packages/engine-web/src/**/*.{ts,tsx}',
+        'packages/editor-web/src/**/*.{ts,tsx}',
+        'packages/renderer-svg/src/**/*.{ts,tsx}',
+        'packages/editor-react/src/**/*.{ts,tsx}',
+      ],
+      exclude: ['**/*.test.{ts,tsx}', '**/*.d.ts'],
+      thresholds: {
+        statements: 90,
+        branches: 90,
+        functions: 90,
+        lines: 90,
+      },
+    },
   },
   run: {
     tasks: {

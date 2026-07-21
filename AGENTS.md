@@ -42,6 +42,7 @@ Run checks proportional to the touched boundary. The full Phase 0 gate is:
 pnpm install --frozen-lockfile
 pnpm check
 pnpm test
+pnpm coverage
 pnpm exec vp run rust:check
 pnpm build
 ```

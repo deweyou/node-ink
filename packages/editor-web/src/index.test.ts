@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import type {
   CommandEnvelopeV1,
@@ -37,18 +37,146 @@ describe('EditorWebController', () => {
     });
     expect(renderer.snapshots.at(-1)?.documentRevision).toBe(2);
   });
+
+  it('supports explicit geometry, history, subscriptions, and idempotent disposal', async () => {
+    const engine = new StubEngine();
+    const renderer = new StubRenderer();
+    const listener = vi.fn();
+    const controller = new EditorWebController({
+      engine,
+      renderer,
+      createId: () => 'command-1',
+    });
+    const unsubscribe = controller.subscribe(listener);
+
+    await controller.mount(document.createElement('div'));
+    await controller.dispatch({
+      type: 'create_rectangle',
+      elementId: 'rect-explicit',
+      position: { x: 12, y: 18 },
+    });
+    await controller.dispatch({ type: 'undo' });
+    await controller.dispatch({ type: 'redo' });
+
+    expect(engine.commands[0]).toMatchObject({
+      commandId: 'command-1',
+      command: {
+        type: 'create_rectangle',
+        rectangle: { id: 'rect-explicit', x: 12, y: 18 },
+      },
+    });
+    expect(engine.undoCalls).toBe(1);
+    expect(engine.redoCalls).toBe(1);
+    expect(listener).toHaveBeenCalledTimes(4);
+
+    unsubscribe();
+    controller.dispose();
+    controller.dispose();
+    expect(engine.disposeCalls).toBe(1);
+    expect(renderer.unmountCalls).toBe(1);
+    expect(controller.getSnapshot().status).toBe('disposed');
+    await expect(controller.dispatch({ type: 'undo' })).rejects.toThrow('disposed');
+  });
+
+  it('reports document-action and selection errors without rejecting dispatch', async () => {
+    const engine = new StubEngine();
+    const controller = new EditorWebController({
+      engine,
+      renderer: new StubRenderer(),
+      createId: () => 'command-1',
+    });
+
+    const beforeMount = await controller.dispatch({ type: 'create_rectangle' });
+    expect(beforeMount).toMatchObject({
+      ok: false,
+      snapshot: {
+        status: 'error',
+        errorMessage: 'Editor must be mounted before dispatching document actions',
+      },
+    });
+
+    await controller.mount(document.createElement('div'));
+    const withoutSelection = await controller.dispatch({
+      type: 'move_active',
+      delta: { x: 1, y: 1 },
+    });
+    expect(withoutSelection).toMatchObject({
+      ok: false,
+      snapshot: { status: 'error', errorMessage: 'Create a rectangle before moving it' },
+    });
+
+    engine.executeError = 'engine rejected command';
+    const engineFailure = await controller.dispatch({ type: 'create_rectangle' });
+    expect(engineFailure).toMatchObject({
+      ok: false,
+      snapshot: { errorMessage: 'engine rejected command' },
+    });
+  });
+
+  it('surfaces mount and renderer failures', async () => {
+    const failedEngine = new StubEngine();
+    failedEngine.currentError = new Error('engine failed to boot');
+    const failedMount = new EditorWebController({
+      engine: failedEngine,
+      renderer: new StubRenderer(),
+    });
+
+    await expect(failedMount.mount(document.createElement('div'))).rejects.toThrow(
+      'engine failed to boot',
+    );
+    expect(failedMount.getSnapshot()).toMatchObject({
+      status: 'error',
+      errorMessage: 'engine failed to boot',
+    });
+
+    const rejectedRenderer = new StubRenderer();
+    rejectedRenderer.shouldReject = true;
+    const rejectedScene = new EditorWebController({
+      engine: new StubEngine(),
+      renderer: rejectedRenderer,
+    });
+    await expect(rejectedScene.mount(document.createElement('div'))).rejects.toThrow(
+      'Renderer rejected scene',
+    );
+  });
+
+  it('selects the last rendered element when no operation preference exists', async () => {
+    const controller = new EditorWebController({
+      engine: new StubEngine('existing-rect'),
+      renderer: new StubRenderer(),
+    });
+
+    await controller.mount(document.createElement('div'));
+
+    expect(controller.getSnapshot().activeElementId).toBe('existing-rect');
+  });
 });
 
 class StubEngine implements EnginePortV1 {
   readonly commands: CommandEnvelopeV1[] = [];
+  currentError: unknown = null;
+  executeError: unknown = null;
+  undoCalls = 0;
+  redoCalls = 0;
+  disposeCalls = 0;
   #revision = 0;
-  #rectangleId: string | null = null;
+  #rectangleId: string | null;
+
+  constructor(rectangleId: string | null = null) {
+    this.#rectangleId = rectangleId;
+  }
 
   async currentUpdate(): Promise<EngineUpdateV1> {
+    if (this.currentError) {
+      throw this.currentError;
+    }
     return this.update();
   }
 
   async executeCommand(command: CommandEnvelopeV1): Promise<EngineUpdateV1> {
+    if (this.executeError) {
+      throw this.executeError;
+    }
     this.commands.push(command);
     this.#revision += 1;
     if (command.command.type === 'create_rectangle') {
@@ -58,14 +186,18 @@ class StubEngine implements EnginePortV1 {
   }
 
   async undo(): Promise<EngineUpdateV1> {
+    this.undoCalls += 1;
     return this.update();
   }
 
   async redo(): Promise<EngineUpdateV1> {
+    this.redoCalls += 1;
     return this.update();
   }
 
-  dispose(): void {}
+  dispose(): void {
+    this.disposeCalls += 1;
+  }
 
   private update(changedElementIds: string[] = []): EngineUpdateV1 {
     const scene = stubScene(this.#revision, this.#rectangleId);
@@ -87,15 +219,22 @@ class StubEngine implements EnginePortV1 {
 
 class StubRenderer implements RendererV1 {
   readonly snapshots: SceneSnapshotV1[] = [];
+  shouldReject = false;
+  unmountCalls = 0;
 
   mount(): void {}
 
   applySnapshot(snapshot: SceneSnapshotV1) {
+    if (this.shouldReject) {
+      return { ok: false as const, reason: 'unsupported_scene' as const };
+    }
     this.snapshots.push(snapshot);
     return { ok: true as const, sceneRevision: snapshot.sceneRevision };
   }
 
-  unmount(): void {}
+  unmount(): void {
+    this.unmountCalls += 1;
+  }
 }
 
 function stubScene(revision: number, rectangleId: string | null): SceneSnapshotV1 {

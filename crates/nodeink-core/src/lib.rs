@@ -586,4 +586,222 @@ mod tests {
             }
         );
     }
+
+    #[test]
+    fn redo_restores_an_undone_document_and_new_commands_clear_redo() {
+        let mut engine = Engine::open(NodeInkDocumentV1::blank("doc-1")).unwrap();
+        engine
+            .execute_command(envelope(
+                engine.document(),
+                "create-1",
+                CommandV1::CreateRectangle {
+                    rectangle: rectangle("rect-1", 24.0),
+                },
+            ))
+            .unwrap();
+
+        engine.undo().unwrap();
+        let redone = engine.redo().unwrap();
+        assert_eq!(redone.scene.document_revision, 3);
+        assert_eq!(redone.scene.root_node_ids, ["rect-1:shape"]);
+        assert!(redone.history.can_undo);
+        assert!(!redone.history.can_redo);
+
+        engine.undo().unwrap();
+        engine
+            .execute_command(envelope(
+                engine.document(),
+                "create-2",
+                CommandV1::CreateRectangle {
+                    rectangle: rectangle("rect-2", 64.0),
+                },
+            ))
+            .unwrap();
+        assert_eq!(engine.redo(), Err(EngineErrorV1::RedoUnavailable));
+    }
+
+    #[test]
+    fn unavailable_history_operations_are_reported() {
+        let mut engine = Engine::open(NodeInkDocumentV1::blank("doc-1")).unwrap();
+
+        assert_eq!(engine.undo(), Err(EngineErrorV1::UndoUnavailable));
+        assert_eq!(engine.redo(), Err(EngineErrorV1::RedoUnavailable));
+    }
+
+    #[test]
+    fn invalid_envelopes_and_commands_never_mutate_the_document() {
+        let mut engine = Engine::open(NodeInkDocumentV1::blank("doc-1")).unwrap();
+        let before = engine.document().clone();
+
+        let unsupported_protocol = CommandEnvelopeV1 {
+            protocol_version: 2,
+            ..envelope(
+                engine.document(),
+                "unsupported",
+                CommandV1::CreateRectangle {
+                    rectangle: rectangle("rect-1", 24.0),
+                },
+            )
+        };
+        assert_eq!(
+            engine.execute_command(unsupported_protocol),
+            Err(EngineErrorV1::UnsupportedProtocol { actual: 2 })
+        );
+
+        let wrong_document = CommandEnvelopeV1 {
+            document_id: "other-document".to_string(),
+            ..envelope(
+                engine.document(),
+                "wrong-document",
+                CommandV1::CreateRectangle {
+                    rectangle: rectangle("rect-1", 24.0),
+                },
+            )
+        };
+        assert_eq!(
+            engine.execute_command(wrong_document),
+            Err(EngineErrorV1::DocumentMismatch)
+        );
+        assert_eq!(engine.document(), &before);
+
+        engine
+            .execute_command(envelope(
+                engine.document(),
+                "create",
+                CommandV1::CreateRectangle {
+                    rectangle: rectangle("rect-1", 24.0),
+                },
+            ))
+            .unwrap();
+        let after_create = engine.document().clone();
+
+        let duplicate = envelope(
+            engine.document(),
+            "duplicate",
+            CommandV1::CreateRectangle {
+                rectangle: rectangle("rect-1", 48.0),
+            },
+        );
+        assert_eq!(
+            engine.execute_command(duplicate),
+            Err(EngineErrorV1::ElementAlreadyExists {
+                element_id: "rect-1".to_string(),
+            })
+        );
+
+        let invalid_rectangle = envelope(
+            engine.document(),
+            "invalid-rectangle",
+            CommandV1::CreateRectangle {
+                rectangle: RectElementV1 {
+                    width: 0.0,
+                    ..rectangle("rect-2", 48.0)
+                },
+            },
+        );
+        assert_eq!(
+            engine.execute_command(invalid_rectangle),
+            Err(EngineErrorV1::InvalidRectangle {
+                element_id: "rect-2".to_string(),
+            })
+        );
+
+        let invalid_delta = envelope(
+            engine.document(),
+            "invalid-delta",
+            CommandV1::MoveElements {
+                element_ids: vec!["rect-1".to_string()],
+                delta: Vec2 {
+                    x: f64::NAN,
+                    y: 0.0,
+                },
+            },
+        );
+        assert_eq!(
+            engine.execute_command(invalid_delta),
+            Err(EngineErrorV1::InvalidDelta)
+        );
+        assert_eq!(engine.document(), &after_create);
+    }
+
+    #[test]
+    fn opening_invalid_documents_reports_the_broken_invariant() {
+        let mut unsupported_schema = NodeInkDocumentV1::blank("doc-1");
+        unsupported_schema.schema_version = 2;
+        assert_eq!(
+            Engine::open(unsupported_schema).unwrap_err(),
+            EngineErrorV1::UnsupportedSchema { actual: 2 }
+        );
+
+        assert_eq!(
+            Engine::open(NodeInkDocumentV1::blank("  ")).unwrap_err(),
+            EngineErrorV1::InvalidDocument {
+                reason: "documentId must not be empty".to_string(),
+            }
+        );
+
+        let mut different_lengths = NodeInkDocumentV1::blank("doc-1");
+        different_lengths.root_order.push("missing".to_string());
+        assert_eq!(
+            Engine::open(different_lengths).unwrap_err(),
+            EngineErrorV1::InvalidDocument {
+                reason: "rootOrder and elements must contain the same ids".to_string(),
+            }
+        );
+
+        let mut missing_element = NodeInkDocumentV1::blank("doc-1");
+        missing_element.root_order.push("missing".to_string());
+        missing_element.elements.insert(
+            "other".to_string(),
+            ElementRecordV1::Rect(rectangle("other", 24.0)),
+        );
+        assert_eq!(
+            Engine::open(missing_element).unwrap_err(),
+            EngineErrorV1::InvalidDocument {
+                reason: "rootOrder references missing element missing".to_string(),
+            }
+        );
+
+        let mut mismatched_key = NodeInkDocumentV1::blank("doc-1");
+        mismatched_key.root_order.push("rect-key".to_string());
+        mismatched_key.elements.insert(
+            "rect-key".to_string(),
+            ElementRecordV1::Rect(rectangle("rect-id", 24.0)),
+        );
+        assert_eq!(
+            Engine::open(mismatched_key).unwrap_err(),
+            EngineErrorV1::InvalidDocument {
+                reason: "element key rect-key does not match its id".to_string(),
+            }
+        );
+
+        let mut invalid_rectangle_document = NodeInkDocumentV1::blank("doc-1");
+        invalid_rectangle_document
+            .root_order
+            .push("rect-1".to_string());
+        invalid_rectangle_document.elements.insert(
+            "rect-1".to_string(),
+            ElementRecordV1::Rect(RectElementV1 {
+                height: f64::INFINITY,
+                ..rectangle("rect-1", 24.0)
+            }),
+        );
+        assert_eq!(
+            Engine::open(invalid_rectangle_document).unwrap_err(),
+            EngineErrorV1::InvalidRectangle {
+                element_id: "rect-1".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn current_update_and_document_serialization_reflect_the_open_document() {
+        let engine = Engine::open(NodeInkDocumentV1::blank("doc-1")).unwrap();
+
+        assert_eq!(engine.current_update().scene.document_revision, 0);
+        assert_eq!(
+            engine.serialize_document().unwrap(),
+            r#"{"schemaVersion":1,"documentId":"doc-1","revision":0,"rootOrder":[],"elements":{}}"#
+        );
+    }
 }

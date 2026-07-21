@@ -54,8 +54,9 @@ Mermaid 导入或公共 SDK。
 | `pnpm install --frozen-lockfile` | lockfile 可重复安装；workspace 已是最新状态 |
 | `pnpm config get registry` | `https://registry.npmjs.org/` |
 | `pnpm exec vp check` | 39 个文件格式正确；14 个文件无 lint/type error |
-| `pnpm exec vp test` | 3 个 test file、4 个 Web test 通过 |
-| `pnpm exec vp run rust:check` | fmt、Clippy、5 个 Rust test、doc-test 通过 |
+| `pnpm exec vp test` | 5 个 test file、27 个 Web test 通过 |
+| `pnpm coverage` | Web 四项全局指标 >=96%；Rust regions/functions/lines >=99% |
+| `pnpm exec vp run rust:check` | fmt、Clippy、10 个 Rust test、doc-test 通过 |
 | `pnpm exec vp run wasm:build` | release WASM 重新生成成功 |
 | `pnpm exec vp build apps/playground` | React/Vanilla 双入口和 WASM 生产包构建成功 |
 | framework dependency scan | `protocol`、`engine-web`、`editor-web`、`renderer-svg` 无 React/Vue import |
@@ -95,4 +96,4 @@ macOS 在仓库内 Cargo `target/` 上触发过扩展属性相关的 `Operation 
 5. S7/S8 持久化、原子恢复与 migration fixture。
 
 ---
-*Last updated: 2026-07-21 | Reason: record implementation and verification of the first Phase 0 vertical slice*
+*Last updated: 2026-07-21 | Reason: add enforced high-coverage results to the verified vertical slice*

@@ -27,8 +27,15 @@ pnpm dev
 ```bash
 pnpm check
 pnpm test
+pnpm coverage
 pnpm exec vp run rust:check
 pnpm build
+```
+
+Rust 覆盖率使用精确版本 `cargo-llvm-cov 0.8.7`；首次运行前安装：
+
+```bash
+cargo install cargo-llvm-cov --version 0.8.7 --locked
 ```
 
 - [产品与技术设计索引](docs/README.md)
