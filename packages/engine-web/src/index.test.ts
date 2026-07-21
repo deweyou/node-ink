@@ -10,6 +10,7 @@ const wasm = vi.hoisted(() => {
     handlePointerEvents: vi.fn(),
     handleStrokeBatchJson: vi.fn(),
     handleStrokePoints: vi.fn(),
+    resolveSceneProfile: vi.fn(),
     undo: vi.fn(),
     redo: vi.fn(),
     free: vi.fn(),
@@ -37,6 +38,7 @@ describe('createWasmEngine', () => {
     wasm.handle.handlePointerEvents.mockReturnValue(pointerUpdate());
     wasm.handle.handleStrokeBatchJson.mockReturnValue(strokeUpdate());
     wasm.handle.handleStrokePoints.mockReturnValue(strokeUpdate());
+    wasm.handle.resolveSceneProfile.mockReturnValue(sceneResolution());
     wasm.handle.undo.mockReturnValue(update);
     wasm.handle.redo.mockReturnValue(update);
   });
@@ -87,6 +89,10 @@ describe('createWasmEngine', () => {
     await expect(
       engine.handleStrokeBatch(strokeBatch, 'stroke-json', 'json'),
     ).resolves.toMatchObject({ processedPointCount: 2, didCommit: false });
+    await expect(engine.resolveSceneProfile({ kind: 'clean', version: 1 })).resolves.toMatchObject({
+      engineAlgorithmVersion: 'nodeink-scene-v1',
+      canonicalHash: 'fnv1a64:1234',
+    });
     await expect(
       engine.handleStrokeBatch(strokeBatch, 'stroke-typed', 'typed_array'),
     ).resolves.toMatchObject({ processedPointCount: 2, didCommit: false });
@@ -111,6 +117,9 @@ describe('createWasmEngine', () => {
       new Float64Array([1, 2, 3, 4]),
       undefined,
       'stroke-typed',
+    );
+    expect(wasm.handle.resolveSceneProfile).toHaveBeenCalledWith(
+      JSON.stringify({ kind: 'clean', version: 1 }),
     );
   });
 
@@ -154,6 +163,13 @@ describe('createWasmEngine', () => {
         'json',
       ),
     ).rejects.toThrow('stroke rejected');
+
+    wasm.handle.resolveSceneProfile.mockImplementation(() => {
+      throw new Error(JSON.stringify({ message: 'profile rejected' }));
+    });
+    await expect(engine.resolveSceneProfile({ kind: 'clean', version: 1 })).rejects.toThrow(
+      'profile rejected',
+    );
   });
 
   it('frees the handle once and rejects use after disposal', async () => {
@@ -207,5 +223,14 @@ function strokeUpdate(): string {
     processedPointCount: 2,
     ignoredPointCount: 0,
     didCommit: false,
+  });
+}
+
+function sceneResolution(): string {
+  return JSON.stringify({
+    engineAlgorithmVersion: 'nodeink-scene-v1',
+    renderProfile: { kind: 'clean', version: 1 },
+    canonicalHash: 'fnv1a64:1234',
+    scene: JSON.parse(validUpdate()).scene,
   });
 }

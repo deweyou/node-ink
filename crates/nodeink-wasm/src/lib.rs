@@ -1,6 +1,6 @@
 use nodeink_core::{
     CommandEnvelopeV1, Engine, EngineErrorV1, NodeInkDocumentV1, NormalizedPointerEventV1,
-    StrokeInputBatchV1, StrokePhaseV1, Vec2,
+    RenderProfileV1, StrokeInputBatchV1, StrokePhaseV1, Vec2,
 };
 use wasm_bindgen::prelude::*;
 
@@ -111,6 +111,17 @@ impl EngineHandle {
     pub fn current_update(&self) -> Result<String, JsValue> {
         serde_json::to_string(&self.engine.current_update())
             .map_err(|error| js_error("serialization_failed", error))
+    }
+
+    #[wasm_bindgen(js_name = resolveSceneProfile)]
+    pub fn resolve_scene_profile(&self, profile_json: &str) -> Result<String, JsValue> {
+        let profile: RenderProfileV1 = serde_json::from_str(profile_json)
+            .map_err(|error| js_error("schema_invalid", error))?;
+        let resolution = self
+            .engine
+            .resolve_scene_profile(profile)
+            .map_err(engine_error)?;
+        serde_json::to_string(&resolution).map_err(|error| js_error("serialization_failed", error))
     }
 
     #[wasm_bindgen(js_name = serializeDocument)]

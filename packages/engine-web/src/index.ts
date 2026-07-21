@@ -1,6 +1,7 @@
 import {
   parseEngineUpdate,
   parsePointerUpdate,
+  parseSceneResolution,
   parseStrokeUpdate,
   type CommandEnvelopeV1,
   type EnginePortV1,
@@ -8,6 +9,8 @@ import {
   type NodeInkDocumentV1,
   type NormalizedPointerEventV1,
   type PointerUpdateV1,
+  type RenderProfileV1,
+  type SceneResolutionV1,
   type StrokeInputBatchV1,
   type StrokeTransportV1,
   type StrokeUpdateV1,
@@ -26,6 +29,7 @@ interface WasmEngineHandle {
     strokeId: string | undefined,
     commandId: string,
   ): string;
+  resolveSceneProfile(profileJson: string): string;
   undo(): string;
   redo(): string;
   free(): void;
@@ -95,6 +99,16 @@ class WasmEnginePort implements EnginePortV1 {
               commandId,
             );
       return parseStrokeUpdate(serialized);
+    } catch (error) {
+      throw normalizeEngineError(error);
+    }
+  }
+
+  async resolveSceneProfile(profile: RenderProfileV1): Promise<SceneResolutionV1> {
+    try {
+      return parseSceneResolution(
+        this.requireHandle().resolveSceneProfile(JSON.stringify(profile)),
+      );
     } catch (error) {
       throw normalizeEngineError(error);
     }

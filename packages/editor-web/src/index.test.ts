@@ -7,6 +7,8 @@ import type {
   NormalizedPointerEventV1,
   PointerUpdateV1,
   RendererV1,
+  RenderProfileV1,
+  SceneResolutionV1,
   SceneSnapshotV1,
   StrokeInputBatchV1,
   StrokeTransportV1,
@@ -242,6 +244,15 @@ class StubEngine implements EnginePortV1 {
       processedPointCount: batch.points.length,
       ignoredPointCount: 0,
       didCommit: false,
+    };
+  }
+
+  async resolveSceneProfile(profile: RenderProfileV1): Promise<SceneResolutionV1> {
+    return {
+      engineAlgorithmVersion: 'nodeink-scene-v1',
+      renderProfile: profile,
+      canonicalHash: 'fnv1a64:test',
+      scene: this.update().scene,
     };
   }
 

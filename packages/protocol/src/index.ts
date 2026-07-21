@@ -73,6 +73,24 @@ export interface SceneSnapshotV1 {
   nodes: Record<string, SceneNodeV1>;
 }
 
+export type RenderProfileV1 =
+  | { kind: 'clean'; version: 1 }
+  | {
+      kind: 'sketch';
+      version: 1;
+      seed: number;
+      roughness: number;
+      bowing: number;
+      fillStyle: 'solid' | 'hachure';
+    };
+
+export interface SceneResolutionV1 {
+  engineAlgorithmVersion: string;
+  renderProfile: RenderProfileV1;
+  canonicalHash: string;
+  scene: SceneSnapshotV1;
+}
+
 export type SceneNodeV1 = SceneRectV1 | ScenePathV1;
 
 export interface SceneRectV1 {
@@ -109,6 +127,7 @@ export interface EnginePortV1 {
     commandId: string,
     transport: StrokeTransportV1,
   ): Promise<StrokeUpdateV1>;
+  resolveSceneProfile(profile: RenderProfileV1): Promise<SceneResolutionV1>;
   undo(): Promise<EngineUpdateV1>;
   redo(): Promise<EngineUpdateV1>;
   dispose(): void;
@@ -228,6 +247,31 @@ export function parseStrokeUpdate(value: string): StrokeUpdateV1 {
     processedPointCount: parsed.processedPointCount,
     ignoredPointCount: parsed.ignoredPointCount,
     didCommit: parsed.didCommit,
+  };
+}
+
+export function parseSceneResolution(value: string): SceneResolutionV1 {
+  const parsed: unknown = JSON.parse(value);
+  if (
+    !isRecord(parsed) ||
+    typeof parsed.engineAlgorithmVersion !== 'string' ||
+    typeof parsed.canonicalHash !== 'string' ||
+    !isRecord(parsed.renderProfile) ||
+    !isRecord(parsed.scene)
+  ) {
+    throw new Error('Engine returned an invalid scene resolution payload');
+  }
+  return {
+    engineAlgorithmVersion: parsed.engineAlgorithmVersion,
+    canonicalHash: parsed.canonicalHash,
+    renderProfile: parsed.renderProfile as unknown as RenderProfileV1,
+    scene: parseEngineUpdate(
+      JSON.stringify({
+        operation: null,
+        scene: parsed.scene,
+        history: { canUndo: false, canRedo: false },
+      }),
+    ).scene,
   };
 }
 

@@ -89,6 +89,13 @@
 - batch-8/32 只保留为吞吐 benchmark，不用于实时绘制，因为其聚合等待超过一帧。
 - 当前返回全量 SceneSnapshot；约 128KB 的 S2 P95 payload 是 S5 引入 ScenePatch 的直接证据，不构成长期协议决定。
 
+### D-15 确定性 Sketch 所有权
+
+- `nodeink-core` 使用显式 Render Profile、seed 和 `nodeink-scene-v1` 算法版本生成最终 Sketch path。
+- Renderer 只消费已解析 Scene，不接收随机源或重新执行 rough/sketch 算法。
+- Native 与 WASM canonical hash 必须逐项一致；算法升级需要新版本与 fixture 差异记录，不能原地漂移。
+- Phase 0 使用 FNV-1a 做快速 Scene fixture hash；它不替代持久化对象的安全完整性摘要。
+
 ## 22. 需要产品负责人决策的问题
 
 以下问题不阻碍继续评审文档，但会阻碍对应功能进入实现。

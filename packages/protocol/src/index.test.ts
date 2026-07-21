@@ -4,6 +4,7 @@ import {
   createBlankDocument,
   parseEngineUpdate,
   parsePointerUpdate,
+  parseSceneResolution,
   parseStrokeUpdate,
 } from './index';
 
@@ -124,6 +125,27 @@ describe('protocol V1', () => {
     { update: {}, processedPointCount: 1, ignoredPointCount: 0, didCommit: 'false' },
   ])('rejects invalid stroke update metadata', (value) => {
     expect(() => parseStrokeUpdate(JSON.stringify(value))).toThrow('invalid stroke update');
+  });
+
+  it('parses an explicit deterministic scene resolution', () => {
+    const resolution = {
+      engineAlgorithmVersion: 'nodeink-scene-v1',
+      canonicalHash: 'fnv1a64:1234',
+      renderProfile: { kind: 'clean', version: 1 },
+      scene: updateFixture().scene,
+    };
+
+    expect(parseSceneResolution(JSON.stringify(resolution))).toEqual(resolution);
+  });
+
+  it.each([
+    null,
+    {},
+    { engineAlgorithmVersion: 1, canonicalHash: 'hash', renderProfile: {}, scene: {} },
+    { engineAlgorithmVersion: 'v1', canonicalHash: 1, renderProfile: {}, scene: {} },
+    { engineAlgorithmVersion: 'v1', canonicalHash: 'hash', renderProfile: null, scene: {} },
+  ])('rejects invalid scene resolution metadata', (value) => {
+    expect(() => parseSceneResolution(JSON.stringify(value))).toThrow('invalid scene resolution');
   });
 });
 

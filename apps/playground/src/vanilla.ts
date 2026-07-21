@@ -3,6 +3,7 @@ import type { EditorWebControllerV1 } from '@nodeink-internal/editor-web';
 import {
   exposePointerBenchmark,
   runPlaygroundPointerBenchmark,
+  runPlaygroundSketchBenchmark,
   runPlaygroundStrokeBenchmark,
 } from './benchmark-api';
 import { createController } from './create-controller';
@@ -48,7 +49,7 @@ await controller.mount(canvas);
 renderControls();
 
 const benchmark = new URLSearchParams(window.location.search).get('benchmark');
-if (benchmark === 'pointer' || benchmark === 'stroke') {
+if (benchmark === 'pointer' || benchmark === 'stroke' || benchmark === 'sketch') {
   const benchmarkOutput = document.createElement('pre');
   benchmarkOutput.className = 'nodeink-benchmark';
   benchmarkOutput.dataset.benchmarkResults = benchmark;
@@ -58,7 +59,9 @@ if (benchmark === 'pointer' || benchmark === 'stroke') {
     benchmarkOutput.textContent = JSON.stringify(
       benchmark === 'pointer'
         ? await runPlaygroundPointerBenchmark(controller)
-        : await runPlaygroundStrokeBenchmark(controller),
+        : benchmark === 'stroke'
+          ? await runPlaygroundStrokeBenchmark(controller)
+          : await runPlaygroundSketchBenchmark(),
       null,
       2,
     );

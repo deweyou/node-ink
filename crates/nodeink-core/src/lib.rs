@@ -4,10 +4,13 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 mod pointer;
+mod sketch;
 mod stroke;
 
 pub use pointer::{NormalizedPointerEventV1, PointerPhaseV1};
 use pointer::{PointerMachine, PointerPreview, PointerTransition};
+pub use sketch::{ENGINE_ALGORITHM_VERSION, RenderProfileV1, SketchFillStyleV1};
+use sketch::{sketch_rectangle, sketch_stroke};
 pub use stroke::{StrokeInputBatchV1, StrokePhaseV1};
 use stroke::{StrokeMachine, StrokePreview, StrokeTransition};
 
@@ -179,6 +182,15 @@ pub struct SceneSnapshotV1 {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SceneResolutionV1 {
+    pub engine_algorithm_version: String,
+    pub render_profile: RenderProfileV1,
+    pub canonical_hash: String,
+    pub scene: SceneSnapshotV1,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum SceneNodeV1 {
     Rect(SceneRectV1),
@@ -232,6 +244,8 @@ pub enum EngineErrorV1 {
     InvalidStroke { element_id: ElementId },
     #[error("invalid stroke input: {reason}")]
     InvalidStrokeInput { reason: String },
+    #[error("invalid render profile")]
+    InvalidRenderProfile,
     #[error("undo history is empty")]
     UndoUnavailable,
     #[error("redo history is empty")]
@@ -432,6 +446,24 @@ impl Engine {
         serde_json::to_string(&self.document)
     }
 
+    pub fn resolve_scene_profile(
+        &self,
+        profile: RenderProfileV1,
+    ) -> Result<SceneResolutionV1, EngineErrorV1> {
+        if !profile.validate() {
+            return Err(EngineErrorV1::InvalidRenderProfile);
+        }
+        let scene = resolve_scene(&self.document, self.scene_revision, None, None, &profile);
+        let canonical =
+            serde_json::to_string(&scene).expect("SceneSnapshot serialization is infallible");
+        Ok(SceneResolutionV1 {
+            engine_algorithm_version: ENGINE_ALGORITHM_VERSION.to_string(),
+            render_profile: profile,
+            canonical_hash: fnv1a64_hex(canonical.as_bytes()),
+            scene,
+        })
+    }
+
     fn validate_envelope(&self, envelope: &CommandEnvelopeV1) -> Result<(), EngineErrorV1> {
         if envelope.protocol_version != PROTOCOL_VERSION {
             return Err(EngineErrorV1::UnsupportedProtocol {
@@ -475,6 +507,7 @@ impl Engine {
                 self.scene_revision,
                 pointer_preview,
                 stroke_preview,
+                &RenderProfileV1::clean(),
             ),
             history: HistoryStateV1 {
                 can_undo: !self.undo_stack.is_empty(),
@@ -638,6 +671,7 @@ fn resolve_scene(
     scene_revision: u64,
     pointer_preview: Option<&PointerPreview>,
     stroke_preview: Option<&StrokePreview>,
+    profile: &RenderProfileV1,
 ) -> SceneSnapshotV1 {
     let mut root_node_ids =
         Vec::with_capacity(document.root_order.len() + usize::from(stroke_preview.is_some()));
@@ -652,30 +686,42 @@ fn resolve_scene(
                 let preview_delta = pointer_preview
                     .filter(|candidate| candidate.element_id == rectangle.id)
                     .map_or(Vec2 { x: 0.0, y: 0.0 }, |candidate| candidate.delta);
-                let scene_node_id = format!("{}:shape", rectangle.id);
-                root_node_ids.push(scene_node_id.clone());
-                nodes.insert(
-                    scene_node_id.clone(),
-                    SceneNodeV1::Rect(SceneRectV1 {
-                        id: scene_node_id,
-                        source_element_id: rectangle.id.clone(),
-                        x: rectangle.x + preview_delta.x,
-                        y: rectangle.y + preview_delta.y,
-                        width: rectangle.width,
-                        height: rectangle.height,
-                        fill: "#d1fae5".to_string(),
-                        stroke: "#047857".to_string(),
-                    }),
-                );
+                let resolved = RectElementV1 {
+                    x: rectangle.x + preview_delta.x,
+                    y: rectangle.y + preview_delta.y,
+                    ..rectangle.clone()
+                };
+                if matches!(profile, RenderProfileV1::Clean { .. }) {
+                    let scene_node_id = format!("{}:shape", rectangle.id);
+                    root_node_ids.push(scene_node_id.clone());
+                    nodes.insert(
+                        scene_node_id.clone(),
+                        SceneNodeV1::Rect(SceneRectV1 {
+                            id: scene_node_id,
+                            source_element_id: rectangle.id.clone(),
+                            x: resolved.x,
+                            y: resolved.y,
+                            width: resolved.width,
+                            height: resolved.height,
+                            fill: "#d1fae5".to_string(),
+                            stroke: "#047857".to_string(),
+                        }),
+                    );
+                } else {
+                    for path in sketch_rectangle(&resolved, profile) {
+                        root_node_ids.push(path.id.clone());
+                        nodes.insert(path.id.clone(), SceneNodeV1::Path(path));
+                    }
+                }
             }
             ElementRecordV1::Stroke(stroke) => {
-                insert_stroke_scene_node(&mut root_node_ids, &mut nodes, stroke);
+                insert_stroke_scene_node(&mut root_node_ids, &mut nodes, stroke, profile);
             }
         }
     }
 
     if let Some(preview) = stroke_preview {
-        insert_stroke_scene_node(&mut root_node_ids, &mut nodes, &preview.stroke);
+        insert_stroke_scene_node(&mut root_node_ids, &mut nodes, &preview.stroke, profile);
     }
 
     SceneSnapshotV1 {
@@ -692,20 +738,23 @@ fn insert_stroke_scene_node(
     root_node_ids: &mut Vec<SceneNodeId>,
     nodes: &mut BTreeMap<SceneNodeId, SceneNodeV1>,
     stroke: &StrokeElementV1,
+    profile: &RenderProfileV1,
 ) {
-    let scene_node_id = format!("{}:path", stroke.id);
-    root_node_ids.push(scene_node_id.clone());
-    nodes.insert(
-        scene_node_id.clone(),
-        SceneNodeV1::Path(ScenePathV1 {
+    let path = if matches!(profile, RenderProfileV1::Clean { .. }) {
+        let scene_node_id = format!("{}:path", stroke.id);
+        ScenePathV1 {
             id: scene_node_id,
             source_element_id: stroke.id.clone(),
             path_data: stroke_path_data(&stroke.points),
             fill: "none".to_string(),
             stroke: "#0f172a".to_string(),
             stroke_width: stroke.stroke_width,
-        }),
-    );
+        }
+    } else {
+        sketch_stroke(stroke, profile)
+    };
+    root_node_ids.push(path.id.clone());
+    nodes.insert(path.id.clone(), SceneNodeV1::Path(path));
 }
 
 fn stroke_path_data(points: &[Vec2]) -> String {
@@ -719,6 +768,13 @@ fn stroke_path_data(points: &[Vec2]) -> String {
         path.push_str(&format!("{} {}", point.x, point.y));
     }
     path
+}
+
+fn fnv1a64_hex(bytes: &[u8]) -> String {
+    let hash = bytes.iter().fold(0xcbf2_9ce4_8422_2325_u64, |hash, byte| {
+        (hash ^ u64::from(*byte)).wrapping_mul(0x0000_0100_0000_01b3)
+    });
+    format!("fnv1a64:{hash:016x}")
 }
 
 #[cfg(test)]
@@ -1407,6 +1463,70 @@ mod tests {
         assert_eq!(path.path_data, "M 6 8 L 8 10");
     }
 
+    #[test]
+    fn sketch_scene_is_stable_across_one_thousand_resolutions() {
+        let engine = Engine::open(document_with_rectangle_and_stroke()).unwrap();
+        let profile = sketch_profile(42, 1.2, SketchFillStyleV1::Hachure);
+        let first = engine.resolve_scene_profile(profile.clone()).unwrap();
+
+        for _ in 0..1_000 {
+            let repeated = engine.resolve_scene_profile(profile.clone()).unwrap();
+            assert_eq!(repeated.canonical_hash, first.canonical_hash);
+            assert_eq!(repeated.scene, first.scene);
+        }
+        assert_eq!(first.engine_algorithm_version, ENGINE_ALGORITHM_VERSION);
+        assert_eq!(first.scene.root_node_ids.len(), 3);
+        assert!(first.scene.nodes.contains_key("rect-1:sketch:outline:v1"));
+        assert!(first.scene.nodes.contains_key("rect-1:sketch:fill:v1"));
+        assert!(first.scene.nodes.contains_key("stroke-1:sketch:path:v1"));
+    }
+
+    #[test]
+    fn sketch_seed_profile_and_fill_changes_have_distinct_hashes() {
+        let engine = Engine::open(document_with_rectangle_and_stroke()).unwrap();
+        let base = engine
+            .resolve_scene_profile(sketch_profile(42, 1.2, SketchFillStyleV1::Hachure))
+            .unwrap();
+        let different_seed = engine
+            .resolve_scene_profile(sketch_profile(43, 1.2, SketchFillStyleV1::Hachure))
+            .unwrap();
+        let different_roughness = engine
+            .resolve_scene_profile(sketch_profile(42, 2.0, SketchFillStyleV1::Hachure))
+            .unwrap();
+        let solid = engine
+            .resolve_scene_profile(sketch_profile(42, 1.2, SketchFillStyleV1::Solid))
+            .unwrap();
+        let clean = engine
+            .resolve_scene_profile(RenderProfileV1::clean())
+            .unwrap();
+
+        let hashes = [
+            &base.canonical_hash,
+            &different_seed.canonical_hash,
+            &different_roughness.canonical_hash,
+            &solid.canonical_hash,
+            &clean.canonical_hash,
+        ];
+        for (index, hash) in hashes.iter().enumerate() {
+            assert!(!hashes[..index].contains(hash));
+        }
+        assert_eq!(solid.scene.root_node_ids.len(), 2);
+        assert_eq!(clean.scene.root_node_ids.len(), 2);
+    }
+
+    #[test]
+    fn invalid_render_profiles_are_rejected() {
+        let engine = Engine::open(document_with_rectangle_and_stroke()).unwrap();
+        assert_eq!(
+            engine.resolve_scene_profile(RenderProfileV1::Clean { version: 2 }),
+            Err(EngineErrorV1::InvalidRenderProfile)
+        );
+        assert_eq!(
+            engine.resolve_scene_profile(sketch_profile(42, f64::NAN, SketchFillStyleV1::Hachure,)),
+            Err(EngineErrorV1::InvalidRenderProfile)
+        );
+    }
+
     fn document_with_rectangle() -> NodeInkDocumentV1 {
         let mut document = NodeInkDocumentV1::blank("doc-1");
         let rectangle = rectangle("rect-1", 24.0);
@@ -1415,6 +1535,34 @@ mod tests {
             .elements
             .insert(rectangle.id.clone(), ElementRecordV1::Rect(rectangle));
         document
+    }
+
+    fn document_with_rectangle_and_stroke() -> NodeInkDocumentV1 {
+        let mut document = document_with_rectangle();
+        let stroke = StrokeElementV1 {
+            id: "stroke-1".to_string(),
+            points: vec![
+                Vec2 { x: 8.0, y: 12.0 },
+                Vec2 { x: 24.0, y: 28.0 },
+                Vec2 { x: 48.0, y: 16.0 },
+            ],
+            stroke_width: 3.0,
+        };
+        document.root_order.push(stroke.id.clone());
+        document
+            .elements
+            .insert(stroke.id.clone(), ElementRecordV1::Stroke(stroke));
+        document
+    }
+
+    fn sketch_profile(seed: u32, roughness: f64, fill_style: SketchFillStyleV1) -> RenderProfileV1 {
+        RenderProfileV1::Sketch {
+            version: 1,
+            seed,
+            roughness,
+            bowing: 0.8,
+            fill_style,
+        }
     }
 
     fn pointer_event(

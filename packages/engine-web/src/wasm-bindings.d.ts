@@ -12,6 +12,7 @@ declare module '*nodeink_engine.js' {
       strokeId: string | undefined,
       commandId: string,
     ): string;
+    resolveSceneProfile(profileJson: string): string;
     undo(): string;
     redo(): string;
     serializeDocument(): string;
