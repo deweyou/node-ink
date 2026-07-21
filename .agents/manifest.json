@@ -1,0 +1,30 @@
+{
+  "mode": "link",
+  "source": {
+    "root": "/Users/bytedance/.deweyou/agents/source",
+    "commit": "c5e5ff82315492f76c4c6a8a1683532884753131"
+  },
+  "cacheRoot": "/Users/bytedance/.deweyou/agents/assets",
+  "assets": {
+    "skills": [
+      "ddev"
+    ],
+    "rules": []
+  },
+  "assetSnapshot": {
+    "skills": {
+      "ddev": {
+        "description": "DDev personal cross-repository development harness workflow. Use when the user explicitly invokes DDev or ddev, or when project instructions opt into DDev as the default development workflow. Coordinates global ~/.deweyou/dev state and product, UI, coding, delivery, and memory skills under one lifecycle owner.\n",
+        "hash": "sha256:18395805a83d52299b7cecfab35dacab69326edc426361afb29f74ade661d8e1"
+      }
+    },
+    "rules": {}
+  },
+  "scope": "project",
+  "tools": [
+    "codex",
+    "claude"
+  ],
+  "ruleWiring": "reference",
+  "initializedAt": "2026-07-21T09:01:02.261Z"
+}

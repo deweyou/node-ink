@@ -1,0 +1,12 @@
+{
+  "name": "@nodeink-internal/engine-web",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@nodeink-internal/protocol": "workspace:*"
+  }
+}

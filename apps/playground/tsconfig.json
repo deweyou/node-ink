@@ -1,0 +1,17 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": ".",
+    "outDir": "dist-types",
+    "jsx": "react-jsx",
+    "types": ["vite/client"]
+  },
+  "include": ["src", "vite.config.ts"],
+  "references": [
+    { "path": "../../packages/protocol" },
+    { "path": "../../packages/engine-web" },
+    { "path": "../../packages/renderer-svg" },
+    { "path": "../../packages/editor-web" },
+    { "path": "../../packages/editor-react" }
+  ]
+}

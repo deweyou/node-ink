@@ -1,0 +1,187 @@
+:root {
+  --ui-color-canvas: #fafafa;
+  --ui-color-surface: #ffffff;
+  --ui-color-text: hsl(28 3.68% 18%);
+  --ui-color-text-muted: hsl(28 7.04% 45%);
+  --ui-color-text-disabled: hsl(28 5.92% 73%);
+  --ui-color-border: hsl(28 3.36% 89%);
+  --ui-color-border-strong: hsl(28 4.64% 82%);
+  --ui-color-brand-text: hsl(154 37.2% 27%);
+  --ui-color-brand-soft: hsl(154 58% 96%);
+  --ui-color-focus-ring: hsl(154 58.28% 55%);
+  --ui-color-danger-text: hsl(8 72.16% 45%);
+  --ui-color-danger-soft: hsl(8 76% 97%);
+  --ui-radius-auto: 0.5rem;
+  --ui-radius-pill: 999px;
+  --ui-motion-duration-fast: 140ms;
+  --ui-font-sans:
+    'Source Han Sans SC Web', 'PingFang SC', 'Heiti SC', 'Microsoft YaHei', 'Noto Sans CJK SC',
+    sans-serif;
+  color: var(--ui-color-text);
+  background: var(--ui-color-canvas);
+  font-family: var(--ui-font-sans);
+  font-synthesis: none;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-width: 720px;
+  min-height: 100vh;
+  background: var(--ui-color-canvas);
+}
+
+button {
+  min-height: 36px;
+  padding: 0 14px;
+  border: 1px solid var(--ui-color-border-strong);
+  border-radius: var(--ui-radius-auto);
+  color: var(--ui-color-text);
+  background: var(--ui-color-surface);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition:
+    border-color var(--ui-motion-duration-fast) ease,
+    background-color var(--ui-motion-duration-fast) ease,
+    color var(--ui-motion-duration-fast) ease;
+}
+
+button:hover:not(:disabled) {
+  border-color: var(--ui-color-brand-text);
+  color: var(--ui-color-brand-text);
+  background: var(--ui-color-brand-soft);
+}
+
+button:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--ui-color-focus-ring) 25%, transparent);
+}
+
+button:disabled {
+  color: var(--ui-color-text-disabled);
+  cursor: not-allowed;
+  background: var(--ui-color-canvas);
+}
+
+.nodeink-shell {
+  display: grid;
+  grid-template-areas:
+    'topbar topbar'
+    'toolbar stage';
+  grid-template-columns: 124px minmax(0, 1fr);
+  grid-template-rows: 72px minmax(0, 1fr);
+  min-height: 100vh;
+}
+
+.nodeink-topbar {
+  grid-area: topbar;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 20px;
+  border-bottom: 1px solid var(--ui-color-border);
+  background: var(--ui-color-surface);
+}
+
+.nodeink-topbar h1 {
+  margin: 3px 0 0;
+  font-size: 17px;
+  line-height: 1.2;
+}
+
+.nodeink-kicker {
+  color: var(--ui-color-text-muted);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.nodeink-host-badge {
+  padding: 6px 10px;
+  border: 1px solid color-mix(in srgb, var(--ui-color-brand-text) 35%, transparent);
+  border-radius: var(--ui-radius-pill);
+  color: var(--ui-color-brand-text);
+  background: var(--ui-color-brand-soft);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.nodeink-toolbar {
+  grid-area: toolbar;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 16px 12px;
+  border-right: 1px solid var(--ui-color-border);
+  background: var(--ui-color-canvas);
+}
+
+.nodeink-stage {
+  position: relative;
+  grid-area: stage;
+  min-height: 620px;
+  overflow: hidden;
+  background-color: var(--ui-color-canvas);
+  background-image: radial-gradient(var(--ui-color-border-strong) 0.8px, transparent 0.8px);
+  background-size: 20px 20px;
+}
+
+.nodeink-canvas,
+.nodeink-canvas svg {
+  width: 100%;
+  height: 100%;
+  min-height: 620px;
+}
+
+.nodeink-canvas rect {
+  filter: drop-shadow(0 8px 14px color-mix(in srgb, var(--ui-color-text) 8%, transparent));
+}
+
+.nodeink-status {
+  position: absolute;
+  right: 16px;
+  bottom: 16px;
+  display: flex;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--ui-color-border);
+  border-radius: var(--ui-radius-auto);
+  color: var(--ui-color-text-muted);
+  background: color-mix(in srgb, var(--ui-color-surface) 94%, transparent);
+  font-size: 12px;
+}
+
+.nodeink-status span + span::before {
+  content: '·';
+  margin-right: 8px;
+  color: var(--ui-color-text-disabled);
+}
+
+.nodeink-error {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  max-width: 360px;
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--ui-color-danger-text) 28%, transparent);
+  border-radius: var(--ui-radius-auto);
+  color: var(--ui-color-danger-text);
+  background: var(--ui-color-danger-soft);
+  font-size: 13px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+  }
+}

@@ -1,0 +1,11 @@
+packages:
+  - apps/*
+  - packages/*
+
+overrides:
+  vite: npm:@voidzero-dev/vite-plus-core@0.2.5
+  vitest: 4.1.10
+
+peerDependencyRules:
+  allowAny:
+    - vite

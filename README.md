@@ -1,4 +1,39 @@
 # NodeInk
+
 Ink freely. Connect ideas.
 
 自由落笔，连接想法。
+
+NodeInk 当前处于 Phase 0 技术验证阶段。第一条纵向切片已经贯通 Rust
+Document/Command/Undo/Scene、真实 WASM bridge、框架无关的 Web Controller 与
+SVG Renderer，并由 Vanilla TypeScript 和 React 两个宿主复用。
+
+## 本地运行
+
+环境版本以 `.node-version`、`rust-toolchain.toml` 和 lockfile 为准；npm 依赖固定从
+官方源安装。
+
+```bash
+pnpm install --frozen-lockfile
+pnpm exec vp run wasm:build
+pnpm dev
+```
+
+- React adapter：<http://localhost:5173/>
+- Vanilla TypeScript：<http://localhost:5173/vanilla.html>
+
+完整验证：
+
+```bash
+pnpm check
+pnpm test
+pnpm exec vp run rust:check
+pnpm build
+```
+
+- [产品与技术设计索引](docs/README.md)
+- [产品规格](docs/product/product-spec.md)
+- [技术架构](docs/architecture/technical-architecture.md)
+- [Phase 0 与实施计划](docs/planning/phase-plan.md)
+- [Phase 0 纵向切片结果](docs/planning/phase0-vertical-slice.md)
+- [待确认决策](docs/decisions/open-questions.md)

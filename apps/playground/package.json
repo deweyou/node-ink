@@ -1,0 +1,19 @@
+{
+  "name": "@nodeink-internal/playground",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@nodeink-internal/editor-react": "workspace:*",
+    "@nodeink-internal/editor-web": "workspace:*",
+    "@nodeink-internal/engine-web": "workspace:*",
+    "@nodeink-internal/protocol": "workspace:*",
+    "@nodeink-internal/renderer-svg": "workspace:*",
+    "react": "19.2.7",
+    "react-dom": "19.2.7"
+  },
+  "devDependencies": {
+    "@types/react": "19.2.17",
+    "@types/react-dom": "19.2.3"
+  }
+}

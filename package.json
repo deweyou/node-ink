@@ -1,0 +1,25 @@
+{
+  "name": "node-ink",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vp dev apps/playground",
+    "check": "vp check",
+    "test": "vp test",
+    "build": "vp run wasm:build && vp build apps/playground"
+  },
+  "devDependencies": {
+    "@types/node": "24.10.10",
+    "@vitejs/plugin-react": "6.0.3",
+    "jsdom": "29.1.1",
+    "typescript": "7.0.2",
+    "vite": "npm:@voidzero-dev/vite-plus-core@0.2.5",
+    "vite-plus": "0.2.5",
+    "vitest": "4.1.10"
+  },
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "packageManager": "pnpm@11.1.3"
+}

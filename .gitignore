@@ -1,0 +1,13 @@
+# Local harness session state
+.harness_local/
+
+# JavaScript and Vite+
+node_modules/
+dist/
+coverage/
+*.tsbuildinfo
+.vite/
+
+# Rust and generated WASM bindings
+target/
+packages/engine-web/generated/

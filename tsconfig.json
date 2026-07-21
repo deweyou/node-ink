@@ -1,0 +1,11 @@
+{
+  "files": [],
+  "references": [
+    { "path": "./packages/protocol" },
+    { "path": "./packages/engine-web" },
+    { "path": "./packages/renderer-svg" },
+    { "path": "./packages/editor-web" },
+    { "path": "./packages/editor-react" },
+    { "path": "./apps/playground" }
+  ]
+}
