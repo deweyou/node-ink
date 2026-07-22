@@ -1,0 +1,66 @@
+{
+  "commit": "c49e090",
+  "build": "release-wasm-dev-host",
+  "buildDetails": {
+    "rustProfile": "release",
+    "wasmOpt": "temporarily_disabled_for_s10_functional_fixture",
+    "note": "S12 owns the repeatable optimized build fix; S10 timings are informational only"
+  },
+  "engineAlgorithmVersion": "phase0-s10",
+  "browser": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36",
+  "os": "MacIntel",
+  "hardware": {
+    "logicalProcessors": 18,
+    "deviceMemoryGb": 32,
+    "display": "2056x1329@2x"
+  },
+  "operationCount": 5,
+  "dryRun": {
+    "durationMs": 0.1,
+    "revisionBefore": 0,
+    "revisionAfter": 0,
+    "resultRevision": null,
+    "plannedOperationCount": 5,
+    "previewAddedNodeCount": 1
+  },
+  "apply": {
+    "durationMs": 0,
+    "revision": 1,
+    "appliedOperationCount": 5,
+    "survivingElementIds": ["rect-a"],
+    "rendererAcceptedPatch": true,
+    "renderedSceneNodeCount": 1
+  },
+  "replay": {
+    "identicalResult": true,
+    "identicalDocument": true
+  },
+  "atomicFailure": {
+    "rejected": true,
+    "revisionAfter": 0,
+    "elementCountAfter": 0
+  },
+  "revisionConflict": {
+    "rejected": true,
+    "revisionAfter": 1
+  },
+  "undo": {
+    "revision": 2,
+    "elementCount": 0
+  },
+  "coverage": {
+    "webLinesPercent": 99,
+    "webBranchesPercent": 92.08,
+    "rustLinesPercent": 98.86,
+    "operationRustLinesPercent": 99.54,
+    "operationRustFunctionsPercent": 100
+  },
+  "decision": {
+    "dryRunNeverMutates": true,
+    "batchIsAtomicAndUndoable": true,
+    "replayIsDeterministic": true,
+    "staleRevisionIsRejected": true,
+    "rendererOnlyConsumesScenePatch": true
+  },
+  "browserWarningsOrErrors": []
+}

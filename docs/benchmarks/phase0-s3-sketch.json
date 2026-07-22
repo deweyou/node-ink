@@ -1,0 +1,40 @@
+{
+  "commit": "1038224",
+  "build": "release-wasm-dev-host",
+  "engineAlgorithmVersion": "nodeink-scene-v1",
+  "browser": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36",
+  "os": "MacIntel",
+  "hardware": {
+    "logicalProcessors": 18,
+    "deviceMemoryGb": 32,
+    "display": "2056x1329@2x"
+  },
+  "sample": {
+    "repeatedResolutions": 1000,
+    "fixtureElements": 2,
+    "fixtureKinds": ["rect", "stroke"],
+    "fillStyle": "hachure"
+  },
+  "hashes": {
+    "clean": "fnv1a64:161767abbb52ac49",
+    "sketchSeed42": "fnv1a64:ddce7e37dbe5a687",
+    "sketchSeed43": "fnv1a64:9c7c25290e150686",
+    "sketchRoughness2": "fnv1a64:b52452b806f9f8f5"
+  },
+  "nativeExpectedHashes": {
+    "clean": "fnv1a64:161767abbb52ac49",
+    "sketchRoughness2": "fnv1a64:b52452b806f9f8f5",
+    "sketchSeed42": "fnv1a64:ddce7e37dbe5a687",
+    "sketchSeed43": "fnv1a64:9c7c25290e150686"
+  },
+  "metrics": {
+    "wasmRepeatedElapsedMs": 11,
+    "uniqueRepeatedHashCount": 1
+  },
+  "decision": {
+    "isStableAcrossOneThousandRuns": true,
+    "matchesNativeHashes": true,
+    "seedAndProfileProduceDistinctHashes": true,
+    "rendererOwnsRandomness": false
+  }
+}

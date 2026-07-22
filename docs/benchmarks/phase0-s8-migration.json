@@ -1,0 +1,52 @@
+{
+  "commit": "7176979",
+  "build": "release-wasm-dev-host",
+  "engineAlgorithmVersion": "phase0-s8",
+  "browser": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36",
+  "os": "MacIntel",
+  "hardware": {
+    "logicalProcessors": 18,
+    "deviceMemoryGb": 32,
+    "display": "2056x1329@2x"
+  },
+  "fixtures": [
+    { "name": "valid_v1", "migrated": false, "reportCode": null, "elapsedMs": 0.9 },
+    { "name": "legacy_v0", "migrated": true, "reportCode": null, "elapsedMs": 0.6 },
+    {
+      "name": "unknown_schema",
+      "migrated": null,
+      "reportCode": "unknown_schema",
+      "elapsedMs": 0.1
+    },
+    {
+      "name": "corrupt_field",
+      "migrated": null,
+      "reportCode": "document_invalid",
+      "elapsedMs": 0.2
+    },
+    {
+      "name": "migration_failure",
+      "migrated": null,
+      "reportCode": "migration_failed",
+      "elapsedMs": 0
+    }
+  ],
+  "copyOnWrite": {
+    "sourceBytesUnchanged": true,
+    "requiresPersistedCopy": true,
+    "migratedSchemaVersion": 1
+  },
+  "fallback": {
+    "hashMismatchRecoveredFrom": "stable",
+    "schemaFailureRecoveredFrom": "stable",
+    "exhaustedRecovery": "readonly_diagnostic",
+    "exhaustedReportCodes": ["unknown_schema", "migration_failed"]
+  },
+  "decision": {
+    "sourcePayloadNeverOverwritten": true,
+    "everyFailureHasStructuredReport": true,
+    "everyFixtureHasDeterministicRecovery": true,
+    "migrationOwner": "rust-core",
+    "persistenceOwner": "web-copy-on-write-orchestration"
+  }
+}

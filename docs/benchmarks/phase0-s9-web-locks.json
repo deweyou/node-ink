@@ -1,0 +1,43 @@
+{
+  "commit": "fb5c4e0",
+  "build": "release-wasm-dev-host",
+  "engineAlgorithmVersion": "phase0-s9",
+  "browser": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36",
+  "os": "MacIntel",
+  "hardware": {
+    "logicalProcessors": 18,
+    "deviceMemoryGb": 32,
+    "display": "2056x1329@2x"
+  },
+  "capability": {
+    "webLocks": true,
+    "unsupportedFallback": "readonly"
+  },
+  "cases": {
+    "initialWriter": { "kind": "writer", "acquisitionMs": 0.4 },
+    "simultaneousContender": {
+      "kind": "readonly",
+      "reason": "held_elsewhere",
+      "acquisitionMs": 5.3
+    },
+    "explicitRelease": { "releaseMs": 0.1, "takeoverMs": 0.3, "takeoverKind": "writer" },
+    "writerTabClosed": {
+      "initialContenderKind": "readonly",
+      "initialContenderMs": 0.3,
+      "takeoverMs": 0.2,
+      "takeoverKind": "writer"
+    },
+    "revisionGuard": {
+      "successfulWriters": 1,
+      "revisionConflicts": 1,
+      "recoveredRevision": 1,
+      "silentLastWriteWins": false
+    }
+  },
+  "decision": {
+    "oneWriterAtATime": true,
+    "releaseAndCloseAllowTakeover": true,
+    "unsupportedCoordinationIsReadonly": true,
+    "revisionGuardPreventsOverwrite": true
+  }
+}

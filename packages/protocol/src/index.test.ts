@@ -1,0 +1,327 @@
+import { describe, expect, it } from 'vitest';
+
+import {
+  createBlankDocument,
+  parseDiagramOperationBatchResult,
+  parseEngineUpdate,
+  parseMigrationAttempt,
+  parsePointerUpdate,
+  parseScenePatch,
+  parseSceneResolution,
+  parseSceneSnapshot,
+  parseStrokeUpdate,
+  parseTextFixtureResolution,
+} from './index';
+
+describe('protocol V1', () => {
+  it('creates a blank document with explicit versions', () => {
+    expect(createBlankDocument('doc-1')).toEqual({
+      schemaVersion: 1,
+      documentId: 'doc-1',
+      revision: 0,
+      rootOrder: [],
+      elements: {},
+    });
+  });
+
+  it('rejects an update with an unsupported protocol version', () => {
+    expect(() =>
+      parseEngineUpdate(
+        JSON.stringify({
+          operation: null,
+          scene: {
+            protocolVersion: 2,
+            documentRevision: 0,
+            sceneRevision: 0,
+            rootNodeIds: [],
+            nodes: {},
+          },
+          history: { canUndo: false, canRedo: false },
+        }),
+      ),
+    ).toThrow('protocol V1');
+  });
+
+  it('parses a valid engine update', () => {
+    const update = {
+      operation: null,
+      scene: {
+        protocolVersion: 1,
+        documentId: 'doc-1',
+        documentRevision: 3,
+        sceneRevision: 4,
+        rootNodeIds: [],
+        nodes: {},
+      },
+      history: { canUndo: true, canRedo: false },
+    };
+
+    expect(parseEngineUpdate(JSON.stringify(update))).toEqual(update);
+  });
+
+  it('parses a standalone scene snapshot', () => {
+    const scene = updateFixture().scene;
+
+    expect(parseSceneSnapshot(JSON.stringify(scene))).toEqual(scene);
+  });
+
+  it('parses a versioned incremental scene patch', () => {
+    const patch = patchFixture();
+
+    expect(parseScenePatch(JSON.stringify(patch))).toEqual(patch);
+  });
+
+  it('parses applied and planned diagram operation results with renderer-only patches', () => {
+    const applied = diagramOperationResultFixture();
+    const planned = diagramOperationResultFixture({ mode: 'dry_run', revision: null });
+    planned.results[0]!.status = 'planned';
+
+    expect(parseDiagramOperationBatchResult(JSON.stringify(applied))).toEqual(applied);
+    expect(parseDiagramOperationBatchResult(JSON.stringify(planned))).toEqual(planned);
+  });
+
+  it.each([
+    null,
+    {},
+    diagramOperationResultFixture({ batchId: 1 }),
+    diagramOperationResultFixture({ mode: 'preview' }),
+    diagramOperationResultFixture({ previousRevision: '0' }),
+    diagramOperationResultFixture({ revision: '1' }),
+    diagramOperationResultFixture({ results: {} }),
+    diagramOperationResultFixture({ results: [null] }),
+    diagramOperationResultFixture({ results: [{ opId: 1 }] }),
+    diagramOperationResultFixture({ results: [{ opId: 'op-1', status: 'failed' }] }),
+    diagramOperationResultFixture({
+      results: [{ opId: 'op-1', status: 'applied', affectedElementIds: [1] }],
+    }),
+    diagramOperationResultFixture({ scenePatch: null }),
+    diagramOperationResultFixture({ scenePatch: patchFixture({ protocolVersion: 2 }) }),
+  ])('rejects invalid diagram operation result payloads', (value) => {
+    expect(() => parseDiagramOperationBatchResult(JSON.stringify(value))).toThrow('protocol V1');
+  });
+
+  it.each([
+    null,
+    {},
+    { protocolVersion: 2 },
+    patchFixture({ documentRevision: '2' }),
+    patchFixture({ baseSceneRevision: '1' }),
+    patchFixture({ sceneRevision: '2' }),
+    patchFixture({ addedNodes: [] }),
+    patchFixture({ updatedNodes: [] }),
+    patchFixture({ removedNodeIds: {} }),
+    patchFixture({ rootNodeIds: {} }),
+  ])('rejects invalid scene patch payloads', (value) => {
+    expect(() => parseScenePatch(JSON.stringify(value))).toThrow('protocol V1');
+  });
+
+  it.each([null, {}, { scene: null, history: {} }, { scene: {}, history: null }])(
+    'rejects structurally invalid update payloads',
+    (value) => {
+      expect(() => parseEngineUpdate(JSON.stringify(value))).toThrow('invalid update payload');
+    },
+  );
+
+  it.each([
+    ['document revision', { documentRevision: '0' }],
+    ['scene revision', { sceneRevision: '0' }],
+    ['root node ids', { rootNodeIds: {} }],
+    ['scene nodes', { nodes: [] }],
+  ])('rejects an invalid %s', (_label, sceneOverride) => {
+    expect(() => parseEngineUpdate(JSON.stringify(updateFixture(sceneOverride)))).toThrow(
+      'protocol V1',
+    );
+  });
+
+  it.each([
+    ['undo state', { canUndo: 'false' }],
+    ['redo state', { canRedo: 'false' }],
+  ])('rejects an invalid %s', (_label, historyOverride) => {
+    expect(() =>
+      parseEngineUpdate(
+        JSON.stringify(updateFixture(undefined, historyOverride as Record<string, unknown>)),
+      ),
+    ).toThrow('protocol V1');
+  });
+
+  it('parses pointer processing metadata around a valid engine update', () => {
+    const value = {
+      update: updateFixture(),
+      processedEventCount: 8,
+      ignoredEventCount: 1,
+      didCommit: false,
+    };
+
+    expect(parsePointerUpdate(JSON.stringify(value))).toEqual(value);
+  });
+
+  it.each([
+    null,
+    {},
+    { update: null, processedEventCount: 1, ignoredEventCount: 0, didCommit: false },
+    { update: {}, processedEventCount: '1', ignoredEventCount: 0, didCommit: false },
+    { update: {}, processedEventCount: 1, ignoredEventCount: '0', didCommit: false },
+    { update: {}, processedEventCount: 1, ignoredEventCount: 0, didCommit: 'false' },
+  ])('rejects invalid pointer update metadata', (value) => {
+    expect(() => parsePointerUpdate(JSON.stringify(value))).toThrow('invalid pointer update');
+  });
+
+  it('parses stroke processing metadata around a valid engine update', () => {
+    const value = {
+      update: updateFixture(),
+      processedPointCount: 32,
+      ignoredPointCount: 2,
+      didCommit: true,
+    };
+
+    expect(parseStrokeUpdate(JSON.stringify(value))).toEqual(value);
+  });
+
+  it.each([
+    null,
+    {},
+    { update: null, processedPointCount: 1, ignoredPointCount: 0, didCommit: false },
+    { update: {}, processedPointCount: '1', ignoredPointCount: 0, didCommit: false },
+    { update: {}, processedPointCount: 1, ignoredPointCount: '0', didCommit: false },
+    { update: {}, processedPointCount: 1, ignoredPointCount: 0, didCommit: 'false' },
+  ])('rejects invalid stroke update metadata', (value) => {
+    expect(() => parseStrokeUpdate(JSON.stringify(value))).toThrow('invalid stroke update');
+  });
+
+  it('parses an explicit deterministic scene resolution', () => {
+    const resolution = {
+      engineAlgorithmVersion: 'nodeink-scene-v1',
+      canonicalHash: 'fnv1a64:1234',
+      renderProfile: { kind: 'clean', version: 1 },
+      scene: updateFixture().scene,
+    };
+
+    expect(parseSceneResolution(JSON.stringify(resolution))).toEqual(resolution);
+  });
+
+  it.each([
+    null,
+    {},
+    { engineAlgorithmVersion: 1, canonicalHash: 'hash', renderProfile: {}, scene: {} },
+    { engineAlgorithmVersion: 'v1', canonicalHash: 1, renderProfile: {}, scene: {} },
+    { engineAlgorithmVersion: 'v1', canonicalHash: 'hash', renderProfile: null, scene: {} },
+  ])('rejects invalid scene resolution metadata', (value) => {
+    expect(() => parseSceneResolution(JSON.stringify(value))).toThrow('invalid scene resolution');
+  });
+
+  it('parses pending and resolved text fixtures', () => {
+    const pending = {
+      request: { requestId: 'measure-1', fontFingerprint: 'font-v1', runs: [] },
+      scene: null,
+      canonicalHash: null,
+    };
+    const resolved = {
+      request: null,
+      scene: { fontFingerprint: 'font-v1', runs: [] },
+      canonicalHash: 'fnv1a64:text',
+    };
+
+    expect(parseTextFixtureResolution(JSON.stringify(pending))).toEqual(pending);
+    expect(parseTextFixtureResolution(JSON.stringify(resolved))).toEqual(resolved);
+  });
+
+  it('parses successful and failed migration attempts', () => {
+    const success = {
+      result: {
+        sourceSchemaVersion: 0,
+        targetSchemaVersion: 1,
+        migrated: true,
+        document: createBlankDocument('doc-1'),
+        canonicalPayload: '{}',
+      },
+      report: null,
+    };
+    const failure = {
+      result: null,
+      report: {
+        stage: 'schema',
+        code: 'unknown_schema',
+        sourceSchemaVersion: 99,
+        targetSchemaVersion: 1,
+        message: 'unsupported',
+        recovery: 'try_next_snapshot_then_readonly_diagnostic',
+      },
+    };
+
+    expect(parseMigrationAttempt(JSON.stringify(success))).toEqual(success);
+    expect(parseMigrationAttempt(JSON.stringify(failure))).toEqual(failure);
+  });
+
+  it.each([
+    null,
+    {},
+    { result: {}, report: null },
+    { result: null, report: {} },
+    { result: null, report: { stage: 1 } },
+  ])('rejects invalid migration attempts', (value) => {
+    expect(() => parseMigrationAttempt(JSON.stringify(value))).toThrow('migration');
+  });
+
+  it.each([
+    null,
+    {},
+    { request: [], scene: null, canonicalHash: null },
+    { request: null, scene: [], canonicalHash: null },
+    { request: null, scene: null, canonicalHash: 1 },
+  ])('rejects invalid text fixture resolutions', (value) => {
+    expect(() => parseTextFixtureResolution(JSON.stringify(value))).toThrow(
+      'invalid text fixture resolution',
+    );
+  });
+});
+
+function updateFixture(
+  sceneOverride: Record<string, unknown> = {},
+  historyOverride: Record<string, unknown> = {},
+) {
+  return {
+    operation: null,
+    scene: {
+      protocolVersion: 1,
+      documentId: 'doc-1',
+      documentRevision: 0,
+      sceneRevision: 0,
+      rootNodeIds: [],
+      nodes: {},
+      ...sceneOverride,
+    },
+    history: { canUndo: false, canRedo: false, ...historyOverride },
+  };
+}
+
+function patchFixture(override: Record<string, unknown> = {}) {
+  return {
+    protocolVersion: 1,
+    documentRevision: 2,
+    baseSceneRevision: 1,
+    sceneRevision: 2,
+    addedNodes: {},
+    updatedNodes: {},
+    removedNodeIds: [],
+    rootNodeIds: null,
+    ...override,
+  };
+}
+
+function diagramOperationResultFixture(override: Record<string, unknown> = {}) {
+  return {
+    batchId: 'batch-1',
+    mode: 'apply' as const,
+    previousRevision: 0,
+    revision: 1 as number | null,
+    results: [
+      {
+        opId: 'create-1',
+        status: 'applied' as 'applied' | 'planned',
+        affectedElementIds: ['rect-1'],
+      },
+    ],
+    scenePatch: patchFixture(),
+    ...override,
+  };
+}

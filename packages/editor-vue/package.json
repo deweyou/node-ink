@@ -1,0 +1,16 @@
+{
+  "name": "@nodeink-internal/editor-vue",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@nodeink-internal/editor-web": "workspace:*",
+    "vue": "3.5.40"
+  },
+  "peerDependencies": {
+    "vue": "^3.5.0"
+  }
+}
