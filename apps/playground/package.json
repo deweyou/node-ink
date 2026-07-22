@@ -5,13 +5,15 @@
   "type": "module",
   "dependencies": {
     "@nodeink-internal/editor-react": "workspace:*",
+    "@nodeink-internal/editor-vue": "workspace:*",
     "@nodeink-internal/editor-web": "workspace:*",
     "@nodeink-internal/engine-web": "workspace:*",
     "@nodeink-internal/persistence-web": "workspace:*",
     "@nodeink-internal/protocol": "workspace:*",
     "@nodeink-internal/renderer-svg": "workspace:*",
     "react": "19.2.7",
-    "react-dom": "19.2.7"
+    "react-dom": "19.2.7",
+    "vue": "3.5.40"
   },
   "devDependencies": {
     "@types/react": "19.2.17",

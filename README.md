@@ -6,7 +6,7 @@ Ink freely. Connect ideas.
 
 NodeInk 当前处于 Phase 0 技术验证阶段。第一条纵向切片已经贯通 Rust
 Document/Command/Undo/Scene、真实 WASM bridge、框架无关的 Web Controller 与
-SVG Renderer，并由 Vanilla TypeScript 和 React 两个宿主复用。
+SVG Renderer，并由 Vanilla TypeScript、React 和 Vue 三个独立宿主复用。
 
 ## 本地运行
 
@@ -25,6 +25,7 @@ WASM 构建由 Cargo/wasm-pack 生成 release 绑定，再由 lockfile 固定的
 
 - React adapter：<http://localhost:5173/>
 - Vanilla TypeScript：<http://localhost:5173/vanilla.html>
+- Vue adapter：<http://localhost:5173/vue.html>
 
 完整验证：
 

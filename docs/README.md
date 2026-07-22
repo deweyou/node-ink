@@ -2,7 +2,7 @@
 
 > 状态：Proposal v0.1 + Phase 0 implementation
 > 日期：2026-07-21
-> 阶段：Phase 0 技术验证；首条纵向切片已实现并通过双宿主验证
+> 阶段：Phase 0 技术验证；首条纵向切片已实现，React/Vue/Vanilla 三个独立宿主复用同一核心
 
 本目录是 NodeInk 第一阶段的设计基线。它将原始需求中的 22 项交付物按产品、架构、计划和决策四个关注点拆开，但保持同一套术语、边界和依赖方向。
 
@@ -16,7 +16,7 @@
 - 持久化从“当前快照 + 上一个稳定快照”开始，不预先实现完整操作日志。
 - 初期 Rust crate 保持 `nodeink-core` 与 `nodeink-wasm` 两个粗粒度边界。
 - Mermaid 语法导入是长期兼容目标；Mermaid 作为输入适配器，导入后转换为 NodeInk 原生语义对象。
-- `renderer-svg` 与 `editor-web` 不依赖 React/Vue；React 只用于官方编辑器 UI 与可选适配层。
+- `renderer-svg` 与 `editor-web` 不依赖 React/Vue；React 与 Vue 只存在于可替换的 UI 适配层。
 - UI 体验参考 tldraw 的低干扰直接编辑，以及 Excalidraw 的轻松手绘表达，但不复制其品牌视觉或超出本期的产品复杂度。
 - 项目采用 Vite+ 作为 Web 工具链和 monorepo 任务统一入口；Cargo 仍是 Rust crate 的构建与测试真相源。
 
@@ -82,3 +82,6 @@
 - [`wasm-bindgen` boxed slices](https://wasm-bindgen.github.io/wasm-bindgen/reference/types/boxed-slices.html)：数值切片与 TypedArray 的边界能力。
 - [Vite+ Monorepo](https://viteplus.dev/guide/monorepo)：根配置、package 局部配置与 workspace task 的组织方式。
 - [Vite+ Run](https://viteplus.dev/guide/run)：自定义任务、依赖顺序和缓存边界。
+
+---
+*Last updated: 2026-07-22 | Reason: record React, Vue, and Vanilla host parity*

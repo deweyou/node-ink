@@ -25,6 +25,7 @@ export default defineConfig({
         'packages/editor-web/src/**/*.{ts,tsx}',
         'packages/renderer-svg/src/**/*.{ts,tsx}',
         'packages/editor-react/src/**/*.{ts,tsx}',
+        'packages/editor-vue/src/**/*.{ts,tsx}',
         'packages/persistence-web/src/**/*.{ts,tsx}',
       ],
       exclude: ['**/*.test.{ts,tsx}', '**/*.d.ts'],

@@ -10,8 +10,10 @@ flowchart TD
     Controller --> Renderer["renderer-svg\nDOM reconciliation"]
     Protocol --> Persistence["persistence-web\nIndexedDB + recovery"]
     Controller --> React["editor-react\nReact adapter"]
+    Controller --> Vue["editor-vue\nVue adapter"]
     Renderer --> Vanilla["Vanilla host"]
     Renderer --> React
+    Renderer --> Vue
 ```
 
 NodeInk is a pnpm/Cargo monorepo. Rust owns persistent editor semantics; TypeScript adapts that engine to browser events and DOM rendering; framework hosts remain replaceable leaves.
@@ -19,7 +21,7 @@ NodeInk is a pnpm/Cargo monorepo. Rust owns persistent editor semantics; TypeScr
 ## Directory Layout
 
 ```text
-apps/playground/            React and Vanilla integration host
+apps/playground/            React, Vue, and Vanilla integration hosts
 crates/nodeink-core/        Document, commands, revisions, history, Scene resolution
 crates/nodeink-wasm/        wasm-bindgen API over nodeink-core
 packages/protocol/          TypeScript wire types and runtime parsing
@@ -28,6 +30,7 @@ packages/editor-web/        Framework-neutral Controller and editor actions
 packages/renderer-svg/      Framework-neutral SVG DOM renderer
 packages/persistence-web/   Framework-neutral IndexedDB persistence and recovery
 packages/editor-react/      Optional React adapter
+packages/editor-vue/        Optional Vue adapter
 scripts/                    Cargo/WASM orchestration and target-dir policy
 docs/                       Product, architecture, decisions, plans, and repo memory
 ```
@@ -38,7 +41,7 @@ docs/                       Product, architecture, decisions, plans, and repo me
 2. The playground creates the real EnginePort in [apps/playground/src/create-controller.ts#L1](../apps/playground/src/create-controller.ts#L1).
 3. [packages/editor-web/src/index.ts#L1](../packages/editor-web/src/index.ts#L1) owns host-neutral actions, subscriptions, and lifecycle.
 4. [packages/renderer-svg/src/index.ts#L1](../packages/renderer-svg/src/index.ts#L1) reconciles resolved Scene nodes into SVG.
-5. `/` mounts the React adapter; `/vanilla.html` mounts the same contracts without React.
+5. `/`, `/vue.html`, and `/vanilla.html` independently mount React, Vue, and framework-free hosts over the same contracts.
 
 ## Ownership Rules
 
@@ -48,7 +51,7 @@ docs/                       Product, architecture, decisions, plans, and repo me
 - `editor-web` may depend on browser APIs, but not component frameworks.
 - `renderer-svg` paints resolved nodes; it does not infer Document semantics.
 - `persistence-web` owns IndexedDB transactions, SHA-256 read-back verification and stable snapshot recovery; it does not mutate Document semantics.
-- `editor-react` can be replaced without changing engine, controller, or renderer packages.
+- `editor-react` and `editor-vue` can be replaced independently without changing engine, controller, or renderer packages.
 
 ## Build Boundaries
 
@@ -59,4 +62,4 @@ docs/                       Product, architecture, decisions, plans, and repo me
 - WASM release build uses wasm-pack for Cargo/wasm-bindgen and lockfile-pinned Binaryen 117 for `-Oz`; optimization writes a fresh sibling file before replacing the generated WASM, avoiding the observed wasm-pack/provenance replacement failure.
 
 ---
-*Last updated: 2026-07-22 | Reason: record the repeatable S12 WASM optimization boundary*
+*Last updated: 2026-07-22 | Reason: record the independent Vue adapter and playground host*

@@ -8,6 +8,8 @@ flowchart LR
     Renderer --> Vanilla["Vanilla host"]
     Controller --> React["React adapter"]
     Renderer --> React
+    Controller --> Vue["Vue adapter"]
+    Renderer --> Vue
 ```
 
 > 日期：2026-07-21
@@ -24,13 +26,13 @@ Rust nodeink-core
   → engine-web
   → editor-web
   → renderer-svg
-  → Vanilla host / React adapter
+  → Vanilla host / React adapter / Vue adapter
 ```
 
 - Document、Command、Undo/Redo、revision guard 和确定性 Scene Resolution 由 Rust 持有。
 - 浏览器通过真实 `wasm-bindgen` 产物调用引擎；UI 不维护第二份文档真相源。
 - `editor-web` 与 `renderer-svg` 只依赖 TypeScript 和标准 DOM，不导入 React/Vue。
-- React adapter 和 Vanilla TypeScript host 使用同一 Controller、Action、EnginePort 与 Renderer。
+- React、Vue adapter 和 Vanilla TypeScript host 使用同一 Controller、Action、EnginePort 与 Renderer。
 - Web 日常入口统一为 Vite+；Rust 检查和 WASM 构建由 `vp run` 编排，底层仍直接执行 Cargo/wasm-pack。
 - DOM 只规范化 Pointer Event；Rust 状态机持有 drag session、preview、顺序过滤与一次性 commit。
 
@@ -43,7 +45,7 @@ Rust nodeink-core
 - 原子命令校验失败时不产生部分写入。
 - 同一 Document 产生稳定排序、可重复序列化的 Scene。
 - SVG Renderer 根据 SceneSnapshot 协调 DOM。
-- React 与 Vanilla 两个桌面 Web 演示入口。
+- React、Vue 与 Vanilla 三个独立桌面 Web 演示入口。
 - 矩形 Pointer drag：Move 只更新 Scene preview，PointerUp 才生成一个可撤销的 Document command。
 - 自由笔 Stroke：Rust 累积点并解析 SVG path，支持 JSON point 与 Float64Array batch，PointerUp 只提交一个 Undo entry。
 - 确定性 Sketch：Rust 使用显式 profile、seed 与算法版本生成矩形轮廓、hachure fill 和自由笔 path。
@@ -54,7 +56,7 @@ Rust nodeink-core
 - Migration：Rust 验证/迁移版本化 payload，Web 仅做 hash、候选顺序和 copy-on-write 持久化编排。
 - Multi-tab lease：Web Locks 只授予一个 writer；无可靠协调时只读，IndexedDB revision guard 阻止最终覆盖。
 - Diagram Operation：Rust 将版本化批量意图映射到共享 Command/Transaction，支持 dry-run、原子 apply、重放和单步 Undo。
-- Framework-neutral lifecycle：React/Vanilla 共用 Controller/Engine/Renderer；dispose 释放 listener、subscription、DOM 与 WASM handle。
+- Framework-neutral lifecycle：React/Vue/Vanilla 共用 Controller/Engine/Renderer；dispose 释放 listener、subscription、DOM 与 WASM handle。
 
 这不是日常可用的编辑器，也不包含产品级自动保存 UI、Camera、选择框、产品级文本编辑、
 Mermaid 导入或公共 SDK；自由笔与 IME 仅覆盖 Spike fixture。
@@ -65,12 +67,12 @@ Mermaid 导入或公共 SDK；自由笔与 IME 仅覆盖 Spike fixture。
 | --- | --- |
 | `pnpm install --frozen-lockfile` | lockfile 可重复安装；workspace 已是最新状态 |
 | `pnpm config get registry` | `https://registry.npmjs.org/` |
-| `pnpm check` | 58 个格式入口、29 个类型/Lint 入口通过；framework boundary gate 通过 |
-| `pnpm test` | 11 个 test file、134 个 Web test 通过 |
-| `pnpm coverage` | Web statements 98.63%、branches 92.08%、functions 97.59%、lines 99.00%；Rust lines 98.86% |
+| `pnpm check` | 格式、类型、Lint 与 framework boundary gate 通过 |
+| `pnpm test` | 13 个 test file、147 个 Web test 通过 |
+| `pnpm coverage` | Web statements 98.65%、branches 92.36%、functions 97.88%、lines 98.97%；Rust lines 98.86% |
 | `pnpm exec vp run rust:check` | fmt、Clippy、43 个 Rust test、doc-test 通过 |
 | `pnpm exec vp run wasm:build` | release + Binaryen 117 `-Oz` 连续构建与 generated 缺失重建成功，hash 一致 |
-| `pnpm build` | 480,459 bytes 优化 WASM 与 React/Vanilla 双入口生产包构建成功 |
+| `pnpm build` | 480,459 bytes 优化 WASM 与 React/Vue/Vanilla 三入口生产包构建成功 |
 | framework dependency gate | `protocol`、`engine-web`、`editor-web`、`renderer-svg`、`persistence-web` 无 React/Vue import |
 | S1 release WASM browser benchmark | 单事件和 batch-8 均 P95 约 0.1ms、0 ignored、1 commit、0 long task |
 | S2 release WASM browser benchmark | JSON point 与 TypedArray batch-2/8/32 均 0 ignored、1 commit、0 long task；batch-2 首点估算 P95 13.03ms |
@@ -92,6 +94,10 @@ Mermaid 导入或公共 SDK；自由笔与 IME 仅覆盖 Spike fixture。
 2. 创建矩形后 revision 为 1，坐标为 `(80, 72)`。
 3. 移动后 revision 为 2，坐标为 `(112, 88)`。
 4. Undo 后 revision 为 3，坐标恢复为 `(80, 72)`。
+
+Vue 独立入口另外完成了 create→move→undo→redo 的真实浏览器闭环，revision 从 r0
+推进到 r4，Redo 后矩形恢复到移动后的坐标；Vue 编译特性开关显式固定，控制台无
+warn/error。
 
 验证过程中发现 Rust serde 默认把 `elementIds` 解析为 `element_ids`，导致浏览器 Move
 失败。Command wire schema 已统一为 camelCase，并新增 Rust 回归测试；双宿主随后重新通过。
@@ -264,4 +270,4 @@ Phase 0 的 S0–S12 已全部达到退出条件。进入 Phase 1A 前：
 3. 继续保留本页基准为回归门槛，不把 Spike fixture 直接宣称为公共 SDK。
 
 ---
-*Last updated: 2026-07-22 | Reason: close S12 repeatable toolchain and Phase 0 exit evidence*
+*Last updated: 2026-07-22 | Reason: add the independent Vue adapter and live host evidence*

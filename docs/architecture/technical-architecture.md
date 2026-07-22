@@ -30,6 +30,7 @@
 flowchart TB
     subgraph Browser["TypeScript / Browser Host"]
         React["React Editor Shell"]
+        Vue["Vue Editor Shell"]
         Controller["Framework-neutral Web Editor Controller"]
         Input["Input Adapter\nPointer · Keyboard · IME"]
         Text["Text Metrics Adapter"]
@@ -49,6 +50,8 @@ flowchart TB
 
     React -->|"actions"| Controller
     Controller -->|"state snapshots"| React
+    Vue -->|"actions"| Controller
+    Controller -->|"state snapshots"| Vue
     Controller --> Input
     Input -->|"NormalizedInput"| Bridge
     Controller -->|"CommandEnvelope"| Bridge
@@ -142,7 +145,7 @@ TypeScript 负责平台能力和用户体验集成：
 - `editor-web`：框架无关的 Controller、Action Registry、输入编排和 HTML Text Overlay。
 - `renderer-svg`：框架无关的 Scene → SVG DOM；未来 Canvas Renderer 仍位于 Host 侧。
 - `persistence-web`：IndexedDB I/O、校验 hash、自动保存调度和文档写入权。
-- 官方 React 层只负责 Toolbar、Inspector、文档库、恢复界面和组件状态映射。
+- React/Vue adapter 只负责 Toolbar、Inspector、文档库、恢复界面和组件状态映射；当前 Vue adapter 仅覆盖 Phase 0 可见动作闭环。
 - DOM Pointer/Keyboard/Wheel 事件标准化、pointer capture、IME、Clipboard 和 Accessibility。
 - 浏览器字体加载、测量和 `fontFingerprint`。
 - WASM 生命周期、错误边界和内部 TypeScript Bridge。
@@ -168,11 +171,11 @@ TypeScript 负责平台能力和用户体验集成：
 
 #### Web Controller 与 Renderer 保持框架无关
 
-- **推荐方案**：`editor-web` 组合 Engine、Renderer、Persistence 和浏览器输入，并通过 `dispatch / getSnapshot / subscribe / dispose` 暴露能力；React、未来 Vue 或 Vanilla host 都只做 UI 适配。
+- **推荐方案**：`editor-web` 组合 Engine、Renderer、Persistence 和浏览器输入，并通过 `dispatch / getSnapshot / subscribe / dispose` 暴露能力；React、Vue 或 Vanilla host 都只做 UI 适配。
 - **理由**：渲染、命令和生命周期不被 React hook、Context 或 Vue reactivity 绑定，既可嵌入其他技术栈，也能用最小 DOM fixture 独立验证。
 - **替代方案**：由 React 组件直接持有 Engine、Renderer 和 Persistence，再按需抽象其他框架版本。
 - **适用边界**：框架无关不等于无 DOM；`editor-web` 和 `renderer-svg` 可以依赖浏览器标准 API，但不能依赖具体 UI 框架。
-- **当前实施**：Phase 0 用 Vanilla TypeScript host 验证契约，Phase 1A 同一 Controller 同时供官方 React Shell 使用。
+- **当前实施**：Phase 0 的 Vanilla TypeScript、React 与 Vue 三个独立入口复用同一 Controller；框架 adapter 只映射 UI 和生命周期。
 - **未来切换成本**：低；新增框架只需新增 adapter，不复制编辑器内核与 Renderer。
 
 ## 8. Semantic Document Model
@@ -691,10 +694,10 @@ interface EditorWebControllerV1 {
 
 - `EditorActionV1` 是 UI 意图，例如切换工具、撤销、删除或设置样式；Controller 再把它映射为 NormalizedInput 或 Command。
 - `EditorUiSnapshotV1` 只包含 UI 需要的只读派生状态，例如 active tool、selection summary、undo/redo availability 和 save status。
-- React adapter 把 `subscribe` 映射为框架状态订阅；未来 Vue/Vanilla host 使用相同契约，不新增第二套 Engine 或 Renderer API。
+- React 与 Vue adapter 把 `subscribe` 映射为框架状态订阅；Vanilla host 使用相同契约，不新增第二套 Engine 或 Renderer API。
 - `dispose` 是唯一宿主销毁入口，负责释放 DOM listener、Text Overlay、Renderer、保存调度器和 Engine handle。
 - UI adapter 不直接调用 Renderer 私有方法，也不直接访问 wasm-bindgen glue 或 IndexedDB。
-- Phase 0 的 React 与 Vanilla host 已用同一 Controller/EnginePort/Renderer 完成 create/move/undo；25 轮真实 WASM mount/dispose 中 100 次 Pointer listener add/remove 完全配对，25 个 Engine handle 与 Renderer DOM 全部释放。
+- Phase 0 的 React 与 Vanilla host 已用同一 Controller/EnginePort/Renderer 完成 create/move/undo；Vue host 也已完成 create/move/undo/redo。原有 25 轮真实 WASM mount/dispose 中 100 次 Pointer listener add/remove 完全配对，25 个 Engine handle 与 Renderer DOM 全部释放。
 - 根 `pnpm check` 执行 framework boundary gate，禁止 `protocol`、`engine-web`、`editor-web`、`renderer-svg`、`persistence-web` 导入 React/Vue；框架代码只能存在于 adapter 或 host。
 
 ### 13.5 Renderer 分歧决策
@@ -1015,6 +1018,7 @@ node-ink/
 │   ├── renderer-svg/
 │   ├── editor-web/
 │   ├── editor-react/
+│   ├── editor-vue/
 │   └── persistence-web/
 ├── apps/
 │   ├── playground/
@@ -1035,6 +1039,7 @@ node-ink/
 | `renderer-svg` | 框架无关的 Scene → SVG DOM | `private: true` |
 | `editor-web` | 框架无关的 Controller、Action Registry、输入、Text Overlay 与生命周期编排 | `private: true` |
 | `editor-react` | 可选的官方 React UI adapter、Toolbar、Inspector 与文档界面 | `private: true` |
+| `editor-vue` | 可选的 Vue UI adapter 与 Controller 生命周期映射 | `private: true` |
 | `persistence-web` | IndexedDB、save scheduler、recovery、lease | `private: true` |
 | `playground` | 产品闭环与手工验收 | 内部 app |
 | `benchmarks` | WASM/Scene/SVG/Text/Storage 指标 | 内部 app/runner |
@@ -1054,7 +1059,9 @@ flowchart LR
     Svg --> EditorWeb
     Persist --> EditorWeb
     EditorWeb --> React["editor-react"]
+    EditorWeb --> Vue["editor-vue"]
     React --> Playground["playground"]
+    Vue --> Playground
     EngineWeb --> Bench["benchmarks"]
     Svg --> Bench
     Persist --> Bench
@@ -1068,7 +1075,8 @@ flowchart LR
 - `persistence-web` 只理解版本化 snapshot bytes/catalog，不读取 Document 内部字段执行业务逻辑。
 - `editor-web` 只使用浏览器标准 API 和 NodeInk package contracts，不依赖 React、Vue 或其他组件框架；它拥有 Controller 生命周期。
 - `editor-react` 只消费 `editor-web` 的 action/state subscription，不重新实现引擎语义、Renderer 规则或持久化内部逻辑。
-- 未来只有出现真实消费者时才新增 `editor-vue` 或 Vanilla 示例；它们同样依赖 `editor-web`，不复制核心编排。
+- `editor-vue` 只消费 `editor-web` 的 action/state subscription，不重新实现引擎语义、Renderer 规则或持久化内部逻辑。
+- Vanilla 示例直接消费 `editor-web`；三个宿主均不复制核心编排。
 - `apps` 可以组装所有包，不能成为共享代码来源。
 
 ### 17.4 未来拆分条件
@@ -1133,10 +1141,13 @@ vp build apps/playground ──→ production web bundle
 | Scene 更新 | Snapshot 基线 + revisioned Patch | Phase 0/1A | 低 |
 | WASM 编码 | 冷路径 JSON，热点 TypedArray | benchmark 决定 | 低—中 |
 | Worker | 主线程优先 | 指标触发 | 中 |
-| Web 集成 | `editor-web` / Renderer 框架无关，React 为可选适配层 | Phase 0/1A | 低 |
+| Web 集成 | `editor-web` / Renderer 框架无关，React/Vue 为可选适配层 | Phase 0/1A | 低 |
 | 持久化 | 当前 + 前一稳定快照 | Phase 1A | 中 |
 | 多标签页 | Lease adapter + expected revision | Phase 1B | 中 |
 | Rust 物理边界 | `core + wasm` | Phase 0/1 | 低 |
 | 公共 SDK | Phase 3 再稳定 | Phase 1 仅内部 | 中，避免现在变高 |
 | Mermaid 导入 | 版本化 adapter + 明示兼容覆盖 | Phase 2 起逐步扩展 | 中 |
 | Web 工具链 | Vite+ 统一入口，Cargo 保持 Rust 真相源 | Phase 0 起 | 低—中 |
+
+---
+*Last updated: 2026-07-22 | Reason: add the private Vue adapter without changing core ownership*

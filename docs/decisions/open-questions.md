@@ -51,8 +51,8 @@
 ### D-09 框架无关的 Web 核心
 
 - `renderer-svg` 与 `editor-web` 不依赖 React、Vue 或其他组件框架。
-- 官方 React UI 只是 adapter；未来 Vue 或 Vanilla host 复用同一 Controller、Action、Scene 和 Renderer 契约。
-- 框架无关允许使用浏览器标准 DOM API，不意味着首期同时维护多个 UI 实现。
+- 官方 React/Vue UI 只是 adapter；React、Vue 与 Vanilla host 复用同一 Controller、Action、Scene 和 Renderer 契约。
+- 框架无关允许使用浏览器标准 DOM API；当前多个 adapter 只验证宿主契约，不承诺首期同时维护多套完整产品 UI。
 
 ### D-10 UI 体验方向
 
@@ -152,11 +152,11 @@
 
 ### D-23 框架无关宿主与销毁契约
 
-- React 与 Vanilla host 都只消费 `EditorWebControllerV1` 的 mount/getSnapshot/subscribe/dispatch/dispose；EnginePort 和 SVG Renderer 不因宿主框架分叉。
+- React、Vue 与 Vanilla host 都只消费 `EditorWebControllerV1` 的 mount/getSnapshot/subscribe/dispatch/dispose；EnginePort 和 SVG Renderer 不因宿主框架分叉。
 - `dispose` 幂等地移除 Pointer listener、清空 subscription、卸载 Renderer DOM 并释放一次 WASM Engine handle；释放后的 handle 明确拒绝后续调用。
 - 本机真实 WASM 连续 25 轮 mount/create/move/undo/dispose：100 次 Pointer listener add/remove 配对、25 个 handle 全部释放、0 active listener、0 residual SVG。
-- React 与 Vanilla 可见入口均从 r0 完成 create→r1、move→r2、undo→r3，矩形 x 恢复 80；浏览器无 warn/error。
-- `pnpm check` 固化 React/Vue import boundary；新增 Vue 等适配器时只能依赖框架无关包，不能把框架依赖下沉。
+- React、Vue 与 Vanilla 可见入口均复用真实 WASM；Vue 入口已从 r0 完成 create→r1、move→r2、undo→r3、redo→r4，浏览器无 warn/error。
+- `pnpm check` 固化 React/Vue import boundary；框架适配器只能依赖框架无关包，不能把框架依赖下沉。
 
 ### D-24 Vite+、Cargo 与可重复 WASM 优化
 
@@ -250,3 +250,6 @@
 ## 进入实现的门槛
 
 P-01 已确认，Phase 0 可以实施。进入相应产品功能前必须确认其余问题；未到决策时点的问题可以保留待确认，但不能由实现者自行选择用户可见行为。
+
+---
+*Last updated: 2026-07-22 | Reason: confirm the private Vue adapter follows the framework-neutral host contract*

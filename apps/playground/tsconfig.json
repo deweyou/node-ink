@@ -12,6 +12,7 @@
     { "path": "../../packages/engine-web" },
     { "path": "../../packages/renderer-svg" },
     { "path": "../../packages/editor-web" },
-    { "path": "../../packages/editor-react" }
+    { "path": "../../packages/editor-react" },
+    { "path": "../../packages/editor-vue" }
   ]
 }
