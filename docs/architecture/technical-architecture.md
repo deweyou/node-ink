@@ -1121,7 +1121,7 @@ vp build apps/playground ──→ production web bundle
 2. pnpm 版本在 `packageManager` 中精确声明，提交 `pnpm-lock.yaml` 与 `pnpm-workspace.yaml`；`vp install` 是统一入口，但 lockfile 仍是依赖真相源。
 3. 仓库根 `.npmrc` 固定为 `registry=https://registry.npmjs.org/`。该文件不写认证 token，不配置公司或私有 registry fallback；公共源缺失的依赖必须显式更换或重新决策。
 4. Cargo 自己管理增量编译。Phase 0 的 Rust/WASM task 默认 `cache: false`，并通过项目脚本把临时构建产物放在 `NODEINK_CARGO_TARGET_DIR`（未指定时使用系统临时目录），避免 Vite Task 重复归档大型构建产物；只在测得收益并明确 input/output 后启用跨任务缓存。
-5. WASM 构建细节放在项目自有脚本后，由 Phase 0 决定使用 `wasm-pack` 还是 `cargo build + wasm-bindgen-cli`；Web package 不直接散布底层命令。
+5. WASM 构建细节放在项目自有脚本后：wasm-pack 负责 Cargo release 与 wasm-bindgen，lockfile 固定的 Binaryen 117 负责 `-Oz`。优化写入 generated 同文件系统临时文件后再替换，规避 macOS provenance 下 wasm-pack 内置替换的 `Operation not permitted`；Web package 不散布底层命令。
 6. Vite+ 配置类型、插件 API 和生成目录不得进入 `protocol`、Document、Scene、Controller 或 Renderer 公共契约。移除 Vite+ 时只替换根任务与构建配置。
 
 ## 技术决策摘要

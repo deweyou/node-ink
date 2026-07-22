@@ -21,6 +21,9 @@ importers:
       '@vitest/coverage-v8':
         specifier: 4.1.10
         version: 4.1.10(@vitest/browser@4.1.10)(vitest@4.1.10)
+      binaryen:
+        specifier: 117.0.0
+        version: 117.0.0
       fake-indexeddb:
         specifier: 6.2.5
         version: 6.2.5
@@ -989,6 +992,10 @@ packages:
 
   bidi-js@1.0.3:
     resolution: {integrity: sha512-RKshQI1R3YQ+n9YJz2QQ147P66ELpa1FQEg20Dk8oW9t2KgLbpDLLp9aGZ7y8WHSshDknG0bknqGw5/tyCs5tw==}
+
+  binaryen@117.0.0:
+    resolution: {integrity: sha512-1D+O881OXxY737WPKfIgEscCn3vWGqTsd0m5nGKzvbtadVYw5pZ3eebineH/oV5c/rAW80Bojrsa6firSSIsUw==}
+    hasBin: true
 
   chai@6.2.2:
     resolution: {integrity: sha512-NUPRluOfOiTKBKvWPtSD4PhFvWCqOi0BGStNWs57X9js7XGTprSmFoz5F0tWhR4WPjNeR9jXqdC7/UpSJTnlRg==}
@@ -2007,6 +2014,8 @@ snapshots:
   bidi-js@1.0.3:
     dependencies:
       require-from-string: 2.0.2
+
+  binaryen@117.0.0: {}
 
   chai@6.2.2: {}
 

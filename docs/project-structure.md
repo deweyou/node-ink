@@ -56,6 +56,7 @@ docs/                       Product, architecture, decisions, plans, and repo me
 - Cargo commands remain directly runnable and authoritative for Rust failures.
 - Web dependencies come from the root official-registry `.npmrc`; exact tool versions live in manifests and lockfiles.
 - Rust task output defaults outside the repository to avoid the observed macOS extended-attribute failure. `NODEINK_CARGO_TARGET_DIR` is the supported override.
+- WASM release build uses wasm-pack for Cargo/wasm-bindgen and lockfile-pinned Binaryen 117 for `-Oz`; optimization writes a fresh sibling file before replacing the generated WASM, avoiding the observed wasm-pack/provenance replacement failure.
 
 ---
-*Last updated: 2026-07-22 | Reason: add the S7 persistence-web ownership boundary*
+*Last updated: 2026-07-22 | Reason: record the repeatable S12 WASM optimization boundary*

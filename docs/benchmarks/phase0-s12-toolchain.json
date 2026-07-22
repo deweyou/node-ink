@@ -1,0 +1,87 @@
+{
+  "commit": "26ae541",
+  "date": "2026-07-22",
+  "registry": "https://registry.npmjs.org/",
+  "versions": {
+    "node": "24.15.0",
+    "pnpm": "11.1.3",
+    "vitePlus": "0.2.5",
+    "vite": "8.1.4",
+    "vitest": "4.1.10",
+    "rustc": "1.96.0",
+    "cargo": "1.96.0",
+    "wasmPack": "0.15.0",
+    "wasmBindgen": "0.2.126",
+    "binaryenWasmOpt": "117"
+  },
+  "buildPipeline": {
+    "viteTaskCache": false,
+    "cargoTargetDirectory": "${TMPDIR}/nodeink-cargo-target",
+    "cargoTargetSizeKiB": 475512,
+    "wasmPackFlags": ["--target", "web", "--release", "--no-opt"],
+    "binaryenFlags": ["-Oz"],
+    "optimizationOutputStrategy": "same-filesystem temporary file then rename"
+  },
+  "firstBuild": {
+    "wallSeconds": 10.24,
+    "cargoReleaseSeconds": 2.67,
+    "wasmPackSeconds": 3.01,
+    "wasmBytes": 480459,
+    "wasmSha256": "c982d5b4d604653a2629ee26fd813503c41e091e077e1c110fc6ae6efe50d995"
+  },
+  "incrementalBuild": {
+    "wallSeconds": 5.37,
+    "cargoReleaseSeconds": 0.03,
+    "wasmBytes": 480459,
+    "wasmSha256": "c982d5b4d604653a2629ee26fd813503c41e091e077e1c110fc6ae6efe50d995",
+    "cargoIncrementalReusedWithViteTaskCacheDisabled": true
+  },
+  "missingGeneratedRebuild": {
+    "wallSeconds": 5.26,
+    "cargoReleaseSeconds": 0.03,
+    "wasmHashMatches": true,
+    "javascriptMatches": true,
+    "typescriptDeclarationsMatch": true
+  },
+  "rootBuild": {
+    "wallSeconds": 6.31,
+    "cargoReleaseSeconds": 0.05,
+    "viteBuildMs": 89,
+    "distSizeKiB": 744,
+    "distWasmBytes": 480459,
+    "distWasmGzipKilobytes": 186.76,
+    "reactAndVanillaEntrypoints": true
+  },
+  "rustFailurePropagation": {
+    "probe": "RUSTC=/usr/bin/false pnpm exec vp run wasm:build",
+    "exitCode": 1,
+    "errorContains": "cargo metadata exited with an error",
+    "webSuccessDidNotMaskRustFailure": true
+  },
+  "fullGate": {
+    "frozenInstall": "passed",
+    "registryCheck": "passed",
+    "check": "passed",
+    "webTestFiles": 11,
+    "webTests": 134,
+    "webLinesPercent": 99,
+    "webBranchesPercent": 92.08,
+    "rustTests": 43,
+    "rustLinesPercent": 98.86,
+    "rustCheck": "passed",
+    "rootBuild": "passed"
+  },
+  "optimizedWasmBrowser": {
+    "react": { "revision": 1, "elementCount": 1, "rectangleX": 80 },
+    "vanilla": { "revision": 1, "elementCount": 1, "rectangleX": 80 },
+    "warningsOrErrors": []
+  },
+  "decision": {
+    "officialRegistryIsPinned": true,
+    "cargoRemainsRustTruthSource": true,
+    "optimizationIsPinnedAndRepeatable": true,
+    "generatedArtifactsCanBeRebuilt": true,
+    "rustFailuresAreVisible": true,
+    "optimizedWasmRunsInBothHosts": true
+  }
+}

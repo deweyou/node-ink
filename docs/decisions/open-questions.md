@@ -158,6 +158,14 @@
 - React 与 Vanilla 可见入口均从 r0 完成 create→r1、move→r2、undo→r3，矩形 x 恢复 80；浏览器无 warn/error。
 - `pnpm check` 固化 React/Vue import boundary；新增 Vue 等适配器时只能依赖框架无关包，不能把框架依赖下沉。
 
+### D-24 Vite+、Cargo 与可重复 WASM 优化
+
+- Vite+ 是日常 check/test/build/task 入口，Rust task 保持 `cache: false`；Cargo 自有 target 目录与增量缓存仍是 Rust 真相源。
+- wasm-pack 0.15 只执行 release Cargo 与 wasm-bindgen（`--no-opt`）；项目从 npm 官方源精确锁定 Binaryen 117，随后以 `-Oz` 优化到同文件系统临时文件再替换最终 WASM。
+- 该两阶段流程连续构建、generated 缺失重建均得到 480,459 bytes 和同一 SHA-256；Vite task 不缓存时第二次 Cargo release 仍从 2.67s 降到 0.03s。
+- 故意把 rustc 指向失败程序时 `vp run wasm:build` 以 exit 1 暴露 `cargo metadata` 错误，Web 成功不能掩盖 Rust 失败。
+- 根 `.npmrc` 只含 `registry=https://registry.npmjs.org/`，不得加入 token、私有源或静默 fallback。
+
 ## 22. 需要产品负责人决策的问题
 
 以下问题不阻碍继续评审文档，但会阻碍对应功能进入实现。

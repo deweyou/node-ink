@@ -19,6 +19,10 @@ pnpm exec vp run wasm:build
 pnpm dev
 ```
 
+WASM 构建由 Cargo/wasm-pack 生成 release 绑定，再由 lockfile 固定的 Binaryen 117
+执行 `-Oz`。优化结果先写入 generated 同文件系统的临时文件，再替换最终 WASM，
+避免 macOS provenance 让 wasm-pack 内置优化步骤失败；Cargo 仍是 Rust 构建真相源。
+
 - React adapter：<http://localhost:5173/>
 - Vanilla TypeScript：<http://localhost:5173/vanilla.html>
 
