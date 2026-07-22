@@ -2,6 +2,8 @@ import { describe, expect, it, vi } from 'vitest';
 
 import type {
   CommandEnvelopeV1,
+  DiagramOperationBatchResultV1,
+  DiagramOperationBatchV1,
   EnginePortV1,
   EngineUpdateV1,
   NormalizedPointerEventV1,
@@ -225,6 +227,23 @@ class StubEngine implements EnginePortV1 {
       this.#rectangleId = command.command.rectangle.id;
     }
     return this.update([this.#rectangleId ?? 'rect-1']);
+  }
+
+  async executeDiagramOperation(
+    batch: DiagramOperationBatchV1,
+  ): Promise<DiagramOperationBatchResultV1> {
+    return {
+      batchId: batch.batchId,
+      mode: batch.mode,
+      previousRevision: this.#revision,
+      revision: batch.mode === 'apply' ? this.#revision + 1 : null,
+      results: batch.operations.map((operation) => ({
+        opId: operation.opId,
+        status: batch.mode === 'apply' ? 'applied' : 'planned',
+        affectedElementIds: [],
+      })),
+      scenePatch: (await this.benchmarkScenePatch()).value,
+    };
   }
 
   async handlePointerEvents(

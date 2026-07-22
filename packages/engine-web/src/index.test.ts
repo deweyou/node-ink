@@ -1,12 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import type { CommandEnvelopeV1 } from '@nodeink-internal/protocol';
+import type { CommandEnvelopeV1, DiagramOperationBatchV1 } from '@nodeink-internal/protocol';
 import { createBlankDocument } from '@nodeink-internal/protocol';
 
 const wasm = vi.hoisted(() => {
   const handle = {
     currentUpdate: vi.fn(),
     executeCommand: vi.fn(),
+    executeDiagramOperation: vi.fn(),
     handlePointerEvents: vi.fn(),
     handleStrokeBatchJson: vi.fn(),
     handleStrokePoints: vi.fn(),
@@ -39,6 +40,7 @@ describe('createWasmEngine', () => {
     const update = validUpdate();
     wasm.handle.currentUpdate.mockReturnValue(update);
     wasm.handle.executeCommand.mockReturnValue(update);
+    wasm.handle.executeDiagramOperation.mockReturnValue(diagramOperationResult());
     wasm.handle.handlePointerEvents.mockReturnValue(pointerUpdate());
     wasm.handle.handleStrokeBatchJson.mockReturnValue(strokeUpdate());
     wasm.handle.handleStrokePoints.mockReturnValue(strokeUpdate());
@@ -64,12 +66,18 @@ describe('createWasmEngine', () => {
         rectangle: { kind: 'rect', id: 'rect-1', x: 1, y: 2, width: 3, height: 4 },
       },
     };
+    const batch = diagramOperationBatch();
 
     await expect(engine.currentUpdate()).resolves.toMatchObject({
       scene: { documentRevision: 0 },
     });
     await expect(engine.executeCommand(command)).resolves.toMatchObject({
       history: { canUndo: false },
+    });
+    await expect(engine.executeDiagramOperation(batch)).resolves.toMatchObject({
+      batchId: 'batch-1',
+      revision: 1,
+      results: [{ status: 'applied' }],
     });
     const pointerEvents = [
       {
@@ -136,6 +144,7 @@ describe('createWasmEngine', () => {
     expect(wasm.default).toHaveBeenCalledOnce();
     expect(wasm.openDocument).toHaveBeenCalledWith(JSON.stringify(document));
     expect(wasm.handle.executeCommand).toHaveBeenCalledWith(JSON.stringify(command));
+    expect(wasm.handle.executeDiagramOperation).toHaveBeenCalledWith(JSON.stringify(batch));
     expect(wasm.handle.handlePointerEvents).toHaveBeenCalledWith(
       JSON.stringify(pointerEvents),
       'drag-1',
@@ -174,6 +183,13 @@ describe('createWasmEngine', () => {
       throw new Error(JSON.stringify({ code: 'revision_conflict', message: 'stale revision' }));
     });
     await expect(engine.executeCommand(command)).rejects.toThrow('stale revision');
+
+    wasm.handle.executeDiagramOperation.mockImplementation(() => {
+      throw new Error(JSON.stringify({ message: 'batch rejected' }));
+    });
+    await expect(engine.executeDiagramOperation(diagramOperationBatch())).rejects.toThrow(
+      'batch rejected',
+    );
 
     wasm.handle.undo.mockImplementation(() => {
       throw JSON.stringify({ code: 'undo_unavailable' });
@@ -251,6 +267,35 @@ function commandFixture(): CommandEnvelopeV1 {
     expectedRevision: 0,
     command: { type: 'move_elements', elementIds: ['rect-1'], delta: { x: 1, y: 2 } },
   };
+}
+
+function diagramOperationBatch(): DiagramOperationBatchV1 {
+  return {
+    protocolVersion: 1,
+    batchId: 'batch-1',
+    documentId: 'doc-1',
+    expectedRevision: 0,
+    mode: 'apply',
+    atomic: true,
+    operations: [
+      {
+        type: 'create_rectangle',
+        opId: 'create-1',
+        rectangle: { kind: 'rect', id: 'rect-1', x: 1, y: 2, width: 3, height: 4 },
+      },
+    ],
+  };
+}
+
+function diagramOperationResult(): string {
+  return JSON.stringify({
+    batchId: 'batch-1',
+    mode: 'apply',
+    previousRevision: 0,
+    revision: 1,
+    results: [{ opId: 'create-1', status: 'applied', affectedElementIds: ['rect-1'] }],
+    scenePatch: JSON.parse(scenePatch()),
+  });
 }
 
 function validUpdate(): string {

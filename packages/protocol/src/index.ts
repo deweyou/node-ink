@@ -43,7 +43,54 @@ export interface CommandEnvelopeV1 {
 export type CommandV1 =
   | { type: 'create_rectangle'; rectangle: RectElementV1 }
   | { type: 'move_elements'; elementIds: string[]; delta: Vec2 }
-  | { type: 'create_stroke'; stroke: StrokeElementV1 };
+  | { type: 'create_stroke'; stroke: StrokeElementV1 }
+  | { type: 'update_rectangle'; elementId: string; patch: RectanglePatchV1 }
+  | { type: 'delete_elements'; elementIds: string[] };
+
+export interface RectanglePatchV1 {
+  x?: number;
+  y?: number;
+  width?: number;
+  height?: number;
+}
+
+export type DiagramOperationModeV1 = 'apply' | 'dry_run';
+
+export interface DiagramOperationBatchV1 {
+  protocolVersion: 1;
+  batchId: string;
+  documentId: string;
+  expectedRevision: number;
+  mode: DiagramOperationModeV1;
+  atomic: true;
+  operations: DiagramOperationV1[];
+}
+
+export type DiagramOperationV1 =
+  | { type: 'create_rectangle'; opId: string; rectangle: RectElementV1 }
+  | { type: 'move_elements'; opId: string; elementIds: string[]; delta: Vec2 }
+  | {
+      type: 'update_rectangle';
+      opId: string;
+      elementId: string;
+      patch: RectanglePatchV1;
+    }
+  | { type: 'delete_elements'; opId: string; elementIds: string[] };
+
+export interface DiagramOperationResultV1 {
+  opId: string;
+  status: 'applied' | 'planned';
+  affectedElementIds: string[];
+}
+
+export interface DiagramOperationBatchResultV1 {
+  batchId: string;
+  mode: DiagramOperationModeV1;
+  previousRevision: number;
+  revision: number | null;
+  results: DiagramOperationResultV1[];
+  scenePatch: ScenePatchV1;
+}
 
 export interface OperationResultV1 {
   commandId: string;
@@ -224,6 +271,7 @@ export interface RenderViewportResultV1 {
 export interface EnginePortV1 {
   currentUpdate(): Promise<EngineUpdateV1>;
   executeCommand(command: CommandEnvelopeV1): Promise<EngineUpdateV1>;
+  executeDiagramOperation(batch: DiagramOperationBatchV1): Promise<DiagramOperationBatchResultV1>;
   handlePointerEvents(
     events: NormalizedPointerEventV1[],
     commandId: string,
@@ -363,6 +411,40 @@ export function parseScenePatch(value: string): ScenePatchV1 {
     throw new Error('Engine patch does not satisfy protocol V1');
   }
   return parsed as unknown as ScenePatchV1;
+}
+
+export function parseDiagramOperationBatchResult(value: string): DiagramOperationBatchResultV1 {
+  const parsed: unknown = JSON.parse(value);
+  if (
+    !isRecord(parsed) ||
+    typeof parsed.batchId !== 'string' ||
+    (parsed.mode !== 'apply' && parsed.mode !== 'dry_run') ||
+    typeof parsed.previousRevision !== 'number' ||
+    (parsed.revision !== null && typeof parsed.revision !== 'number') ||
+    !Array.isArray(parsed.results) ||
+    !isRecord(parsed.scenePatch)
+  ) {
+    throw new Error('Diagram operation result does not satisfy protocol V1');
+  }
+  for (const result of parsed.results) {
+    if (
+      !isRecord(result) ||
+      typeof result.opId !== 'string' ||
+      (result.status !== 'applied' && result.status !== 'planned') ||
+      !Array.isArray(result.affectedElementIds) ||
+      !result.affectedElementIds.every((elementId) => typeof elementId === 'string')
+    ) {
+      throw new Error('Diagram operation result does not satisfy protocol V1');
+    }
+  }
+  return {
+    batchId: parsed.batchId,
+    mode: parsed.mode,
+    previousRevision: parsed.previousRevision,
+    revision: parsed.revision,
+    results: parsed.results as DiagramOperationResultV1[],
+    scenePatch: parseScenePatch(JSON.stringify(parsed.scenePatch)),
+  };
 }
 
 export function parsePointerUpdate(value: string): PointerUpdateV1 {

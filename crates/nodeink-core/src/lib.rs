@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 mod migration;
+mod operation;
 mod pointer;
 mod scene_patch;
 mod sketch;
@@ -12,6 +13,12 @@ mod text;
 
 pub use migration::{
     MigrationAttemptV1, MigrationReportV1, MigrationResultV1, migrate_document_payload,
+};
+use operation::validate_operation_batch;
+pub use operation::{
+    DiagramOperationBatchResultV1, DiagramOperationBatchV1, DiagramOperationModeV1,
+    DiagramOperationResultV1, DiagramOperationStatusV1, DiagramOperationV1,
+    MAX_OPERATION_BATCH_SIZE, RectanglePatchV1,
 };
 pub use pointer::{NormalizedPointerEventV1, PointerPhaseV1};
 use pointer::{PointerMachine, PointerPreview, PointerTransition};
@@ -136,6 +143,13 @@ pub enum CommandV1 {
     },
     CreateStroke {
         stroke: StrokeElementV1,
+    },
+    UpdateRectangle {
+        element_id: ElementId,
+        patch: RectanglePatchV1,
+    },
+    DeleteElements {
+        element_ids: Vec<ElementId>,
     },
 }
 
@@ -285,6 +299,10 @@ pub enum EngineErrorV1 {
     TextFingerprintMismatch,
     #[error("invalid benchmark fixture")]
     InvalidBenchmarkFixture,
+    #[error("invalid operation batch: {reason}")]
+    InvalidOperationBatch { reason: String },
+    #[error("element {element_id} is not a rectangle")]
+    ElementNotRectangle { element_id: ElementId },
     #[error("undo history is empty")]
     UndoUnavailable,
     #[error("redo history is empty")]
@@ -327,6 +345,73 @@ impl Engine {
         self.pointer_machine.cancel();
         self.stroke_machine.cancel();
         self.execute_command_without_pointer_reset(envelope)
+    }
+
+    pub fn execute_diagram_operation(
+        &mut self,
+        batch: DiagramOperationBatchV1,
+    ) -> Result<DiagramOperationBatchResultV1, EngineErrorV1> {
+        validate_operation_batch(&batch)?;
+        self.validate_transaction_header(batch.document_id.as_str(), batch.expected_revision)?;
+
+        let previous_scene = self.current_update().scene;
+        let previous_revision = self.document.revision;
+        let batch_id = batch.batch_id;
+        let mode = batch.mode;
+        let op_ids = batch
+            .operations
+            .iter()
+            .map(|operation| operation.op_id().to_string())
+            .collect::<Vec<_>>();
+        let commands = batch
+            .operations
+            .into_iter()
+            .map(DiagramOperationV1::into_command)
+            .collect();
+        let (candidate, affected_by_operation) = self.prepare_transaction(commands)?;
+        let status = match mode {
+            DiagramOperationModeV1::Apply => DiagramOperationStatusV1::Applied,
+            DiagramOperationModeV1::DryRun => DiagramOperationStatusV1::Planned,
+        };
+        let results = op_ids
+            .into_iter()
+            .zip(affected_by_operation.iter().cloned())
+            .map(|(op_id, affected_element_ids)| DiagramOperationResultV1 {
+                op_id,
+                status,
+                affected_element_ids,
+            })
+            .collect();
+
+        let (revision, next_scene) = match mode {
+            DiagramOperationModeV1::Apply => {
+                self.pointer_machine.cancel();
+                self.stroke_machine.cancel();
+                let changed_element_ids = unique_element_ids(&affected_by_operation);
+                let update =
+                    self.commit_transaction(batch_id.clone(), candidate, changed_element_ids);
+                (Some(update.scene.document_revision), update.scene)
+            }
+            DiagramOperationModeV1::DryRun => (
+                None,
+                resolve_scene(
+                    &candidate,
+                    self.scene_revision + 1,
+                    None,
+                    None,
+                    &RenderProfileV1::clean(),
+                ),
+            ),
+        };
+
+        Ok(DiagramOperationBatchResultV1 {
+            batch_id,
+            mode,
+            previous_revision,
+            revision,
+            results,
+            scene_patch: diff_scene(&previous_scene, &next_scene),
+        })
     }
 
     pub fn handle_pointer_events(
@@ -427,24 +512,47 @@ impl Engine {
     ) -> Result<EngineUpdateV1, EngineErrorV1> {
         self.validate_envelope(&envelope)?;
 
-        let previous_revision = self.document.revision;
-        let mut candidate = self.document.clone();
-        let changed_element_ids = apply_command(&mut candidate, envelope.command)?;
-        candidate.revision = previous_revision + 1;
-        validate_document(&candidate)?;
+        let (candidate, changed_by_command) = self.prepare_transaction(vec![envelope.command])?;
+        Ok(self.commit_transaction(
+            envelope.command_id,
+            candidate,
+            unique_element_ids(&changed_by_command),
+        ))
+    }
 
+    fn prepare_transaction(
+        &self,
+        commands: Vec<CommandV1>,
+    ) -> Result<(NodeInkDocumentV1, Vec<Vec<ElementId>>), EngineErrorV1> {
+        let mut candidate = self.document.clone();
+        let mut changed_by_command = Vec::with_capacity(commands.len());
+        for command in commands {
+            changed_by_command.push(apply_command(&mut candidate, command)?);
+        }
+        candidate.revision = self.document.revision + 1;
+        validate_document(&candidate)?;
+        Ok((candidate, changed_by_command))
+    }
+
+    fn commit_transaction(
+        &mut self,
+        transaction_id: String,
+        candidate: NodeInkDocumentV1,
+        changed_element_ids: Vec<ElementId>,
+    ) -> EngineUpdateV1 {
+        let previous_revision = self.document.revision;
         self.undo_stack.push(self.document.clone());
         self.redo_stack.clear();
         self.document = candidate;
         self.scene_revision += 1;
 
-        Ok(self.update(Some(OperationResultV1 {
-            command_id: envelope.command_id,
+        self.update(Some(OperationResultV1 {
+            command_id: transaction_id,
             previous_revision,
             revision: self.document.revision,
             changed_element_ids,
             scene_revision: self.scene_revision,
-        })))
+        }))
     }
 
     pub fn undo(&mut self) -> Result<EngineUpdateV1, EngineErrorV1> {
@@ -519,12 +627,20 @@ impl Engine {
                 actual: envelope.protocol_version,
             });
         }
-        if envelope.document_id != self.document.document_id {
+        self.validate_transaction_header(&envelope.document_id, envelope.expected_revision)
+    }
+
+    fn validate_transaction_header(
+        &self,
+        document_id: &str,
+        expected_revision: u64,
+    ) -> Result<(), EngineErrorV1> {
+        if document_id != self.document.document_id {
             return Err(EngineErrorV1::DocumentMismatch);
         }
-        if envelope.expected_revision != self.document.revision {
+        if expected_revision != self.document.revision {
             return Err(EngineErrorV1::RevisionConflict {
-                expected: envelope.expected_revision,
+                expected: expected_revision,
                 actual: self.document.revision,
             });
         }
@@ -619,7 +735,58 @@ fn apply_command(
                 .insert(element_id.clone(), ElementRecordV1::Stroke(stroke));
             Ok(vec![element_id])
         }
+        CommandV1::UpdateRectangle { element_id, patch } => {
+            let element = document.elements.get_mut(&element_id).ok_or_else(|| {
+                EngineErrorV1::ElementNotFound {
+                    element_id: element_id.clone(),
+                }
+            })?;
+            let ElementRecordV1::Rect(rectangle) = element else {
+                return Err(EngineErrorV1::ElementNotRectangle { element_id });
+            };
+            if let Some(x) = patch.x {
+                rectangle.x = x;
+            }
+            if let Some(y) = patch.y {
+                rectangle.y = y;
+            }
+            if let Some(width) = patch.width {
+                rectangle.width = width;
+            }
+            if let Some(height) = patch.height {
+                rectangle.height = height;
+            }
+            validate_rectangle(rectangle)?;
+            Ok(vec![element_id])
+        }
+        CommandV1::DeleteElements { element_ids } => {
+            for element_id in &element_ids {
+                if !document.elements.contains_key(element_id) {
+                    return Err(EngineErrorV1::ElementNotFound {
+                        element_id: element_id.clone(),
+                    });
+                }
+            }
+            for element_id in &element_ids {
+                document.elements.remove(element_id);
+            }
+            document
+                .root_order
+                .retain(|element_id| !element_ids.contains(element_id));
+            Ok(element_ids)
+        }
     }
+}
+
+fn unique_element_ids(changed_by_command: &[Vec<ElementId>]) -> Vec<ElementId> {
+    let mut seen = BTreeMap::new();
+    let mut unique = Vec::new();
+    for element_id in changed_by_command.iter().flatten() {
+        if seen.insert(element_id.clone(), ()).is_none() {
+            unique.push(element_id.clone());
+        }
+    }
+    unique
 }
 
 fn validate_document(document: &NodeInkDocumentV1) -> Result<(), EngineErrorV1> {
@@ -854,6 +1021,250 @@ mod tests {
             width: 160.0,
             height: 96.0,
         }
+    }
+
+    fn diagram_batch(mode: DiagramOperationModeV1) -> DiagramOperationBatchV1 {
+        DiagramOperationBatchV1 {
+            protocol_version: PROTOCOL_VERSION,
+            batch_id: "diagram-batch-1".to_string(),
+            document_id: "doc-1".to_string(),
+            expected_revision: 0,
+            mode,
+            atomic: true,
+            operations: vec![
+                DiagramOperationV1::CreateRectangle {
+                    op_id: "create-a".to_string(),
+                    rectangle: rectangle("rect-a", 10.0),
+                },
+                DiagramOperationV1::CreateRectangle {
+                    op_id: "create-b".to_string(),
+                    rectangle: rectangle("rect-b", 100.0),
+                },
+                DiagramOperationV1::MoveElements {
+                    op_id: "move-a".to_string(),
+                    element_ids: vec!["rect-a".to_string()],
+                    delta: Vec2 { x: 5.0, y: 7.0 },
+                },
+                DiagramOperationV1::UpdateRectangle {
+                    op_id: "resize-a".to_string(),
+                    element_id: "rect-a".to_string(),
+                    patch: RectanglePatchV1 {
+                        width: Some(240.0),
+                        height: Some(120.0),
+                        ..RectanglePatchV1::default()
+                    },
+                },
+                DiagramOperationV1::DeleteElements {
+                    op_id: "delete-b".to_string(),
+                    element_ids: vec!["rect-b".to_string()],
+                },
+            ],
+        }
+    }
+
+    #[test]
+    fn diagram_operation_dry_run_is_complete_without_mutating_document_or_history() {
+        let mut engine = Engine::open(NodeInkDocumentV1::blank("doc-1")).unwrap();
+        let before = engine.document().clone();
+
+        let result = engine
+            .execute_diagram_operation(diagram_batch(DiagramOperationModeV1::DryRun))
+            .unwrap();
+
+        assert_eq!(result.mode, DiagramOperationModeV1::DryRun);
+        assert_eq!(result.previous_revision, 0);
+        assert_eq!(result.revision, None);
+        assert_eq!(result.results.len(), 5);
+        assert!(
+            result
+                .results
+                .iter()
+                .all(|entry| entry.status == DiagramOperationStatusV1::Planned)
+        );
+        assert_eq!(result.scene_patch.base_scene_revision, 0);
+        assert_eq!(result.scene_patch.scene_revision, 1);
+        assert_eq!(result.scene_patch.document_revision, 1);
+        assert_eq!(result.scene_patch.added_nodes.len(), 1);
+        assert!(result.scene_patch.added_nodes.contains_key("rect-a:shape"));
+        assert_eq!(engine.document(), &before);
+        assert_eq!(engine.current_update().scene.scene_revision, 0);
+        assert!(!engine.current_update().history.can_undo);
+    }
+
+    #[test]
+    fn diagram_operation_apply_is_one_atomic_undoable_transaction() {
+        let mut engine = Engine::open(NodeInkDocumentV1::blank("doc-1")).unwrap();
+        let result = engine
+            .execute_diagram_operation(diagram_batch(DiagramOperationModeV1::Apply))
+            .unwrap();
+
+        assert_eq!(result.revision, Some(1));
+        assert!(
+            result
+                .results
+                .iter()
+                .all(|entry| entry.status == DiagramOperationStatusV1::Applied)
+        );
+        assert_eq!(
+            result.results[2].affected_element_ids,
+            ["rect-a".to_string()]
+        );
+        assert_eq!(engine.document().root_order, ["rect-a"]);
+        let ElementRecordV1::Rect(rectangle) = &engine.document().elements["rect-a"] else {
+            panic!("operation result must contain the surviving rectangle");
+        };
+        assert_eq!((rectangle.x, rectangle.y), (15.0, 47.0));
+        assert_eq!((rectangle.width, rectangle.height), (240.0, 120.0));
+        assert_eq!(result.scene_patch.added_nodes.len(), 1);
+        assert!(engine.current_update().history.can_undo);
+
+        let undone = engine.undo().unwrap();
+        assert_eq!(undone.scene.document_revision, 2);
+        assert!(undone.scene.root_node_ids.is_empty());
+        assert!(!undone.history.can_undo);
+    }
+
+    #[test]
+    fn diagram_operation_batch_is_deterministically_replayable_from_the_same_revision() {
+        let mut first = Engine::open(NodeInkDocumentV1::blank("doc-1")).unwrap();
+        let mut second = Engine::open(NodeInkDocumentV1::blank("doc-1")).unwrap();
+        let first_result = first
+            .execute_diagram_operation(diagram_batch(DiagramOperationModeV1::Apply))
+            .unwrap();
+        let second_result = second
+            .execute_diagram_operation(diagram_batch(DiagramOperationModeV1::Apply))
+            .unwrap();
+
+        assert_eq!(first_result, second_result);
+        assert_eq!(first.document(), second.document());
+        assert_eq!(
+            first.serialize_document().unwrap(),
+            second.serialize_document().unwrap()
+        );
+    }
+
+    #[test]
+    fn failed_or_stale_diagram_operation_batches_are_atomic() {
+        let mut engine = Engine::open(NodeInkDocumentV1::blank("doc-1")).unwrap();
+        let before = engine.document().clone();
+        let mut stale = diagram_batch(DiagramOperationModeV1::Apply);
+        stale.expected_revision = 9;
+        assert_eq!(
+            engine.execute_diagram_operation(stale),
+            Err(EngineErrorV1::RevisionConflict {
+                expected: 9,
+                actual: 0,
+            })
+        );
+
+        let mut wrong_document = diagram_batch(DiagramOperationModeV1::Apply);
+        wrong_document.document_id = "doc-2".to_string();
+        assert_eq!(
+            engine.execute_diagram_operation(wrong_document),
+            Err(EngineErrorV1::DocumentMismatch)
+        );
+
+        let mut invalid = diagram_batch(DiagramOperationModeV1::Apply);
+        invalid.operations.push(DiagramOperationV1::MoveElements {
+            op_id: "move-missing".to_string(),
+            element_ids: vec!["missing".to_string()],
+            delta: Vec2 { x: 1.0, y: 1.0 },
+        });
+        assert_eq!(
+            engine.execute_diagram_operation(invalid),
+            Err(EngineErrorV1::ElementNotFound {
+                element_id: "missing".to_string(),
+            })
+        );
+        assert_eq!(engine.document(), &before);
+        assert!(!engine.current_update().history.can_undo);
+    }
+
+    #[test]
+    fn rectangle_update_and_delete_commands_reject_invalid_targets_without_partial_mutation() {
+        let mut document = NodeInkDocumentV1::blank("doc-1");
+        let stroke = StrokeElementV1 {
+            id: "stroke-1".to_string(),
+            points: vec![Vec2 { x: 0.0, y: 0.0 }, Vec2 { x: 1.0, y: 1.0 }],
+            stroke_width: 2.0,
+        };
+        document.root_order.push(stroke.id.clone());
+        document
+            .elements
+            .insert(stroke.id.clone(), ElementRecordV1::Stroke(stroke));
+        let mut engine = Engine::open(document).unwrap();
+        let before = engine.document().clone();
+
+        for (command, expected) in [
+            (
+                CommandV1::UpdateRectangle {
+                    element_id: "missing".to_string(),
+                    patch: RectanglePatchV1 {
+                        x: Some(1.0),
+                        ..RectanglePatchV1::default()
+                    },
+                },
+                EngineErrorV1::ElementNotFound {
+                    element_id: "missing".to_string(),
+                },
+            ),
+            (
+                CommandV1::UpdateRectangle {
+                    element_id: "stroke-1".to_string(),
+                    patch: RectanglePatchV1 {
+                        x: Some(1.0),
+                        ..RectanglePatchV1::default()
+                    },
+                },
+                EngineErrorV1::ElementNotRectangle {
+                    element_id: "stroke-1".to_string(),
+                },
+            ),
+            (
+                CommandV1::DeleteElements {
+                    element_ids: vec!["stroke-1".to_string(), "missing".to_string()],
+                },
+                EngineErrorV1::ElementNotFound {
+                    element_id: "missing".to_string(),
+                },
+            ),
+        ] {
+            let envelope = envelope(engine.document(), "invalid", command);
+            assert_eq!(engine.execute_command(envelope), Err(expected));
+            assert_eq!(engine.document(), &before);
+        }
+
+        let mut rectangle_document = NodeInkDocumentV1::blank("doc-2");
+        let rectangle_fixture = rectangle("rect-1", 10.0);
+        rectangle_document
+            .root_order
+            .push(rectangle_fixture.id.clone());
+        rectangle_document.elements.insert(
+            rectangle_fixture.id.clone(),
+            ElementRecordV1::Rect(rectangle_fixture),
+        );
+        let mut rectangle_engine = Engine::open(rectangle_document).unwrap();
+        let invalid_geometry = envelope(
+            rectangle_engine.document(),
+            "invalid-size",
+            CommandV1::UpdateRectangle {
+                element_id: "rect-1".to_string(),
+                patch: RectanglePatchV1 {
+                    width: Some(0.0),
+                    ..RectanglePatchV1::default()
+                },
+            },
+        );
+        assert_eq!(
+            rectangle_engine.execute_command(invalid_geometry),
+            Err(EngineErrorV1::InvalidRectangle {
+                element_id: "rect-1".to_string(),
+            })
+        );
+        assert_eq!(
+            rectangle_engine.document().elements["rect-1"],
+            ElementRecordV1::Rect(rectangle("rect-1", 10.0))
+        );
     }
 
     #[test]

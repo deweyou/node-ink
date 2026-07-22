@@ -2,6 +2,7 @@ declare module '*nodeink_engine.js' {
   export class EngineHandle {
     currentUpdate(): string;
     executeCommand(commandJson: string): string;
+    executeDiagramOperation(batchJson: string): string;
     handlePointerEvents(eventsJson: string, commandId: string): string;
     handleStrokeBatchJson(batchJson: string, commandId: string): string;
     handleStrokePoints(

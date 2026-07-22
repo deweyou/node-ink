@@ -1,4 +1,5 @@
 import {
+  parseDiagramOperationBatchResult,
   parseEngineUpdate,
   parseMigrationAttempt,
   parsePointerUpdate,
@@ -8,6 +9,8 @@ import {
   parseStrokeUpdate,
   parseTextFixtureResolution,
   type CommandEnvelopeV1,
+  type DiagramOperationBatchResultV1,
+  type DiagramOperationBatchV1,
   type EnginePortV1,
   type EngineUpdateV1,
   type MigrationAttemptV1,
@@ -30,6 +33,7 @@ import {
 interface WasmEngineHandle {
   currentUpdate(): string;
   executeCommand(commandJson: string): string;
+  executeDiagramOperation(batchJson: string): string;
   handlePointerEvents(eventsJson: string, commandId: string): string;
   handleStrokeBatchJson(batchJson: string, commandId: string): string;
   handleStrokePoints(
@@ -82,6 +86,18 @@ class WasmEnginePort implements EnginePortV1 {
   async executeCommand(command: CommandEnvelopeV1): Promise<EngineUpdateV1> {
     try {
       return parseEngineUpdate(this.requireHandle().executeCommand(JSON.stringify(command)));
+    } catch (error) {
+      throw normalizeEngineError(error);
+    }
+  }
+
+  async executeDiagramOperation(
+    batch: DiagramOperationBatchV1,
+  ): Promise<DiagramOperationBatchResultV1> {
+    try {
+      return parseDiagramOperationBatchResult(
+        this.requireHandle().executeDiagramOperation(JSON.stringify(batch)),
+      );
     } catch (error) {
       throw normalizeEngineError(error);
     }

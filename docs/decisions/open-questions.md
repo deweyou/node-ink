@@ -142,6 +142,14 @@
 - IndexedDB expected revision 是最终事务护栏；S9 并发写 fixture 恒为一个成功、一个 `revision_conflict`，不发生 silent last-write-wins。
 - 本机 Chrome 150 中初次获取、释放后接管、关闭标签页后接管分别为 0.4/0.3/0.2ms；这些时延不替代跨设备 capability probe。
 
+### D-22 Diagram Operation V1 原子事务
+
+- Rust Operation Layer 把版本化 create/move/update/delete rectangle Operation 映射到与 UI 共用的 `CommandV1` 和 Transaction；Web Host 不维护第二份语义实现。
+- `atomic: true` 是 V1 唯一模式，单批最多 256 个 Operation；任何子操作失败或 revision conflict 都不改变 Document、revision 或 history。
+- `dry_run` 在候选 Document 上完成同一 validation 与 Scene Resolution，只返回 `planned` 结果和 ScenePatch；apply 只增加一次 revision 和一个 Undo entry。
+- 同一 batch 从相同 Document/revision 重放时结果、ScenePatch 与最终 Document 逐字节一致；在已推进的 revision 上重放则明确冲突。
+- Renderer 只消费来源无关的 ScenePatch，不知道调用来自 UI、SDK、CLI、MCP 或未来 Mermaid adapter。
+
 ## 22. 需要产品负责人决策的问题
 
 以下问题不阻碍继续评审文档，但会阻碍对应功能进入实现。

@@ -21,6 +21,7 @@ import {
   type SnapshotRecordV1,
 } from '@nodeink-internal/persistence-web';
 import type {
+  DiagramOperationBatchV1,
   NodeInkDocumentV1,
   RenderProfileV1,
   SceneBenchmarkPayloadV1,
@@ -215,6 +216,42 @@ export interface PlaygroundLeaseBenchmarkReport {
   releaseMs: number | null;
 }
 
+export interface PlaygroundOperationBenchmarkReport {
+  build: 'release-wasm-dev-host';
+  engineAlgorithmVersion: 'phase0-s10';
+  browser: string;
+  os: string;
+  hardware: PlaygroundBenchmarkHardware;
+  operationCount: 5;
+  dryRun: {
+    durationMs: number;
+    revisionBefore: 0;
+    revisionAfter: 0;
+    resultRevision: null;
+    plannedOperationCount: 5;
+    previewAddedNodeCount: 1;
+  };
+  apply: {
+    durationMs: number;
+    revision: 1;
+    appliedOperationCount: 5;
+    survivingElementIds: ['rect-a'];
+    rendererAcceptedPatch: boolean;
+    renderedSceneNodeCount: 1;
+  };
+  replay: { identicalResult: boolean; identicalDocument: boolean };
+  atomicFailure: { rejected: boolean; revisionAfter: 0; elementCountAfter: 0 };
+  revisionConflict: { rejected: boolean; revisionAfter: 1 };
+  undo: { revision: 2; elementCount: 0 };
+  decision: {
+    dryRunNeverMutates: boolean;
+    batchIsAtomicAndUndoable: boolean;
+    replayIsDeterministic: boolean;
+    staleRevisionIsRejected: boolean;
+    rendererOnlyConsumesScenePatch: boolean;
+  };
+}
+
 interface PersistenceSizeScenarioReport {
   payloadBytes: 1_048_576 | 10_485_760;
   iterations: 5;
@@ -290,6 +327,7 @@ declare global {
     nodeInkRunSvgScaleBenchmark?: () => Promise<PlaygroundSvgScaleBenchmarkReport>;
     nodeInkRunPersistenceBenchmark?: () => Promise<PlaygroundPersistenceBenchmarkReport>;
     nodeInkRunMigrationBenchmark?: () => Promise<PlaygroundMigrationBenchmarkReport>;
+    nodeInkRunOperationBenchmark?: () => Promise<PlaygroundOperationBenchmarkReport>;
     nodeInkReleaseLeaseBenchmark?: () => Promise<number>;
   }
 }
@@ -303,6 +341,7 @@ export function exposePointerBenchmark(controller: EditorWebControllerV1): void 
   window.nodeInkRunSvgScaleBenchmark = () => runPlaygroundSvgScaleBenchmark();
   window.nodeInkRunPersistenceBenchmark = () => runPlaygroundPersistenceBenchmark();
   window.nodeInkRunMigrationBenchmark = () => runPlaygroundMigrationBenchmark();
+  window.nodeInkRunOperationBenchmark = () => runPlaygroundOperationBenchmark();
   window.nodeInkReleaseLeaseBenchmark = () => releasePlaygroundLeaseBenchmark();
 }
 
@@ -874,6 +913,203 @@ export async function releasePlaygroundLeaseBenchmark(): Promise<number> {
   await activePlaygroundLease.release();
   activePlaygroundLease = null;
   return round(performance.now() - startedAt);
+}
+
+export async function runPlaygroundOperationBenchmark(): Promise<PlaygroundOperationBenchmarkReport> {
+  const engine = await createWasmEngine(operationDocument('doc-1'));
+  const replayEngine = await createWasmEngine(operationDocument('doc-1'));
+  const atomicEngine = await createWasmEngine(operationDocument('atomic-doc'));
+  const renderTarget = document.createElement('div');
+  const renderer = new SvgRenderer();
+  try {
+    const initial = await engine.currentUpdate();
+    renderer.mount(renderTarget);
+    const initialRender = renderer.applySnapshot(initial.scene);
+    if (!initialRender.ok) throw new Error('renderer rejected initial operation fixture');
+
+    const dryRunStartedAt = performance.now();
+    const dryRun = await engine.executeDiagramOperation(operationBatch('dry_run'));
+    const dryRunDurationMs = performance.now() - dryRunStartedAt;
+    const afterDryRun = await engine.currentUpdate();
+    if (
+      dryRun.revision !== null ||
+      afterDryRun.scene.documentRevision !== 0 ||
+      dryRun.results.some((result) => result.status !== 'planned')
+    ) {
+      throw new Error('dry-run changed the document or returned a committed result');
+    }
+
+    const applyStartedAt = performance.now();
+    const applied = await engine.executeDiagramOperation(operationBatch('apply'));
+    const applyDurationMs = performance.now() - applyStartedAt;
+    const afterApply = await engine.currentUpdate();
+    const renderResult = renderer.applyPatch(applied.scenePatch);
+    if (!renderResult.ok)
+      throw new Error(`renderer rejected operation patch: ${renderResult.reason}`);
+
+    const replayed = await replayEngine.executeDiagramOperation(operationBatch('apply'));
+    const replayDocument = await replayEngine.currentUpdate();
+
+    let revisionConflictRejected = false;
+    try {
+      await engine.executeDiagramOperation(operationBatch('apply'));
+    } catch {
+      revisionConflictRejected = true;
+    }
+    const afterConflict = await engine.currentUpdate();
+
+    let atomicFailureRejected = false;
+    try {
+      await atomicEngine.executeDiagramOperation(atomicFailureBatch());
+    } catch {
+      atomicFailureRejected = true;
+    }
+    const afterAtomicFailure = await atomicEngine.currentUpdate();
+    const undone = await engine.undo();
+
+    const identicalResult = JSON.stringify(applied) === JSON.stringify(replayed);
+    const identicalDocument =
+      JSON.stringify(afterApply.scene) === JSON.stringify(replayDocument.scene);
+    const renderedSceneNodeCount = renderTarget.querySelectorAll('[data-scene-node-id]').length;
+    const previewAddedNodeCount = Object.keys(dryRun.scenePatch.addedNodes).length;
+    const plannedOperationCount = dryRun.results.filter(
+      (result) => result.status === 'planned',
+    ).length;
+    const appliedOperationCount = applied.results.filter(
+      (result) => result.status === 'applied',
+    ).length;
+    if (
+      previewAddedNodeCount !== 1 ||
+      plannedOperationCount !== 5 ||
+      appliedOperationCount !== 5 ||
+      afterApply.scene.documentRevision !== 1 ||
+      afterApply.scene.rootNodeIds.join(',') !== 'rect-a:shape' ||
+      renderedSceneNodeCount !== 1
+    ) {
+      throw new Error('operation fixture did not produce the expected single rectangle');
+    }
+    const dryRunNeverMutates =
+      afterDryRun.scene.documentRevision === 0 && !afterDryRun.history.canUndo;
+    const batchIsAtomicAndUndoable =
+      atomicFailureRejected &&
+      afterAtomicFailure.scene.documentRevision === 0 &&
+      afterAtomicFailure.scene.rootNodeIds.length === 0 &&
+      undone.scene.documentRevision === 2 &&
+      undone.scene.rootNodeIds.length === 0;
+    return {
+      build: 'release-wasm-dev-host',
+      engineAlgorithmVersion: 'phase0-s10',
+      ...benchmarkEnvironment(),
+      operationCount: 5,
+      dryRun: {
+        durationMs: round(dryRunDurationMs),
+        revisionBefore: 0,
+        revisionAfter: 0,
+        resultRevision: null,
+        plannedOperationCount,
+        previewAddedNodeCount,
+      },
+      apply: {
+        durationMs: round(applyDurationMs),
+        revision: 1,
+        appliedOperationCount,
+        survivingElementIds: ['rect-a'],
+        rendererAcceptedPatch: renderResult.ok,
+        renderedSceneNodeCount,
+      },
+      replay: { identicalResult, identicalDocument },
+      atomicFailure: {
+        rejected: atomicFailureRejected,
+        revisionAfter: 0,
+        elementCountAfter: 0,
+      },
+      revisionConflict: { rejected: revisionConflictRejected, revisionAfter: 1 },
+      undo: { revision: 2, elementCount: 0 },
+      decision: {
+        dryRunNeverMutates,
+        batchIsAtomicAndUndoable,
+        replayIsDeterministic: identicalResult && identicalDocument,
+        staleRevisionIsRejected:
+          revisionConflictRejected && afterConflict.scene.documentRevision === 1,
+        rendererOnlyConsumesScenePatch: renderResult.ok && renderedSceneNodeCount === 1,
+      },
+    };
+  } finally {
+    renderer.unmount();
+    engine.dispose();
+    replayEngine.dispose();
+    atomicEngine.dispose();
+  }
+}
+
+function operationDocument(documentId: string): NodeInkDocumentV1 {
+  return {
+    schemaVersion: 1,
+    documentId,
+    revision: 0,
+    rootOrder: [],
+    elements: {},
+  };
+}
+
+function operationBatch(mode: 'apply' | 'dry_run'): DiagramOperationBatchV1 {
+  return {
+    protocolVersion: 1,
+    batchId: 'diagram-batch-1',
+    documentId: 'doc-1',
+    expectedRevision: 0,
+    mode,
+    atomic: true,
+    operations: [
+      {
+        type: 'create_rectangle',
+        opId: 'create-a',
+        rectangle: { kind: 'rect', id: 'rect-a', x: 10, y: 40, width: 160, height: 96 },
+      },
+      {
+        type: 'create_rectangle',
+        opId: 'create-b',
+        rectangle: { kind: 'rect', id: 'rect-b', x: 100, y: 40, width: 160, height: 96 },
+      },
+      {
+        type: 'move_elements',
+        opId: 'move-a',
+        elementIds: ['rect-a'],
+        delta: { x: 5, y: 7 },
+      },
+      {
+        type: 'update_rectangle',
+        opId: 'resize-a',
+        elementId: 'rect-a',
+        patch: { width: 240, height: 120 },
+      },
+      { type: 'delete_elements', opId: 'delete-b', elementIds: ['rect-b'] },
+    ],
+  };
+}
+
+function atomicFailureBatch(): DiagramOperationBatchV1 {
+  return {
+    protocolVersion: 1,
+    batchId: 'atomic-failure',
+    documentId: 'atomic-doc',
+    expectedRevision: 0,
+    mode: 'apply',
+    atomic: true,
+    operations: [
+      {
+        type: 'create_rectangle',
+        opId: 'create-before-failure',
+        rectangle: { kind: 'rect', id: 'rect-before-failure', x: 0, y: 0, width: 10, height: 10 },
+      },
+      {
+        type: 'move_elements',
+        opId: 'move-missing',
+        elementIds: ['missing'],
+        delta: { x: 1, y: 1 },
+      },
+    ],
+  };
 }
 
 async function runRevisionGuardProbe(): Promise<PlaygroundLeaseBenchmarkReport['revisionGuard']> {

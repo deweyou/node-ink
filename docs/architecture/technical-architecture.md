@@ -400,7 +400,7 @@ PointerDown
 
 ### 9.5 Command 与高层 Operation 的关系
 
-Command 是引擎最小语义变更；Diagram Operation 是面向 SDK/AI 的更高层意图。Operation 先在 Host/operation layer 中解析、补全和 dry-run，再映射为一个原子 Command Batch。UI 也不能绕过 Command 直接写 Document。
+Command 是引擎最小语义变更；Diagram Operation 是面向 SDK/AI 的更高层意图。Operation 在 Rust operation layer 中解析、补全和 `dry_run`，再映射为一个原子 Command Batch；Host 只转发版本化 payload。UI 也不能绕过 Command 直接写 Document。
 
 ## 10. Editor State Machine
 
@@ -900,9 +900,9 @@ interface DocumentLease {
 
 ### 16.1 定位
 
-Diagram Operation 是 SDK、CLI、MCP、Skill 与未来 Copilot 共用的高层语义协议。它不等于 Rust 内部 Command，也不等于自由 JSON；Operation Layer 负责把领域意图解析成一个经过验证的 Command Batch。
+Diagram Operation 是 SDK、CLI、MCP、Skill 与未来 Copilot 共用的高层语义协议。它不等于 Rust 内部 Command，也不等于自由 JSON；Rust Operation Layer 负责把领域意图解析成经过验证的 Command Batch，Web Host 只转发版本化 payload。
 
-### 16.2 Batch 草案
+### 16.2 Batch V1
 
 ```ts
 interface DiagramOperationBatchV1 {
@@ -910,44 +910,43 @@ interface DiagramOperationBatchV1 {
   batchId: string;
   documentId: DocumentId;
   expectedRevision: number;
-  mode: 'apply' | 'dry-run';
+  mode: 'apply' | 'dry_run';
   atomic: true;
   operations: DiagramOperationV1[];
 }
 
 type DiagramOperationV1 =
-  | { opId: string; type: 'create_shape'; shape: ShapeCreateSpecV1 }
-  | { opId: string; type: 'update_shape'; elementId: ElementId; patch: ShapePatchV1 }
-  | { opId: string; type: 'delete_elements'; elementIds: ElementId[] }
+  | { opId: string; type: 'create_rectangle'; rectangle: RectElementV1 }
   | { opId: string; type: 'move_elements'; elementIds: ElementId[]; delta: Vec2 }
-  | { opId: string; type: 'set_element_style'; elementIds: ElementId[]; style: StylePatchV1 }
-  | { opId: string; type: 'group_elements'; groupId: ElementId; elementIds: ElementId[] };
+  | { opId: string; type: 'update_rectangle'; elementId: ElementId; patch: RectanglePatchV1 }
+  | { opId: string; type: 'delete_elements'; elementIds: ElementId[] };
 ```
 
-Phase 2/3 才增加 `create_mind_map`、`connect_flow_nodes`、`apply_auto_layout` 和 `import_mermaid`。协议版本中不存在的 Operation 返回 `unsupported_operation`，不会转成任意 metadata。
+Phase 0 的 V1 只开放矩形 create/move/update/delete，单批最多 256 个 Operation。Phase 2/3 才增加 `create_mind_map`、`connect_flow_nodes`、`apply_auto_layout` 和 `import_mermaid`。协议版本中不存在的 Operation 在 schema 边界拒绝，不会转成任意 metadata。
 
 ### 16.3 结果与可验证性
 
 ```ts
 interface DiagramOperationBatchResultV1 {
   batchId: string;
-  mode: 'apply' | 'dry-run';
+  mode: 'apply' | 'dry_run';
   previousRevision: number;
   revision?: number;
   results: Array<{
     opId: string;
-    status: 'applied' | 'planned' | 'failed';
+    status: 'applied' | 'planned';
     affectedElementIds: ElementId[];
-    error?: OperationErrorV1;
   }>;
-  scenePreview?: ScenePatchV1;
+  scenePatch: ScenePatchV1;
 }
 ```
 
-- `dry-run` 执行完整 validation 和布局计算，但不提交 Document。
+- `dry_run` 在 Rust 候选 Document 上执行与 apply 相同的 Command、validation 和 Scene Resolution，但不提交 revision、history 或 Document。
 - `atomic: true` 是 V1 唯一模式；部分成功会让 AI 难以推理。
-- Batch 有操作数、坐标范围、文本长度和总 payload 上限。
+- 任一子操作失败或 `expectedRevision` 冲突时，整个调用以结构化 Engine Error 拒绝，不返回伪造的部分结果。
+- Phase 0 已实施操作数上限；坐标范围、文本长度和总 payload 上限随对应元素协议进入后补齐。
 - AI 不能直接提交 SVG DOM、Canvas command、Renderer state 或不受约束 path data。
+- apply 和 `dry_run` 都只向 Renderer 侧暴露来源无关的 `ScenePatchV1`；Renderer 不读取 Operation。
 - Operation 日志记录结构化意图、调用来源和 revision，不记录自然语言隐私内容作为核心协议字段。
 
 ### 16.4 Mermaid 输入兼容层

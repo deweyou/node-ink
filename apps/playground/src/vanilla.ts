@@ -5,6 +5,7 @@ import {
   runPlaygroundPointerBenchmark,
   runPlaygroundPersistenceBenchmark,
   runPlaygroundMigrationBenchmark,
+  runPlaygroundOperationBenchmark,
   releasePlaygroundLeaseBenchmark,
   runPlaygroundLeaseBenchmark,
   runPlaygroundSketchBenchmark,
@@ -65,7 +66,8 @@ if (
   benchmark === 'svg-scale' ||
   benchmark === 'persistence' ||
   benchmark === 'migration' ||
-  benchmark === 'lease'
+  benchmark === 'lease' ||
+  benchmark === 'operation'
 ) {
   const benchmarkOutput = document.createElement('pre');
   benchmarkOutput.className = 'nodeink-benchmark';
@@ -90,13 +92,15 @@ if (
                     ? await runPlaygroundPersistenceBenchmark()
                     : benchmark === 'migration'
                       ? await runPlaygroundMigrationBenchmark()
-                      : await runPlaygroundLeaseBenchmark(
-                          new URLSearchParams(window.location.search).get('role') === 'contender'
-                            ? 'contender'
-                            : 'writer',
-                          new URLSearchParams(window.location.search).get('document') ??
-                            'lease-fixture',
-                        );
+                      : benchmark === 'operation'
+                        ? await runPlaygroundOperationBenchmark()
+                        : await runPlaygroundLeaseBenchmark(
+                            new URLSearchParams(window.location.search).get('role') === 'contender'
+                              ? 'contender'
+                              : 'writer',
+                            new URLSearchParams(window.location.search).get('document') ??
+                              'lease-fixture',
+                          );
     benchmarkOutput.textContent = JSON.stringify(benchmarkResult, null, 2);
     if (benchmark === 'lease' && benchmarkResult.engineAlgorithmVersion === 'phase0-s9') {
       const leaseResult = benchmarkResult;

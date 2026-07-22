@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   createBlankDocument,
+  parseDiagramOperationBatchResult,
   parseEngineUpdate,
   parseMigrationAttempt,
   parsePointerUpdate,
@@ -68,6 +69,35 @@ describe('protocol V1', () => {
     const patch = patchFixture();
 
     expect(parseScenePatch(JSON.stringify(patch))).toEqual(patch);
+  });
+
+  it('parses applied and planned diagram operation results with renderer-only patches', () => {
+    const applied = diagramOperationResultFixture();
+    const planned = diagramOperationResultFixture({ mode: 'dry_run', revision: null });
+    planned.results[0]!.status = 'planned';
+
+    expect(parseDiagramOperationBatchResult(JSON.stringify(applied))).toEqual(applied);
+    expect(parseDiagramOperationBatchResult(JSON.stringify(planned))).toEqual(planned);
+  });
+
+  it.each([
+    null,
+    {},
+    diagramOperationResultFixture({ batchId: 1 }),
+    diagramOperationResultFixture({ mode: 'preview' }),
+    diagramOperationResultFixture({ previousRevision: '0' }),
+    diagramOperationResultFixture({ revision: '1' }),
+    diagramOperationResultFixture({ results: {} }),
+    diagramOperationResultFixture({ results: [null] }),
+    diagramOperationResultFixture({ results: [{ opId: 1 }] }),
+    diagramOperationResultFixture({ results: [{ opId: 'op-1', status: 'failed' }] }),
+    diagramOperationResultFixture({
+      results: [{ opId: 'op-1', status: 'applied', affectedElementIds: [1] }],
+    }),
+    diagramOperationResultFixture({ scenePatch: null }),
+    diagramOperationResultFixture({ scenePatch: patchFixture({ protocolVersion: 2 }) }),
+  ])('rejects invalid diagram operation result payloads', (value) => {
+    expect(() => parseDiagramOperationBatchResult(JSON.stringify(value))).toThrow('protocol V1');
   });
 
   it.each([
@@ -274,6 +304,24 @@ function patchFixture(override: Record<string, unknown> = {}) {
     updatedNodes: {},
     removedNodeIds: [],
     rootNodeIds: null,
+    ...override,
+  };
+}
+
+function diagramOperationResultFixture(override: Record<string, unknown> = {}) {
+  return {
+    batchId: 'batch-1',
+    mode: 'apply' as const,
+    previousRevision: 0,
+    revision: 1 as number | null,
+    results: [
+      {
+        opId: 'create-1',
+        status: 'applied' as 'applied' | 'planned',
+        affectedElementIds: ['rect-1'],
+      },
+    ],
+    scenePatch: patchFixture(),
     ...override,
   };
 }
