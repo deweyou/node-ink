@@ -8,9 +8,16 @@ tokens:
     surface: '#ffffff'
     text: 'hsl(28 3.68% 18%)'
     primary: 'hsl(154 37.2% 27%)'
+    ink: '#0f172a'
+    emerald: '#047857'
+    blue: '#2563eb'
+    rose: '#e11d48'
+    mint-fill: '#d1fae5'
+    blue-fill: '#dbeafe'
+    amber-fill: '#fef3c7'
   typography:
     control: 'Source Han Sans SC Web, PingFang SC, Heiti SC, Microsoft YaHei, Noto Sans CJK SC, sans-serif'
-    content: 'TODO pending P-02 fixed canvas font decision'
+    content: 'Noto Sans SC Variable'
   spacing:
     rhythm: '4px'
 ---
@@ -29,13 +36,13 @@ The interface should disappear until the user needs it. Content owns the visual 
 - Show only implemented actions; do not seed the UI with disabled future-product promises.
 - Use compact desktop controls with generous canvas space.
 - Preserve predictable, explicit state transitions over decorative motion.
-- Let Clean and future Sketch rendering express content style; application chrome stays restrained.
+- Let Clean and Sketch rendering express content style; application chrome stays restrained.
 
 ## Typography
 
 - Use the shared sans-serif stack for UI controls and status text.
 - Keep labels short, sentence case, and legible at 12–14px; reserve larger type for page or document identity.
-- Canvas-content typography is not decided. Confirm P-02 before selecting or bundling a fixed font.
+- Canvas content uses the bundled `Noto Sans SC Variable` at 24px/400 by default. Hosts must wait for the 400 and 500 weights before opening the engine so persisted metrics never depend on an accidental system fallback.
 
 ## Color
 
@@ -57,14 +64,21 @@ The interface should disappear until the user needs it. Content owns the visual 
 - Active tools must be distinguishable without relying only on color.
 - Status badges are compact metadata, not primary calls to action.
 - New panels should be contextual and dismissible rather than permanently shrinking the canvas.
+- Selection styles live in a compact overlay panel at the upper-right canvas edge. It appears only when Rust reports an editable selection and never changes canvas geometry.
 
 ## Interaction
 
 - UI actions and programmatic actions must converge on the same Controller and Rust Command path.
 - Tool changes are explicit; history availability is reflected immediately in control state.
+- Select, Draw, and Text are persistent tools. `V`, `P`, and `T` activate them, active buttons use `aria-pressed`, Draw uses a crosshair, Text uses a text cursor, and creating a rectangle returns to Select.
+- Text starts from a canvas click in Text or a semantic double-click on existing text in Select. Editing uses a fixed-font HTML textarea overlay; Enter inserts a line, `Cmd/Ctrl+Enter` or blur commits one Transaction, and `Escape` cancels. Clearing existing text deletes the element through the normal undoable Command path.
+- The top bar exposes one document-level segmented profile control: Clean or Sketch. Sketch uses a fixed v1 preset; seed, roughness, bowing, and hatch parameters are not end-user controls in Phase 1A.
+- Context styles use a fixed accessible palette and discrete presets: rectangle fill/stroke/width, freehand stroke/width, and text color/size/alignment. “No fill” is explicit; arbitrary CSS colors, opacity, dash, and custom Sketch parameters remain outside this slice.
+- Each profile or style press is one Rust Command and one Undo entry. Current values use `aria-pressed` and a visible check/state treatment, not color alone.
+- Freehand uses fixed 3px round ink in this slice. Pen pressure, variable-width outlines, mobile touch editing, and style controls are separate capabilities.
 - The Camera percentage is relative to the current fit-content zoom. Clicking it recenters all content with 64px screen padding; content changes may update the percentage but must not move the Camera automatically.
 - A primary click selects the topmost semantic element; an empty-canvas click or `Escape` clears selection. `Delete`, `Backspace`, and the visible Delete button invoke the same undoable element-deletion action.
-- Selection uses a straight solid-blue ring separated from the element's visible painted bounds by a 6px screen-space gap. The overlay keeps constant screen-space stroke and spacing, ignores pointer events, and must not add resize or rotate handles before Phase 1B.
+- Selection uses a straight solid-blue ring separated from painted bounds by a 6px screen-space gap. Phase 1B adds eight square resize handles, a rotate connector/handle, a translucent marquee, and restrained snap guides; their stroke, size, hit regions, and spacing stay screen-space stable and overlay paint itself ignores pointer events.
 - Persistence uses five explicit presentation states shared by every host: `未保存`, `保存中`, `已保存`, `保存失败`, and `只读`.
 - A save failure remains visible with an explicit `重试` action. Read-only mode explains why editing is unavailable instead of silently disabling controls.
 - Avoid ornamental transitions. Honor reduced-motion preferences.
@@ -87,10 +101,11 @@ The interface should disappear until the user needs it. Content owns the visual 
 
 - Do not copy tldraw or Excalidraw branding, iconography, or full feature density.
 - Do not put semantic geometry, layout, or document ownership into React components.
-- Do not invent the final canvas font or mobile behavior before its product decision.
+- Do not substitute system fonts for committed canvas text or infer mobile editing from Pointer Events support.
 - Do not let a framework adapter invent save, recovery, or read-only copy independently of the shared presentation contract.
 - Do not add empty toolbar entries for Mermaid, AI, collaboration, or other future phases.
+- Do not infer selected styles from SVG attributes or store a parallel profile in a framework component.
 
 ---
 
-_Last updated: 2026-07-22 | Reason: align the handle-free selection frame with established whiteboard interaction language_
+_Last updated: 2026-07-23 | Reason: confirm Phase 1A style presets and Clean/Sketch product controls_

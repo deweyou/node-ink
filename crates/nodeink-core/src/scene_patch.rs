@@ -67,13 +67,14 @@ pub fn benchmark_scene_snapshot(
             SceneNodeV1::Rect(SceneRectV1 {
                 id: node_id,
                 source_element_id: element_id,
+                transform: crate::Affine2D::identity(),
                 x: column as f64 * 14.0 + if moved { 32.0 } else { 0.0 },
                 y: row as f64 * 14.0 + if moved { 16.0 } else { 0.0 },
                 width: 10.0,
                 height: 10.0,
                 fill: "#d1fae5".to_string(),
                 stroke: "#047857".to_string(),
-                stroke_width: crate::RECTANGLE_STROKE_WIDTH,
+                stroke_width: crate::DEFAULT_RECTANGLE_STROKE_WIDTH,
             }),
         );
     }
@@ -82,6 +83,7 @@ pub fn benchmark_scene_snapshot(
         document_id: "scene-patch-fixture".to_string(),
         document_revision: scene_revision,
         scene_revision,
+        render_profile: crate::RenderProfileV1::clean(),
         root_node_ids,
         nodes,
     })
@@ -124,13 +126,14 @@ mod tests {
             SceneNodeV1::Rect(SceneRectV1 {
                 id: "rect-00000:shape".to_string(),
                 source_element_id: "rect-00000".to_string(),
+                transform: crate::Affine2D::identity(),
                 x: 32.0,
                 y: 16.0,
                 width: 10.0,
                 height: 10.0,
                 fill: "#d1fae5".to_string(),
                 stroke: "#047857".to_string(),
-                stroke_width: crate::RECTANGLE_STROKE_WIDTH,
+                stroke_width: crate::DEFAULT_RECTANGLE_STROKE_WIDTH,
             })
         );
     }
@@ -144,13 +147,14 @@ mod tests {
         let added = SceneNodeV1::Rect(SceneRectV1 {
             id: "rect-added:shape".to_string(),
             source_element_id: "rect-added".to_string(),
+            transform: crate::Affine2D::identity(),
             x: 4.0,
             y: 8.0,
             width: 12.0,
             height: 16.0,
             fill: "none".to_string(),
             stroke: "black".to_string(),
-            stroke_width: crate::RECTANGLE_STROKE_WIDTH,
+            stroke_width: crate::DEFAULT_RECTANGLE_STROKE_WIDTH,
         });
         after
             .nodes

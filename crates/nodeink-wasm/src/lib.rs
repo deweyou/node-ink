@@ -1,8 +1,9 @@
 use nodeink_core::{
     CameraActionV1, CameraV1, CameraViewportV1, CommandEnvelopeV1, DiagramOperationBatchV1,
-    ENGINE_ALGORITHM_VERSION, Engine, EngineErrorV1, NodeInkDocumentV1, NormalizedPointerEventV1,
-    RenderProfileV1, StrokeInputBatchV1, StrokePhaseV1, TextMetricsSnapshotV1, TextRunV1, Vec2,
-    benchmark_scene_patch, benchmark_scene_snapshot, migrate_document_payload,
+    ENGINE_ALGORITHM_VERSION, EditorToolV1, Engine, EngineErrorV1, NodeInkDocumentV1,
+    NormalizedPointerEventV1, RenderProfileV1, StrokeInputBatchV1, StrokePhaseV1,
+    TextMetricsSnapshotV1, TextRunV1, Vec2, benchmark_scene_patch, benchmark_scene_snapshot,
+    migrate_document_payload,
 };
 use wasm_bindgen::prelude::*;
 
@@ -74,11 +75,52 @@ impl EngineHandle {
     }
 
     #[wasm_bindgen(js_name = setSelection)]
-    pub fn set_selection(&mut self, element_id: Option<String>) -> Result<String, JsValue> {
+    pub fn set_selection(
+        &mut self,
+        element_ids_json: &str,
+        primary_element_id: Option<String>,
+    ) -> Result<String, JsValue> {
+        let element_ids: Vec<String> = serde_json::from_str(element_ids_json)
+            .map_err(|error| js_error("schema_invalid", error))?;
         let update = self
             .engine
-            .set_selection(element_id)
+            .set_selection(element_ids, primary_element_id)
             .map_err(engine_error)?;
+        serde_json::to_string(&update).map_err(|error| js_error("serialization_failed", error))
+    }
+
+    #[wasm_bindgen(js_name = copySelection)]
+    pub fn copy_selection(&self) -> Result<String, JsValue> {
+        let payload = self.engine.copy_selection().map_err(engine_error)?;
+        serde_json::to_string(&payload).map_err(|error| js_error("serialization_failed", error))
+    }
+
+    #[wasm_bindgen(js_name = beginTextEditAt)]
+    pub fn begin_text_edit_at(&mut self, point_json: &str) -> Result<String, JsValue> {
+        let point: Vec2 =
+            serde_json::from_str(point_json).map_err(|error| js_error("schema_invalid", error))?;
+        let target = self
+            .engine
+            .begin_text_edit_at(point)
+            .map_err(engine_error)?;
+        serde_json::to_string(&target).map_err(|error| js_error("serialization_failed", error))
+    }
+
+    #[wasm_bindgen(js_name = provideTextMetrics)]
+    pub fn provide_text_metrics(&mut self, metrics_json: &str) -> Result<String, JsValue> {
+        let metrics: TextMetricsSnapshotV1 = serde_json::from_str(metrics_json)
+            .map_err(|error| js_error("schema_invalid", error))?;
+        let update = self
+            .engine
+            .provide_text_metrics(metrics)
+            .map_err(engine_error)?;
+        serde_json::to_string(&update).map_err(|error| js_error("serialization_failed", error))
+    }
+
+    #[wasm_bindgen(js_name = setActiveTool)]
+    pub fn set_active_tool(&mut self, active_tool: &str) -> Result<String, JsValue> {
+        let active_tool = parse_editor_tool(active_tool)?;
+        let update = self.engine.set_active_tool(active_tool);
         serde_json::to_string(&update).map_err(|error| js_error("serialization_failed", error))
     }
 
@@ -265,6 +307,15 @@ fn parse_stroke_phase(phase: &str) -> Result<StrokePhaseV1, JsValue> {
         "up" => Ok(StrokePhaseV1::Up),
         "cancel" => Ok(StrokePhaseV1::Cancel),
         _ => Err(js_error("schema_invalid", "unsupported stroke phase")),
+    }
+}
+
+fn parse_editor_tool(active_tool: &str) -> Result<EditorToolV1, JsValue> {
+    match active_tool {
+        "select" => Ok(EditorToolV1::Select),
+        "freehand" => Ok(EditorToolV1::Freehand),
+        "text" => Ok(EditorToolV1::Text),
+        _ => Err(js_error("schema_invalid", "unsupported editor tool")),
     }
 }
 

@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import {
   createBlankDocument,
+  type ElementRecordV1,
   type MigrationAttemptV1,
   type NodeInkDocumentV1,
 } from '@nodeink-internal/protocol';
@@ -118,10 +119,7 @@ describe('openLocalDocumentV1', () => {
   });
 
   it('persists a migrated head as a new revision before granting write access', async () => {
-    const source = await snapshot('doc-1@4', {
-      ...documentAt(4),
-      schemaVersion: 0 as never,
-    });
+    const source = await legacyV1Snapshot(4);
     const store = new MemorySnapshotStore(catalog(source), [source]);
     const save = vi.fn(async () => ({ snapshot: source, metrics: saveMetrics() }));
     const opened = await openLocalDocumentV1({
@@ -139,24 +137,34 @@ describe('openLocalDocumentV1', () => {
       access: 'writer',
       recovery: 'migrated_head',
       persistedRevision: 5,
-      document: { schemaVersion: 1, revision: 5 },
+      document: {
+        schemaVersion: 3,
+        revision: 5,
+        renderProfile: { kind: 'clean', version: 1 },
+        elements: {
+          'rect-1': {
+            fill: { kind: 'solid', color: '#d1fae5' },
+            stroke: '#047857',
+            strokeWidth: 2,
+          },
+          'stroke-1': { stroke: '#0f172a', strokeWidth: 3 },
+          'text-1': { color: '#0f172a', textAlign: 'start' },
+        },
+      },
     });
     expect(save).toHaveBeenCalledWith(
       expect.objectContaining({
         documentId: 'doc-1',
         revision: 5,
         expectedPreviousRevision: 4,
-        schemaVersion: 1,
-        engineAlgorithmVersion: 'nodeink-scene-v1',
+        schemaVersion: 3,
+        engineAlgorithmVersion: 'nodeink-scene-v2',
       }),
     );
   });
 
   it('keeps a migrated head readonly when the lease is unavailable', async () => {
-    const source = await snapshot('doc-1@4', {
-      ...documentAt(4),
-      schemaVersion: 0 as never,
-    });
+    const source = await legacyV1Snapshot(4);
     const save = vi.fn();
     const opened = await openLocalDocumentV1({
       documentId: 'doc-1',
@@ -179,10 +187,7 @@ describe('openLocalDocumentV1', () => {
   });
 
   it('releases the writer and exposes diagnostics when a migrated copy cannot persist', async () => {
-    const source = await snapshot('doc-1@4', {
-      ...documentAt(4),
-      schemaVersion: 0 as never,
-    });
+    const source = await legacyV1Snapshot(4);
     const released = vi.fn(async () => undefined);
     const opened = await openLocalDocumentV1({
       documentId: 'doc-1',
@@ -245,7 +250,7 @@ describe('DocumentAutosaveCoordinatorV1', () => {
       serializeDocument: () => ({
         canonicalPayload: JSON.stringify(document),
         document,
-        engineAlgorithmVersion: 'nodeink-scene-v1',
+        engineAlgorithmVersion: 'nodeink-scene-v2',
       }),
     };
     const coordinator = new DocumentAutosaveCoordinatorV1({
@@ -293,7 +298,7 @@ describe('DocumentAutosaveCoordinatorV1', () => {
         serializeDocument: () => ({
           canonicalPayload: JSON.stringify(document),
           document,
-          engineAlgorithmVersion: 'nodeink-scene-v1',
+          engineAlgorithmVersion: 'nodeink-scene-v2',
         }),
       },
       persistence: { save },
@@ -331,7 +336,7 @@ describe('DocumentAutosaveCoordinatorV1', () => {
         serializeDocument: () => ({
           canonicalPayload: JSON.stringify(document),
           document,
-          engineAlgorithmVersion: 'nodeink-scene-v1',
+          engineAlgorithmVersion: 'nodeink-scene-v2',
         }),
       },
       persistence: { save },
@@ -388,34 +393,35 @@ function documentAt(revision: number): NodeInkDocumentV1 {
 
 function migrationPort() {
   return {
-    engineAlgorithmVersion: () => 'nodeink-scene-v1',
+    engineAlgorithmVersion: () => 'nodeink-scene-v2',
     async migrateDocumentPayload(payloadJson: string): Promise<MigrationAttemptV1> {
-      const parsed = JSON.parse(payloadJson) as Omit<NodeInkDocumentV1, 'schemaVersion'> & {
-        schemaVersion: number;
-      };
-      if (parsed.schemaVersion !== 0 && parsed.schemaVersion !== 1) {
+      const parsed = JSON.parse(payloadJson) as LegacyDocumentFixture | NodeInkDocumentV1;
+      if (
+        parsed.schemaVersion !== 0 &&
+        parsed.schemaVersion !== 1 &&
+        parsed.schemaVersion !== 2 &&
+        parsed.schemaVersion !== 3
+      ) {
         return {
           result: null,
           report: {
             stage: 'schema',
             code: 'unknown_schema',
             sourceSchemaVersion: parsed.schemaVersion,
-            targetSchemaVersion: 1,
+            targetSchemaVersion: 3,
             message: 'unsupported schema',
             recovery: 'try_next_snapshot_then_readonly_diagnostic',
           },
         };
       }
-      const migrated = parsed.schemaVersion === 0;
-      const document = {
-        ...parsed,
-        schemaVersion: 1 as const,
-        revision: migrated ? parsed.revision + 1 : parsed.revision,
-      };
+      const migrated = parsed.schemaVersion !== 3;
+      const document: NodeInkDocumentV1 = migrated
+        ? migrateLegacyDocument(parsed as LegacyDocumentFixture)
+        : (parsed as NodeInkDocumentV1);
       return {
         result: {
           sourceSchemaVersion: parsed.schemaVersion,
-          targetSchemaVersion: 1,
+          targetSchemaVersion: 3,
           migrated,
           document,
           canonicalPayload: JSON.stringify(document),
@@ -436,6 +442,135 @@ async function snapshot(
     documentId: document.documentId,
     revision: document.revision,
     schemaVersion: document.schemaVersion,
+    engineAlgorithmVersion: 'nodeink-scene-v2',
+    payload,
+    integrity: { algorithm: 'sha-256', digest: await testDigest(payload) },
+    status: 'stable',
+    createdAt: '2026-07-22T00:00:00.000Z',
+  };
+}
+
+type LegacyDocumentFixture = {
+  schemaVersion: 0 | 1 | 2;
+  documentId: string;
+  revision: number;
+  rootOrder: string[];
+  elements: Record<string, LegacyElementFixture>;
+};
+
+type LegacyElementFixture =
+  | {
+      kind: 'rect';
+      id: string;
+      x: number;
+      y: number;
+      width: number;
+      height: number;
+    }
+  | {
+      kind: 'stroke';
+      id: string;
+      points: Array<{ x: number; y: number }>;
+      strokeWidth: number;
+    }
+  | {
+      kind: 'text';
+      id: string;
+      x: number;
+      y: number;
+      text: string;
+      fontFamily: 'Noto Sans SC Variable';
+      fontSize: number;
+      fontWeight: 400 | 500;
+      maxWidth: number | null;
+      fontFingerprint: string;
+    };
+
+function migrateLegacyDocument(legacy: LegacyDocumentFixture): NodeInkDocumentV1 {
+  return {
+    schemaVersion: 3,
+    documentId: legacy.documentId,
+    revision: legacy.revision + 1,
+    renderProfile: { kind: 'clean', version: 1 },
+    rootOrder: [...legacy.rootOrder],
+    elements: Object.fromEntries(
+      Object.entries(legacy.elements).map(([elementId, element]) => [
+        elementId,
+        migrateLegacyElement(element),
+      ]),
+    ),
+  };
+}
+
+function migrateLegacyElement(element: LegacyElementFixture): ElementRecordV1 {
+  if (element.kind === 'rect') {
+    return {
+      ...element,
+      fill: { kind: 'solid', color: '#d1fae5' },
+      stroke: '#047857',
+      strokeWidth: 2,
+      transform: identityTransform(),
+    };
+  }
+  if (element.kind === 'stroke') {
+    return { ...element, stroke: '#0f172a', transform: identityTransform() };
+  }
+  return {
+    ...element,
+    color: '#0f172a',
+    textAlign: 'start',
+    transform: identityTransform(),
+  };
+}
+
+function identityTransform() {
+  return { a: 1, b: 0, c: 0, d: 1, e: 0, f: 0 };
+}
+
+async function legacyV1Snapshot(revision: number): Promise<SnapshotRecordV1> {
+  const document = {
+    schemaVersion: 1,
+    documentId: 'doc-1',
+    revision,
+    rootOrder: ['rect-1', 'stroke-1', 'text-1'],
+    elements: {
+      'rect-1': {
+        kind: 'rect',
+        id: 'rect-1',
+        x: 24,
+        y: 40,
+        width: 160,
+        height: 96,
+      },
+      'stroke-1': {
+        kind: 'stroke',
+        id: 'stroke-1',
+        points: [
+          { x: 8, y: 12 },
+          { x: 24, y: 28 },
+        ],
+        strokeWidth: 3,
+      },
+      'text-1': {
+        kind: 'text',
+        id: 'text-1',
+        x: 40,
+        y: 52,
+        text: 'NodeInk',
+        fontFamily: 'Noto Sans SC Variable',
+        fontSize: 24,
+        fontWeight: 400,
+        maxWidth: null,
+        fontFingerprint: 'font-ready-v1',
+      },
+    },
+  } satisfies LegacyDocumentFixture;
+  const payload = new TextEncoder().encode(JSON.stringify(document));
+  return {
+    snapshotKey: `doc-1@${revision}`,
+    documentId: document.documentId,
+    revision,
+    schemaVersion: 1,
     engineAlgorithmVersion: 'nodeink-scene-v1',
     payload,
     integrity: { algorithm: 'sha-256', digest: await testDigest(payload) },

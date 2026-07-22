@@ -34,9 +34,14 @@ describe('NodeInkEditor', () => {
     expect(target.querySelector('[data-nodeink-host="react"]')).not.toBeNull();
     expect(target.querySelector('.nodeink-host-badge')?.textContent).toBe('React adapter');
     expect(controller.mountTarget?.className).toBe('nodeink-canvas');
+    expect(button(target, 'Select').ariaPressed).toBe('true');
+    expect(button(target, 'Draw').ariaPressed).toBe('false');
+    expect(button(target, 'Text').ariaPressed).toBe('false');
     expect(button(target, 'Rectangle').disabled).toBe(false);
     expect(button(target, 'Move').disabled).toBe(true);
     expect(button(target, 'Delete').disabled).toBe(true);
+    expect(button(target, 'Clean').ariaPressed).toBe('true');
+    expect(button(target, 'Sketch').ariaPressed).toBe('false');
     expect(button(target, '100%').title).toBe('回正并适应全部内容');
     expect(button(target, '100%').ariaLabel).toBe('回正并适应全部内容，当前 100%');
 
@@ -44,16 +49,33 @@ describe('NodeInkEditor', () => {
       controller.setSnapshot({
         ...controller.getSnapshot(),
         activeElementId: 'rect-1',
+        selectedElementIds: ['rect-1'],
+        primaryElementId: 'rect-1',
         canUndo: true,
         canRedo: true,
         errorMessage: 'recoverable engine error',
       });
     });
-    for (const label of ['Rectangle', 'Move', 'Delete', 'Undo', 'Redo', '−', '100%', '+']) {
+    for (const label of [
+      'Select',
+      'Draw',
+      'Text',
+      'Rectangle',
+      'Move',
+      'Delete',
+      'Undo',
+      'Redo',
+      '−',
+      '100%',
+      '+',
+    ]) {
       await act(async () => button(target, label).click());
     }
 
     expect(controller.actions.map((action) => action.type)).toEqual([
+      'set_tool',
+      'set_tool',
+      'set_tool',
       'create_rectangle',
       'move_active',
       'delete_selection',
@@ -66,6 +88,183 @@ describe('NodeInkEditor', () => {
     expect(target.querySelector('[role="alert"]')?.textContent).toContain(
       'recoverable engine error',
     );
+  });
+
+  it('renders and dispatches Phase 1B selection actions with shared availability rules', async () => {
+    const controller = new StubController();
+    target = document.createElement('div');
+    root = createRoot(target);
+    await act(async () => root?.render(<NodeInkEditor controller={controller} />));
+
+    const actions = selectionActions(target);
+    expect(target.querySelector('.nodeink-kicker')?.textContent).toBe('NodeInk · Phase 1B');
+    expect(target.querySelector('.nodeink-status')?.textContent).toContain('No selection');
+    expect(button(actions, 'Copy').disabled).toBe(true);
+    expect(button(actions, 'Cut').disabled).toBe(true);
+    expect(button(actions, 'Paste').disabled).toBe(false);
+    expect(button(actions, 'Group').disabled).toBe(true);
+    expect(button(actions, 'Ungroup').disabled).toBe(true);
+    expect(button(actions, 'Front').disabled).toBe(true);
+    expect(button(actions, 'Left').disabled).toBe(true);
+
+    await act(async () => {
+      controller.setSnapshot({
+        ...controller.getSnapshot(),
+        activeElementId: 'rect-1',
+        selectedElementIds: ['rect-1'],
+        primaryElementId: 'rect-1',
+      });
+    });
+    expect(target.querySelector('.nodeink-status')?.textContent).toContain('1 selected');
+    expect(button(actions, 'Copy').disabled).toBe(false);
+    expect(button(actions, 'Ungroup').disabled).toBe(false);
+    expect(button(actions, 'Front').disabled).toBe(false);
+    expect(button(actions, 'Group').disabled).toBe(true);
+    expect(button(actions, 'Left').disabled).toBe(true);
+
+    await act(async () => {
+      controller.setSnapshot({
+        ...controller.getSnapshot(),
+        activeElementId: 'rect-2',
+        selectedElementIds: ['rect-1', 'rect-2'],
+        primaryElementId: 'rect-2',
+      });
+    });
+    expect(target.querySelector('.nodeink-status')?.textContent).toContain('2 selected');
+    expect(button(actions, 'Group').disabled).toBe(false);
+    expect(button(actions, 'Left').disabled).toBe(false);
+
+    for (const label of [
+      'Group',
+      'Ungroup',
+      'Copy',
+      'Cut',
+      'Paste',
+      'Front',
+      'Forward',
+      'Backward',
+      'Back',
+      'Left',
+      'Center',
+      'Right',
+      'Top',
+      'Middle',
+      'Bottom',
+    ]) {
+      await act(async () => button(actions, label).click());
+    }
+
+    expect(controller.actions).toEqual([
+      { type: 'group' },
+      { type: 'ungroup' },
+      { type: 'copy' },
+      { type: 'cut' },
+      { type: 'paste' },
+      { type: 'reorder', placement: 'front' },
+      { type: 'reorder', placement: 'forward' },
+      { type: 'reorder', placement: 'backward' },
+      { type: 'reorder', placement: 'back' },
+      { type: 'align', alignment: 'left' },
+      { type: 'align', alignment: 'center' },
+      { type: 'align', alignment: 'right' },
+      { type: 'align', alignment: 'top' },
+      { type: 'align', alignment: 'middle' },
+      { type: 'align', alignment: 'bottom' },
+    ]);
+
+    await act(async () => {
+      controller.setSnapshot({
+        ...controller.getSnapshot(),
+        documentAccess: 'readonly',
+      });
+    });
+    for (const action of actions.querySelectorAll('button')) {
+      expect(action.disabled).toBe(true);
+    }
+  });
+
+  it('dispatches rendering profiles and contextual selection styles', async () => {
+    const controller = new StubController();
+    target = document.createElement('div');
+    root = createRoot(target);
+    await act(async () => root?.render(<NodeInkEditor controller={controller} />));
+
+    expect(target.querySelector('[aria-label="Selection style"]')).toBeNull();
+    await act(async () => button(target, 'Sketch').click());
+    expect(controller.actions.at(-1)).toEqual({
+      type: 'set_render_profile',
+      profile: 'sketch',
+    });
+
+    await act(async () => {
+      controller.setSnapshot({
+        ...controller.getSnapshot(),
+        activeElementId: 'rect-1',
+        renderProfile: {
+          kind: 'sketch',
+          version: 1,
+          seed: 1_313_817_669,
+          roughness: 1.2,
+          bowing: 0.8,
+          fillStyle: 'hachure',
+        },
+        selectionStyle: {
+          kind: 'rect',
+          fill: { kind: 'solid', color: '#d1fae5' },
+          stroke: '#047857',
+          strokeWidth: 2,
+        },
+      });
+    });
+
+    expect(button(target, 'Clean').ariaPressed).toBe('false');
+    expect(button(target, 'Sketch').ariaPressed).toBe('true');
+    expect(target.querySelector('[aria-label="Selection style"]')).not.toBeNull();
+    expect(labelledButton(target, 'Fill Mint').ariaPressed).toBe('true');
+    expect(labelledButton(target, 'Fill Blue').ariaPressed).toBe('false');
+    expect(labelledButton(target, 'Stroke Emerald').ariaPressed).toBe('true');
+    expect(button(target, '2px').ariaPressed).toBe('true');
+
+    await act(async () => labelledButton(target, 'Fill Blue').click());
+    await act(async () => labelledButton(target, 'Stroke Blue').click());
+    await act(async () => button(target, '4px').click());
+    expect(controller.actions.slice(-3)).toEqual([
+      {
+        type: 'update_selection_style',
+        patch: { kind: 'rect', fill: { kind: 'solid', color: '#dbeafe' } },
+      },
+      {
+        type: 'update_selection_style',
+        patch: { kind: 'rect', stroke: '#2563eb' },
+      },
+      {
+        type: 'update_selection_style',
+        patch: { kind: 'rect', strokeWidth: 4 },
+      },
+    ]);
+
+    await act(async () => {
+      controller.setSnapshot({
+        ...controller.getSnapshot(),
+        activeElementId: 'text-1',
+        selectionStyle: {
+          kind: 'text',
+          color: '#2563eb',
+          fontSize: 24,
+          fontWeight: 400,
+          textAlign: 'center',
+        },
+      });
+    });
+
+    expect(labelledButton(target, 'Color Blue').ariaPressed).toBe('true');
+    expect(styleButton(target, '24').ariaPressed).toBe('true');
+    expect(styleButton(target, 'Center').ariaPressed).toBe('true');
+    await act(async () => styleButton(target, 'Right').click());
+    expect(controller.actions.at(-1)).toEqual({
+      type: 'update_selection_style',
+      patch: { kind: 'text', textAlign: 'end' },
+    });
   });
 
   it('uses a custom host label and absorbs mount rejection', async () => {
@@ -124,6 +323,9 @@ describe('NodeInkEditor', () => {
     });
     expect(target.querySelector('[role="status"]')?.textContent).toContain('上次稳定版本');
     expect(button(target, 'Rectangle').disabled).toBe(true);
+    expect(button(target, 'Select').disabled).toBe(true);
+    expect(button(target, 'Draw').disabled).toBe(true);
+    expect(button(target, 'Text').disabled).toBe(true);
     expect(button(target, '100%').disabled).toBe(false);
   });
 
@@ -157,7 +359,16 @@ class StubController implements EditorWebControllerV1 {
     sceneRevision: 0,
     elementCount: 0,
     activeElementId: null,
+    selectedElementIds: [],
+    primaryElementId: null,
+    activeTool: 'select',
     selectionBounds: null,
+    selectionOrientedBounds: null,
+    selectionHandles: [],
+    selectionMarquee: null,
+    alignmentGuides: [],
+    selectionStyle: null,
+    renderProfile: { kind: 'clean', version: 1 },
     canUndo: false,
     canRedo: false,
     errorMessage: null,
@@ -218,4 +429,30 @@ function button(target: HTMLElement, label: string): HTMLButtonElement {
     throw new Error(`button ${label} was not rendered`);
   }
   return match;
+}
+
+function labelledButton(target: HTMLElement, label: string): HTMLButtonElement {
+  const match = [...target.querySelectorAll('button')].find(
+    (candidate) => candidate.ariaLabel === label,
+  );
+  if (!match) {
+    throw new Error(`button labelled ${label} was not rendered`);
+  }
+  return match;
+}
+
+function selectionActions(target: HTMLElement): HTMLElement {
+  const actions = target.querySelector<HTMLElement>('[aria-label="Selection actions"]');
+  if (!actions) {
+    throw new Error('selection actions were not rendered');
+  }
+  return actions;
+}
+
+function styleButton(target: HTMLElement, label: string): HTMLButtonElement {
+  const panel = target.querySelector<HTMLElement>('[aria-label="Selection style"]');
+  if (!panel) {
+    throw new Error('selection style was not rendered');
+  }
+  return button(panel, label);
 }

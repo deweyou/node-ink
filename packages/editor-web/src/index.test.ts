@@ -13,6 +13,7 @@ import type {
   PointerUpdateV1,
   RendererV1,
   RenderProfileV1,
+  SelectionStyleV1,
   SceneBenchmarkPayloadV1,
   ScenePatchV1,
   SceneResolutionV1,
@@ -20,6 +21,8 @@ import type {
   StrokeInputBatchV1,
   StrokeTransportV1,
   StrokeUpdateV1,
+  TextElementV1,
+  TextMeasureRequestV1,
   TextFixtureResolutionV1,
   TextMetricsSnapshotV1,
   TextRunV1,
@@ -27,6 +30,7 @@ import type {
 
 import { EditorWebController, getEditorCameraPresentation } from './index';
 import type {
+  ClipboardPortV1,
   EditorCameraPersistencePortV1,
   EditorPersistencePortV1,
   EditorPersistenceSnapshotV1,
@@ -275,6 +279,137 @@ describe('EditorWebController', () => {
     expect(renderer.snapshots.at(-1)?.documentRevision).toBe(2);
   });
 
+  it('commits rectangle style and Render Profile changes as one revision each', async () => {
+    const engine = new StubEngine();
+    const persistence = new StubPersistence();
+    const ids = ['create-command', 'rect-1', 'style-command', 'profile-command'];
+    const controller = new EditorWebController({
+      engine,
+      renderer: new StubRenderer(),
+      persistence,
+      createId: () => ids.shift() ?? 'fallback',
+    });
+    await controller.mount(document.createElement('div'));
+
+    await controller.dispatch({ type: 'create_rectangle' });
+    const styled = await controller.dispatch({
+      type: 'update_selection_style',
+      patch: { kind: 'rect', fill: { kind: 'solid', color: '#dbeafe' } },
+    });
+    const profiled = await controller.dispatch({ type: 'set_render_profile', profile: 'sketch' });
+
+    expect(styled.snapshot).toMatchObject({
+      documentRevision: 2,
+      sceneRevision: 2,
+      selectionStyle: {
+        kind: 'rect',
+        fill: { kind: 'solid', color: '#dbeafe' },
+      },
+    });
+    expect(profiled.snapshot).toMatchObject({
+      documentRevision: 3,
+      sceneRevision: 3,
+      renderProfile: {
+        kind: 'sketch',
+        version: 1,
+        seed: 1_313_817_669,
+        fillStyle: 'hachure',
+      },
+    });
+    expect(engine.commands.slice(1).map((command) => command.command)).toEqual([
+      {
+        type: 'update_element_style',
+        elementId: 'rect-1',
+        patch: { kind: 'rect', fill: { kind: 'solid', color: '#dbeafe' } },
+      },
+      {
+        type: 'set_render_profile',
+        renderProfile: {
+          kind: 'sketch',
+          version: 1,
+          seed: 1_313_817_669,
+          roughness: 1.2,
+          bowing: 0.8,
+          fillStyle: 'hachure',
+        },
+      },
+    ]);
+    expect(persistence.committedRevisions).toEqual([1, 2, 3]);
+  });
+
+  it('keeps Document revision stable for same-value style and profile commands', async () => {
+    const engine = new StubEngine();
+    const persistence = new StubPersistence();
+    const ids = ['create-command', 'rect-1', 'style-command', 'profile-command'];
+    const controller = new EditorWebController({
+      engine,
+      renderer: new StubRenderer(),
+      persistence,
+      createId: () => ids.shift() ?? 'fallback',
+    });
+    await controller.mount(document.createElement('div'));
+    await controller.dispatch({ type: 'create_rectangle' });
+
+    const styled = await controller.dispatch({
+      type: 'update_selection_style',
+      patch: { kind: 'rect', fill: { kind: 'solid', color: '#d1fae5' } },
+    });
+    const profiled = await controller.dispatch({ type: 'set_render_profile', profile: 'clean' });
+
+    expect(styled.snapshot).toMatchObject({ documentRevision: 1, sceneRevision: 1 });
+    expect(profiled.snapshot).toMatchObject({ documentRevision: 1, sceneRevision: 1 });
+    expect(persistence.committedRevisions).toEqual([1]);
+  });
+
+  it('commits text font size once and resolves metrics with a scene-only revision', async () => {
+    const engine = new StubEngine();
+    engine.textEditElement = textElement('text-1', 'NodeInk');
+    const persistence = new StubPersistence();
+    const measure = vi.fn((request: TextMeasureRequestV1) => ({
+      snapshot: {
+        fontFingerprint: request.fontFingerprint,
+        metrics: request.runs.map((run) => ({
+          key: run.key,
+          width: 160,
+          height: 40,
+          baseline: 28,
+          lineBreaks: [],
+        })),
+      },
+    }));
+    const controller = new EditorWebController({
+      engine,
+      renderer: new StubRenderer(),
+      persistence,
+      textMetrics: { fingerprint: () => 'font-ready-v1', measure },
+      createId: () => 'style-command',
+    });
+    await controller.mount(document.createElement('div'));
+    await controller.dispatch({ type: 'begin_text_edit', point: { x: 40, y: 52 } });
+    await controller.dispatch({ type: 'cancel_text_edit' });
+
+    const result = await controller.dispatch({
+      type: 'update_selection_style',
+      patch: { kind: 'text', fontSize: 32 },
+    });
+
+    expect(engine.commands).toHaveLength(1);
+    expect(engine.commands[0]?.command).toEqual({
+      type: 'update_element_style',
+      elementId: 'text-1',
+      patch: { kind: 'text', fontSize: 32 },
+    });
+    expect(measure).toHaveBeenCalledOnce();
+    expect(measure.mock.calls[0]?.[0].runs[0]?.fontSize).toBe(32);
+    expect(engine.providedTextMetrics).toHaveLength(1);
+    expect(result.snapshot).toMatchObject({
+      documentRevision: 1,
+      sceneRevision: 2,
+      selectionStyle: { kind: 'text', fontSize: 32 },
+    });
+    expect(persistence.committedRevisions).toEqual([1]);
+  });
+
   it('clears and deletes the Rust-owned selection through shared editor actions', async () => {
     const engine = new StubEngine();
     const renderer = new StubRenderer();
@@ -293,13 +428,13 @@ describe('EditorWebController', () => {
       activeElementId: 'rect-1',
       selectionBounds: { x: 80, y: 72, width: 176, height: 104 },
     });
-    expect(renderer.overlays.at(-1)).toEqual({
+    expect(renderer.overlays.at(-1)).toMatchObject({
       selectionBounds: { x: 80, y: 72, width: 176, height: 104 },
       selectionPaddingWorld: 6,
     });
 
     await controller.dispatch({ type: 'zoom_in' });
-    expect(renderer.overlays.at(-1)).toEqual({
+    expect(renderer.overlays.at(-1)).toMatchObject({
       selectionBounds: { x: 80, y: 72, width: 176, height: 104 },
       selectionPaddingWorld: 4,
     });
@@ -311,7 +446,7 @@ describe('EditorWebController', () => {
       selectionBounds: null,
     });
 
-    await engine.setSelection('rect-1');
+    await engine.setSelection(['rect-1'], 'rect-1');
     await controller.dispatch({ type: 'pointer_events', events: [pointerEvent('down', 1)] });
     const deleted = await controller.dispatch({ type: 'delete_selection' });
     expect(deleted.snapshot).toMatchObject({
@@ -324,6 +459,365 @@ describe('EditorWebController', () => {
       type: 'delete_elements',
       elementIds: ['rect-1'],
     });
+  });
+
+  it('projects Rust multi-selection state and every overlay primitive into the shared snapshot', async () => {
+    const engine = new StubEngine('rect-1');
+    engine.selectionHandles = [{ id: 'north_west', kind: 'resize', position: { x: 40, y: 52 } }];
+    engine.selectionMarquee = {
+      bounds: { x: 10, y: 12, width: 80, height: 60 },
+      mode: 'add',
+    };
+    engine.selectionGuides = [{ axis: 'x', position: 80, start: 0, end: 300 }];
+    await engine.setSelection(['rect-1', 'rect-2'], 'rect-2');
+    const renderer = new StubRenderer();
+    const controller = new EditorWebController({ engine, renderer });
+
+    await controller.mount(document.createElement('div'));
+
+    expect(controller.getSnapshot()).toMatchObject({
+      activeElementId: 'rect-2',
+      selectedElementIds: ['rect-1', 'rect-2'],
+      primaryElementId: 'rect-2',
+      selectionBounds: { x: 40, y: 52, width: 300, height: 180 },
+      selectionOrientedBounds: {
+        center: { x: 190, y: 142 },
+        width: 300,
+        height: 180,
+        rotation: 0,
+      },
+      selectionHandles: engine.selectionHandles,
+      selectionMarquee: engine.selectionMarquee,
+      alignmentGuides: engine.selectionGuides,
+    });
+    expect(renderer.overlays.at(-1)).toMatchObject({
+      selectionOrientedBounds: { center: { x: 190, y: 142 } },
+      selectionHandles: engine.selectionHandles,
+      marquee: engine.selectionMarquee,
+      guides: engine.selectionGuides,
+    });
+  });
+
+  it('dispatches group, ungroup, reorder, and align as protocol commands over the full selection', async () => {
+    const engine = new StubEngine('rect-1');
+    await engine.setSelection(['rect-1', 'rect-2'], 'rect-2');
+    const ids = ['group-command', 'group-1', 'ungroup-command', 'reorder-command', 'align-command'];
+    const controller = new EditorWebController({
+      engine,
+      renderer: new StubRenderer(),
+      createId: () => ids.shift() ?? 'fallback',
+    });
+    await controller.mount(document.createElement('div'));
+
+    await controller.dispatch({ type: 'group' });
+    await controller.dispatch({ type: 'ungroup' });
+    await controller.dispatch({ type: 'reorder', placement: 'front' });
+    await controller.dispatch({ type: 'align', alignment: 'middle' });
+
+    expect(engine.commands.map((envelope) => envelope.command)).toEqual([
+      { type: 'group_elements', groupId: 'group-1', elementIds: ['rect-1', 'rect-2'] },
+      { type: 'ungroup_elements', groupId: 'rect-2' },
+      { type: 'reorder_elements', elementIds: ['rect-1', 'rect-2'], placement: 'front' },
+      { type: 'align_elements', elementIds: ['rect-1', 'rect-2'], alignment: 'middle' },
+    ]);
+  });
+
+  it('copies without a commit and cuts the complete selection with one delete command', async () => {
+    const engine = new StubEngine('rect-1');
+    await engine.setSelection(['rect-1', 'rect-2'], 'rect-2');
+    const clipboard = new StubClipboard();
+    const controller = new EditorWebController({
+      engine,
+      renderer: new StubRenderer(),
+      clipboard,
+      createId: () => 'cut-command',
+    });
+    await controller.mount(document.createElement('div'));
+
+    await controller.dispatch({ type: 'copy' });
+    expect(engine.copyCalls).toBe(1);
+    expect(engine.commands).toHaveLength(0);
+    expect(clipboard.writes).toEqual([
+      '{"version":1,"sourceDocumentId":"doc-1","rootElementIds":[],"elements":{}}',
+    ]);
+
+    await controller.dispatch({ type: 'cut' });
+    expect(engine.copyCalls).toBe(2);
+    expect(engine.commands).toHaveLength(1);
+    expect(engine.commands[0]?.command).toEqual({
+      type: 'delete_elements',
+      elementIds: ['rect-1', 'rect-2'],
+    });
+  });
+
+  it('pastes opaque clipboard data with a 24 screen-pixel cascade at the current zoom', async () => {
+    const engine = new StubEngine();
+    const clipboard = new StubClipboard('{"version":1,"rootElementIds":[],"elements":{}}');
+    const ids = ['paste-command-1', 'paste-command-2'];
+    const controller = new EditorWebController({
+      engine,
+      renderer: new StubRenderer(),
+      clipboard,
+      cameraPersistence: new StubCameraPersistence({ x: 0, y: 0, zoom: 2 }),
+      createId: () => ids.shift() ?? 'fallback',
+    });
+    await controller.mount(document.createElement('div'));
+
+    await controller.dispatch({ type: 'paste' });
+    await controller.dispatch({ type: 'paste' });
+
+    expect(engine.commands.map((envelope) => envelope.command)).toEqual([
+      {
+        type: 'paste_clipboard',
+        payload: '{"version":1,"rootElementIds":[],"elements":{}}',
+        idPrefix: 'paste-command-1-paste',
+        offset: { x: 12, y: 12 },
+      },
+      {
+        type: 'paste_clipboard',
+        payload: '{"version":1,"rootElementIds":[],"elements":{}}',
+        idPrefix: 'paste-command-2-paste',
+        offset: { x: 24, y: 24 },
+      },
+    ]);
+  });
+
+  it('selects all unique semantic elements represented by the current scene', async () => {
+    const engine = new StubEngine('rect-1');
+    const controller = new EditorWebController({ engine, renderer: new StubRenderer() });
+    await controller.mount(document.createElement('div'));
+
+    const result = await controller.dispatch({ type: 'select_all' });
+
+    expect(result.snapshot).toMatchObject({
+      selectedElementIds: ['rect-1'],
+      primaryElementId: 'rect-1',
+    });
+  });
+
+  it('routes canvas input through the Rust-owned active tool and returns to Select for shapes', async () => {
+    const engine = new StubEngine();
+    const controller = new EditorWebController({
+      engine,
+      renderer: new StubRenderer(),
+      createId: (() => {
+        const ids = [
+          'tool-command',
+          'stroke-1',
+          'move-command',
+          'up-command',
+          'rect-command',
+          'rect-1',
+        ];
+        return () => ids.shift() ?? 'fallback';
+      })(),
+    });
+    const target = document.createElement('div');
+    await controller.mount(target);
+
+    await controller.dispatch({ type: 'set_tool', tool: 'freehand' });
+    expect(controller.getSnapshot()).toMatchObject({
+      activeTool: 'freehand',
+      activeElementId: null,
+    });
+    expect(target.dataset.activeTool).toBe('freehand');
+
+    await controller.dispatch({ type: 'pointer_events', events: [pointerEvent('down', 1)] });
+    await controller.dispatch({
+      type: 'pointer_events',
+      events: [pointerEvent('move', 2), pointerEvent('move', 3)],
+    });
+    await controller.dispatch({ type: 'pointer_events', events: [pointerEvent('up', 4)] });
+
+    expect(engine.strokeBatches).toMatchObject([
+      { phase: 'down', sequenceStart: 1, strokeId: 'stroke-1' },
+      {
+        phase: 'move',
+        sequenceStart: 2,
+        strokeId: null,
+        points: [
+          { x: 10, y: 20 },
+          { x: 10, y: 20 },
+        ],
+      },
+      { phase: 'up', sequenceStart: 4, strokeId: null },
+    ]);
+    expect(engine.pointerBatches).toHaveLength(0);
+
+    await controller.dispatch({ type: 'create_rectangle' });
+    expect(controller.getSnapshot().activeTool).toBe('select');
+    expect(engine.commands.at(-1)?.command.type).toBe('create_rectangle');
+  });
+
+  it('uses Select pointer routing and Escape tool semantics', async () => {
+    const engine = new StubEngine('rect-1');
+    await engine.setSelection(['rect-1'], 'rect-1');
+    const controller = new EditorWebController({ engine, renderer: new StubRenderer() });
+    await controller.mount(document.createElement('div'));
+
+    await controller.dispatch({ type: 'pointer_events', events: [pointerEvent('down', 1)] });
+    expect(engine.pointerBatches).toHaveLength(1);
+
+    await controller.dispatch({ type: 'set_tool', tool: 'freehand' });
+    await controller.dispatch({ type: 'escape' });
+    expect(controller.getSnapshot().activeTool).toBe('select');
+  });
+
+  it('creates fixed-font multiline text after IME composition and measures it without another document commit', async () => {
+    const engine = new StubEngine();
+    const persistence = new StubPersistence();
+    const measure = vi.fn((request: TextMeasureRequestV1) => ({
+      snapshot: {
+        fontFingerprint: request.fontFingerprint,
+        metrics: request.runs.map((run) => ({
+          key: run.key,
+          width: 144,
+          height: 60,
+          baseline: 20,
+          lineBreaks: [2],
+        })),
+      },
+    }));
+    const ids = ['unused-pointer', 'create-command', 'text-1'];
+    const controller = new EditorWebController({
+      engine,
+      renderer: new StubRenderer(),
+      persistence,
+      textMetrics: { fingerprint: () => 'font-ready-v1', measure },
+      createId: () => ids.shift() ?? 'fallback',
+    });
+    const target = document.createElement('div');
+    await controller.mount(target);
+    await controller.dispatch({ type: 'set_tool', tool: 'text' });
+    await controller.dispatch({ type: 'pointer_events', events: [pointerEvent('down', 1)] });
+    const input = target.querySelector('textarea');
+    expect(input).not.toBeNull();
+
+    input?.dispatchEvent(new CompositionEvent('compositionstart'));
+    if (input) {
+      input.value = '你好';
+    }
+    input?.dispatchEvent(new InputEvent('input', { bubbles: true, isComposing: true }));
+    input?.dispatchEvent(new CompositionEvent('compositionend'));
+    expect(engine.commands).toHaveLength(0);
+
+    if (input) {
+      input.value = '你好\nNodeInk';
+    }
+    input?.dispatchEvent(new InputEvent('input', { bubbles: true }));
+    input?.dispatchEvent(new FocusEvent('blur'));
+    await vi.waitFor(() => expect(engine.commands).toHaveLength(1));
+
+    expect(engine.commands[0]).toMatchObject({
+      commandId: 'create-command',
+      expectedRevision: 0,
+      command: {
+        type: 'create_text',
+        text: {
+          id: 'text-1',
+          text: '你好\nNodeInk',
+          fontFamily: 'Noto Sans SC Variable',
+          fontSize: 24,
+          fontWeight: 400,
+          maxWidth: null,
+          fontFingerprint: 'font-ready-v1',
+        },
+      },
+    });
+    expect(measure).toHaveBeenCalledOnce();
+    expect(engine.providedTextMetrics).toHaveLength(1);
+    expect(persistence.committedRevisions).toEqual([1]);
+    expect(controller.getSnapshot()).toMatchObject({
+      documentRevision: 1,
+      sceneRevision: 2,
+      elementCount: 1,
+    });
+  });
+
+  it('edits existing text on Select double-click and deletes it when cleared', async () => {
+    const engine = new StubEngine();
+    engine.textEditElement = textElement('text-1', '旧文本');
+    const ids = ['update-command', 'delete-command'];
+    const controller = new EditorWebController({
+      engine,
+      renderer: new StubRenderer(),
+      createId: () => ids.shift() ?? 'fallback',
+    });
+    const target = document.createElement('div');
+    target.getBoundingClientRect = vi.fn(
+      () => ({ width: 400, height: 300, left: 0, top: 0 }) as DOMRect,
+    );
+    await controller.mount(target);
+
+    target.dispatchEvent(
+      new MouseEvent('dblclick', {
+        bubbles: true,
+        cancelable: true,
+        button: 0,
+        clientX: 40,
+        clientY: 52,
+      }),
+    );
+    const firstInput = await vi.waitFor(() => {
+      const candidate = target.querySelector('textarea');
+      expect(candidate).not.toBeNull();
+      return candidate as HTMLTextAreaElement;
+    });
+    firstInput.value = '新文本';
+    firstInput.dispatchEvent(new InputEvent('input', { bubbles: true }));
+    firstInput.dispatchEvent(
+      new KeyboardEvent('keydown', {
+        key: 'Enter',
+        metaKey: true,
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+    await vi.waitFor(() => expect(engine.commands).toHaveLength(1));
+    expect(engine.commands[0]?.command).toEqual({
+      type: 'update_text',
+      elementId: 'text-1',
+      patch: { text: '新文本' },
+    });
+
+    await controller.dispatch({ type: 'begin_text_edit', point: { x: 40, y: 52 } });
+    const secondInput = target.querySelector('textarea');
+    expect(secondInput).not.toBeNull();
+    if (secondInput) {
+      secondInput.value = '';
+      secondInput.dispatchEvent(new InputEvent('input', { bubbles: true }));
+      secondInput.dispatchEvent(new FocusEvent('blur'));
+    }
+    await vi.waitFor(() => expect(engine.commands).toHaveLength(2));
+    expect(engine.commands[1]?.command).toEqual({
+      type: 'delete_elements',
+      elementIds: ['text-1'],
+    });
+  });
+
+  it('cancels an empty text draft without creating history', async () => {
+    const engine = new StubEngine();
+    const controller = new EditorWebController({
+      engine,
+      renderer: new StubRenderer(),
+      createId: () => 'unused-pointer',
+    });
+    const target = document.createElement('div');
+    await controller.mount(target);
+    await controller.dispatch({ type: 'set_tool', tool: 'text' });
+    await controller.dispatch({ type: 'pointer_events', events: [pointerEvent('down', 1)] });
+
+    target.querySelector('textarea')?.dispatchEvent(
+      new KeyboardEvent('keydown', {
+        key: 'Escape',
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+
+    expect(target.querySelector('textarea')).toBeNull();
+    expect(engine.commands).toHaveLength(0);
+    expect(controller.getSnapshot().documentRevision).toBe(0);
   });
 
   it('supports explicit geometry, history, subscriptions, and idempotent disposal', async () => {
@@ -494,6 +988,8 @@ describe('EditorWebController', () => {
       'pointermove',
       'pointerup',
       'pointercancel',
+      'lostpointercapture',
+      'dblclick',
     ]);
     expect(firstRemove.mock.calls.map(([type]) => type)).toEqual([
       'pointerdown',
@@ -505,8 +1001,10 @@ describe('EditorWebController', () => {
       'pointermove',
       'pointerup',
       'pointercancel',
+      'lostpointercapture',
+      'dblclick',
     ]);
-    expect(secondAdd).toHaveBeenCalledTimes(9);
+    expect(secondAdd).toHaveBeenCalledTimes(11);
     expect(secondRemove).not.toHaveBeenCalled();
     expect(renderer.mountCalls).toBe(2);
 
@@ -518,6 +1016,8 @@ describe('EditorWebController', () => {
       'pointermove',
       'pointerup',
       'pointercancel',
+      'lostpointercapture',
+      'dblclick',
       'pointerdown',
       'pointermove',
       'pointerup',
@@ -561,6 +1061,98 @@ describe('EditorWebController', () => {
     ownerDocument.dispatchEvent(keyboardEvent({ key: 'z', metaKey: true }));
     await Promise.resolve();
     expect(engine.undoCalls).toBe(1);
+  });
+
+  it('routes V2 selection shortcuts through the same controller action path', async () => {
+    const ownerDocument = document.implementation.createHTMLDocument();
+    const target = ownerDocument.createElement('div');
+    ownerDocument.body.append(target);
+    const engine = new StubEngine('rect-1');
+    await engine.setSelection(['rect-1', 'rect-2'], 'rect-2');
+    const ids = ['group-command', 'group-1'];
+    const controller = new EditorWebController({
+      engine,
+      renderer: new StubRenderer(),
+      createId: () => ids.shift() ?? 'fallback',
+    });
+    await controller.mount(target);
+
+    const group = keyboardEvent({ key: 'g', ctrlKey: true });
+    ownerDocument.dispatchEvent(group);
+
+    await vi.waitFor(() => expect(engine.commands).toHaveLength(1));
+    expect(group.defaultPrevented).toBe(true);
+    expect(engine.commands[0]?.command).toEqual({
+      type: 'group_elements',
+      groupId: 'group-1',
+      elementIds: ['rect-1', 'rect-2'],
+    });
+    controller.dispose();
+  });
+
+  it('routes the complete reachable V2 shortcut set without bypassing controller actions', async () => {
+    const ownerDocument = document.implementation.createHTMLDocument();
+    const target = ownerDocument.createElement('div');
+    ownerDocument.body.append(target);
+    const engine = new StubEngine('rect-1');
+    await engine.setSelection(['rect-1', 'rect-2'], 'rect-2');
+    const clipboard = new StubClipboard('{"version":1,"rootElementIds":[],"elements":{}}');
+    const ids = [
+      'group-command',
+      'group-1',
+      'ungroup-command',
+      'forward-command',
+      'backward-command',
+      'front-command',
+      'back-command',
+      'paste-command',
+      'cut-command',
+    ];
+    const controller = new EditorWebController({
+      engine,
+      renderer: new StubRenderer(),
+      clipboard,
+      createId: () => ids.shift() ?? 'fallback',
+    });
+    await controller.mount(target);
+
+    const shortcuts = [
+      keyboardEvent({ key: 'g', ctrlKey: true }),
+      keyboardEvent({ key: 'g', ctrlKey: true, shiftKey: true }),
+      keyboardEvent({ key: ']' }),
+      keyboardEvent({ key: '[' }),
+      keyboardEvent({ key: ']', ctrlKey: true }),
+      keyboardEvent({ key: '[', ctrlKey: true }),
+      keyboardEvent({ key: 'a', ctrlKey: true }),
+      keyboardEvent({ key: 'c', ctrlKey: true }),
+      keyboardEvent({ key: 'v', ctrlKey: true }),
+      keyboardEvent({ key: 'x', ctrlKey: true }),
+    ];
+    for (const shortcut of shortcuts) {
+      ownerDocument.dispatchEvent(shortcut);
+      await vi.waitFor(() => expect(shortcut.defaultPrevented).toBe(true));
+    }
+
+    await vi.waitFor(() => expect(engine.commands).toHaveLength(8));
+    expect(engine.commands.map((envelope) => envelope.command.type)).toEqual([
+      'group_elements',
+      'ungroup_elements',
+      'reorder_elements',
+      'reorder_elements',
+      'reorder_elements',
+      'reorder_elements',
+      'paste_clipboard',
+      'delete_elements',
+    ]);
+    expect(engine.copyCalls).toBe(2);
+
+    for (const key of ['p', 't', 'v']) {
+      const shortcut = keyboardEvent({ key });
+      ownerDocument.dispatchEvent(shortcut);
+      await vi.waitFor(() => expect(shortcut.defaultPrevented).toBe(true));
+    }
+    expect(controller.getSnapshot().activeTool).toBe('select');
+    controller.dispose();
   });
 
   it('marks committed revisions dirty, follows autosave state, and retries failures', async () => {
@@ -712,6 +1304,15 @@ class StubPersistence implements EditorPersistencePortV1 {
 
 class StubEngine implements EnginePortV1 {
   readonly commands: CommandEnvelopeV1[] = [];
+  readonly pointerBatches: NormalizedPointerEventV1[][] = [];
+  readonly strokeBatches: StrokeInputBatchV1[] = [];
+  readonly providedTextMetrics: TextMetricsSnapshotV1[] = [];
+  copyCalls = 0;
+  selectionHandles: EditorOverlayV1['selectionHandles'] = [];
+  selectionMarquee: EditorOverlayV1['marquee'] = null;
+  selectionGuides: EditorOverlayV1['guides'] = [];
+  textMeasureRequest: TextMeasureRequestV1 | null = null;
+  textEditElement: TextElementV1 | null = null;
   currentError: unknown = null;
   executeError: unknown = null;
   undoCalls = 0;
@@ -727,8 +1328,19 @@ class StubEngine implements EnginePortV1 {
   cameraError: Error | null = null;
   #camera: CameraV1 = { x: 0, y: 0, zoom: 1 };
   #revision = 0;
+  #sceneRevision = 0;
   #rectangleId: string | null;
+  #rectangleStyle: Omit<Extract<SelectionStyleV1, { kind: 'rect' }>, 'kind'> = {
+    fill: { kind: 'solid' as const, color: '#d1fae5' },
+    stroke: '#047857',
+    strokeWidth: 2,
+  };
+  #renderProfile: RenderProfileV1 = { kind: 'clean', version: 1 };
+  #textElement: TextElementV1 | null = null;
+  #textMeasured = false;
+  #selectedElementIds: string[] = [];
   #selectedElementId: string | null = null;
+  #activeTool: 'select' | 'freehand' | 'text' = 'select';
   #canRedo = false;
 
   constructor(rectangleId: string | null = null) {
@@ -788,31 +1400,157 @@ class StubEngine implements EnginePortV1 {
       throw this.executeError;
     }
     this.commands.push(command);
-    this.#revision += 1;
-    this.#canRedo = false;
+    let changedElementIds: string[] = [];
+    let didChange = false;
     if (command.command.type === 'create_rectangle') {
       this.#rectangleId = command.command.rectangle.id;
       this.#selectedElementId = this.#rectangleId;
+      this.#selectedElementIds = [this.#rectangleId];
+      this.#rectangleStyle = {
+        fill: command.command.rectangle.fill,
+        stroke: command.command.rectangle.stroke,
+        strokeWidth: command.command.rectangle.strokeWidth,
+      };
+      changedElementIds = [command.command.rectangle.id];
+      didChange = true;
+    } else if (command.command.type === 'create_text') {
+      this.#textElement = command.command.text;
+      this.textEditElement = command.command.text;
+      this.#selectedElementId = command.command.text.id;
+      this.#selectedElementIds = [command.command.text.id];
+      this.requestTextMeasurement(command.command.text);
+      changedElementIds = [command.command.text.id];
+      didChange = true;
+    } else if (command.command.type === 'update_text') {
+      const current = this.textEditElement;
+      if (current && current.id === command.command.elementId) {
+        const updated = { ...current, ...command.command.patch };
+        if (!sameValue(current, updated)) {
+          this.#textElement = updated;
+          this.textEditElement = updated;
+          this.#selectedElementId = updated.id;
+          this.#selectedElementIds = [updated.id];
+          this.requestTextMeasurement(updated);
+          changedElementIds = [updated.id];
+          didChange = true;
+        }
+      }
     } else if (command.command.type === 'move_elements') {
       this.#selectedElementId = command.command.elementIds[0] ?? this.#selectedElementId;
+      this.#selectedElementIds = [...command.command.elementIds];
+      changedElementIds = [...command.command.elementIds];
+      didChange = command.command.elementIds.length > 0;
+    } else if (command.command.type === 'update_element_style') {
+      if (
+        command.command.elementId === this.#rectangleId &&
+        command.command.patch.kind === 'rect'
+      ) {
+        const nextStyle = { ...this.#rectangleStyle, ...command.command.patch };
+        delete (nextStyle as { kind?: unknown }).kind;
+        if (!sameValue(this.#rectangleStyle, nextStyle)) {
+          this.#rectangleStyle = nextStyle;
+          changedElementIds = [command.command.elementId];
+          didChange = true;
+        }
+      } else if (command.command.patch.kind === 'text') {
+        const current = this.#textElement ?? this.textEditElement;
+        if (current?.id === command.command.elementId) {
+          const { kind: _kind, ...patch } = command.command.patch;
+          const updated = { ...current, ...patch };
+          if (!sameValue(current, updated)) {
+            this.#textElement = updated;
+            this.textEditElement = updated;
+            this.#selectedElementId = updated.id;
+            this.#selectedElementIds = [updated.id];
+            if (
+              updated.fontSize !== current.fontSize ||
+              updated.fontWeight !== current.fontWeight
+            ) {
+              this.requestTextMeasurement(updated);
+            }
+            changedElementIds = [updated.id];
+            didChange = true;
+          }
+        }
+      }
+    } else if (command.command.type === 'set_render_profile') {
+      if (!sameValue(this.#renderProfile, command.command.renderProfile)) {
+        this.#renderProfile = command.command.renderProfile;
+        didChange = true;
+        changedElementIds = [
+          ...[this.#rectangleId, this.#textElement?.id].filter(
+            (elementId): elementId is string => elementId !== null && elementId !== undefined,
+          ),
+        ];
+      }
     } else if (command.command.type === 'delete_elements') {
-      if (this.#selectedElementId && command.command.elementIds.includes(this.#selectedElementId)) {
+      const deletedElementIds = command.command.elementIds;
+      const existingElementIds = [this.#rectangleId, this.#textElement?.id].filter(
+        (elementId): elementId is string => elementId !== null && elementId !== undefined,
+      );
+      changedElementIds = deletedElementIds.filter((elementId) =>
+        existingElementIds.includes(elementId),
+      );
+      didChange = changedElementIds.length > 0;
+      if (this.#selectedElementId && deletedElementIds.includes(this.#selectedElementId)) {
         this.#selectedElementId = null;
       }
-      if (this.#rectangleId && command.command.elementIds.includes(this.#rectangleId)) {
+      this.#selectedElementIds = this.#selectedElementIds.filter(
+        (elementId) => !deletedElementIds.includes(elementId),
+      );
+      if (this.#rectangleId && deletedElementIds.includes(this.#rectangleId)) {
         this.#rectangleId = null;
       }
+      if (this.#textElement && deletedElementIds.includes(this.#textElement.id)) {
+        this.#textElement = null;
+        this.textEditElement = null;
+        this.textMeasureRequest = null;
+        this.#textMeasured = false;
+      }
     }
-    return this.update(
-      command.command.type === 'delete_elements' ? [] : [this.#rectangleId ?? 'rect-1'],
-    );
+    if (didChange) {
+      this.#revision += 1;
+      this.#sceneRevision += 1;
+      this.#canRedo = false;
+    }
+    return this.update(changedElementIds);
   }
 
-  async setSelection(elementId: string | null): Promise<EngineUpdateV1> {
-    if (elementId && elementId !== this.#rectangleId) {
-      throw new Error(`element ${elementId} was not found`);
-    }
-    this.#selectedElementId = elementId;
+  async setActiveTool(tool: 'select' | 'freehand' | 'text'): Promise<EngineUpdateV1> {
+    this.#activeTool = tool;
+    this.#selectedElementId = null;
+    this.#selectedElementIds = [];
+    return this.update();
+  }
+
+  async setSelection(
+    elementIds: string[],
+    primaryElementId: string | null,
+  ): Promise<EngineUpdateV1> {
+    this.#selectedElementIds = [...elementIds];
+    this.#selectedElementId = primaryElementId;
+    return this.update();
+  }
+
+  async copySelection() {
+    this.copyCalls += 1;
+    return {
+      mime: 'application/x-nodeink-elements+json' as const,
+      data: '{"version":1,"sourceDocumentId":"doc-1","rootElementIds":[],"elements":{}}',
+    };
+  }
+
+  async beginTextEditAt(): Promise<{ element: TextElementV1 | null; update: EngineUpdateV1 }> {
+    this.#selectedElementId = this.textEditElement?.id ?? null;
+    this.#selectedElementIds = this.#selectedElementId ? [this.#selectedElementId] : [];
+    return { element: this.textEditElement, update: this.update() };
+  }
+
+  async provideTextMetrics(snapshot: TextMetricsSnapshotV1): Promise<EngineUpdateV1> {
+    this.providedTextMetrics.push(snapshot);
+    this.textMeasureRequest = null;
+    this.#textMeasured = true;
+    this.#sceneRevision += 1;
     return this.update();
   }
 
@@ -837,6 +1575,7 @@ class StubEngine implements EnginePortV1 {
     events: NormalizedPointerEventV1[],
     _commandId: string,
   ): Promise<PointerUpdateV1> {
+    this.pointerBatches.push(events);
     return {
       update: this.update(),
       processedEventCount: events.length,
@@ -850,6 +1589,7 @@ class StubEngine implements EnginePortV1 {
     _commandId: string,
     _transport: StrokeTransportV1,
   ): Promise<StrokeUpdateV1> {
+    this.strokeBatches.push(batch);
     return {
       update: this.update(),
       processedPointCount: batch.points.length,
@@ -863,7 +1603,7 @@ class StubEngine implements EnginePortV1 {
       engineAlgorithmVersion: 'nodeink-scene-v1',
       renderProfile: profile,
       canonicalHash: 'fnv1a64:test',
-      scene: this.update().scene,
+      scene: { ...this.update().scene, renderProfile: profile },
     };
   }
 
@@ -894,8 +1634,8 @@ class StubEngine implements EnginePortV1 {
       value: {
         protocolVersion: 1,
         documentRevision: this.#revision,
-        baseSceneRevision: this.#revision,
-        sceneRevision: this.#revision + 1,
+        baseSceneRevision: this.#sceneRevision,
+        sceneRevision: this.#sceneRevision + 1,
         addedNodes: {},
         updatedNodes: {},
         removedNodeIds: [],
@@ -911,12 +1651,13 @@ class StubEngine implements EnginePortV1 {
     return {
       result: {
         sourceSchemaVersion: 1,
-        targetSchemaVersion: 1,
-        migrated: false,
+        targetSchemaVersion: 3,
+        migrated: true,
         document: {
-          schemaVersion: 1 as const,
+          schemaVersion: 3 as const,
           documentId: 'doc-1',
           revision: 0,
+          renderProfile: { kind: 'clean' as const, version: 1 as const },
           rootOrder: [],
           elements: {},
         },
@@ -932,9 +1673,10 @@ class StubEngine implements EnginePortV1 {
 
   serializeDocument() {
     const document = {
-      schemaVersion: 1 as const,
+      schemaVersion: 3 as const,
       documentId: 'doc-1',
       revision: this.#revision,
+      renderProfile: this.#renderProfile,
       rootOrder: this.#rectangleId ? [this.#rectangleId] : [],
       elements: {},
     };
@@ -962,23 +1704,88 @@ class StubEngine implements EnginePortV1 {
   }
 
   private update(changedElementIds: string[] = []): EngineUpdateV1 {
-    const scene = stubScene(this.#revision, this.#rectangleId);
+    const scene = stubScene(
+      this.#revision,
+      this.#sceneRevision,
+      this.#rectangleId,
+      this.#textMeasured ? this.#textElement : null,
+      this.#rectangleStyle,
+      this.#renderProfile,
+    );
+    const selectedText = this.#textElement ?? this.textEditElement;
+    const selectionStyle: SelectionStyleV1 | null =
+      this.#selectedElementId === this.#rectangleId && this.#rectangleId
+        ? { kind: 'rect', ...this.#rectangleStyle }
+        : this.#selectedElementId === selectedText?.id
+          ? {
+              kind: 'text',
+              color: selectedText.color,
+              fontSize: selectedText.fontSize,
+              fontWeight: selectedText.fontWeight,
+              textAlign: selectedText.textAlign,
+            }
+          : null;
+    const selectionBounds =
+      this.#selectedElementIds.length > 1
+        ? { x: 40, y: 52, width: 300, height: 180 }
+        : this.#selectedElementId === this.#rectangleId && this.#rectangleId
+          ? { x: 80, y: 72, width: 176, height: 104 }
+          : this.#selectedElementId === selectedText?.id && this.#textMeasured
+            ? { x: 80, y: 72, width: 176, height: 104 }
+            : null;
     return {
+      activeTool: this.#activeTool,
+      textMeasureRequest: this.textMeasureRequest,
       operation: changedElementIds.length
         ? {
             commandId: `command-${this.#revision}`,
             previousRevision: this.#revision - 1,
             revision: this.#revision,
             changedElementIds,
-            sceneRevision: this.#revision,
+            sceneRevision: this.#sceneRevision,
           }
         : null,
       scene,
       history: { canUndo: this.#revision > 0, canRedo: this.#canRedo },
       selection: {
+        selectedElementIds: [...this.#selectedElementIds],
+        primaryElementId: this.#selectedElementId,
         selectedElementId: this.#selectedElementId,
-        bounds: this.#selectedElementId ? { x: 80, y: 72, width: 176, height: 104 } : null,
+        visualBounds: selectionBounds,
+        orientedBounds: selectionBounds
+          ? {
+              center: {
+                x: selectionBounds.x + selectionBounds.width / 2,
+                y: selectionBounds.y + selectionBounds.height / 2,
+              },
+              width: selectionBounds.width,
+              height: selectionBounds.height,
+              rotation: 0,
+            }
+          : null,
+        handles: [...this.selectionHandles],
+        marquee: this.selectionMarquee,
+        guides: [...this.selectionGuides],
+        style: selectionStyle,
       },
+    };
+  }
+
+  private requestTextMeasurement(element: TextElementV1): void {
+    this.#textMeasured = false;
+    this.textMeasureRequest = {
+      requestId: `measure-${this.#revision}`,
+      fontFingerprint: element.fontFingerprint,
+      runs: [
+        {
+          key: `${element.id}:run-${this.#revision}`,
+          text: element.text,
+          fontFamily: element.fontFamily,
+          fontSize: element.fontSize,
+          fontWeight: element.fontWeight,
+          maxWidth: element.maxWidth,
+        },
+      ],
     };
   }
 }
@@ -1043,9 +1850,35 @@ class StubCameraPersistence implements EditorCameraPersistencePortV1 {
   }
 }
 
-function stubScene(revision: number, rectangleId: string | null): SceneSnapshotV1 {
+class StubClipboard implements ClipboardPortV1 {
+  readonly writes: Array<string | Uint8Array> = [];
+
+  constructor(public payload: string | Uint8Array | null = null) {}
+
+  async read(): Promise<string | Uint8Array | null> {
+    return this.payload;
+  }
+
+  async write(payload: string | Uint8Array): Promise<void> {
+    this.payload = payload;
+    this.writes.push(payload);
+  }
+}
+
+function stubScene(
+  documentRevision: number,
+  sceneRevision: number,
+  rectangleId: string | null,
+  text: TextElementV1 | null = null,
+  rectangleStyle: Omit<Extract<SelectionStyleV1, { kind: 'rect' }>, 'kind'> = {
+    fill: { kind: 'solid', color: '#d1fae5' },
+    stroke: '#047857',
+    strokeWidth: 2,
+  },
+  renderProfile: RenderProfileV1 = { kind: 'clean', version: 1 },
+): SceneSnapshotV1 {
   const sceneNodeId = rectangleId ? `${rectangleId}:shape` : null;
-  const nodes =
+  const rectangleNodes =
     sceneNodeId && rectangleId
       ? {
           [sceneNodeId]: {
@@ -1056,20 +1889,78 @@ function stubScene(revision: number, rectangleId: string | null): SceneSnapshotV
             y: 72,
             width: 176,
             height: 104,
-            fill: '#d1fae5',
-            stroke: '#047857',
-            strokeWidth: 2,
+            fill:
+              rectangleStyle.fill.kind === 'solid' ? rectangleStyle.fill.color : ('none' as const),
+            stroke: rectangleStyle.stroke,
+            strokeWidth: rectangleStyle.strokeWidth,
+            transform: identityTransform(),
+          },
+        }
+      : {};
+  const textNodeId = text ? `${text.id}:text` : null;
+  const textNodes =
+    text && textNodeId
+      ? {
+          [textNodeId]: {
+            kind: 'text' as const,
+            id: textNodeId,
+            sourceElementId: text.id,
+            transform: identityTransform(),
+            runs: [
+              {
+                text: text.text,
+                x: text.x,
+                y: text.y + 20,
+                fontFamily: text.fontFamily,
+                fontSize: text.fontSize,
+                fontWeight: text.fontWeight,
+                fill: text.color,
+                textAnchor:
+                  text.textAlign === 'center'
+                    ? ('middle' as const)
+                    : text.textAlign === 'end'
+                      ? ('end' as const)
+                      : ('start' as const),
+              },
+            ],
           },
         }
       : {};
   return {
     protocolVersion: 1,
     documentId: 'doc-1',
-    documentRevision: revision,
-    sceneRevision: revision,
-    rootNodeIds: sceneNodeId ? [sceneNodeId] : [],
-    nodes,
+    documentRevision,
+    sceneRevision,
+    renderProfile,
+    rootNodeIds: [sceneNodeId, textNodeId].filter((id): id is string => id !== null),
+    nodes: { ...rectangleNodes, ...textNodes },
   };
+}
+
+function textElement(id: string, text: string): TextElementV1 {
+  return {
+    kind: 'text',
+    id,
+    x: 40,
+    y: 52,
+    text,
+    fontFamily: 'Noto Sans SC Variable',
+    fontSize: 24,
+    fontWeight: 400,
+    maxWidth: null,
+    fontFingerprint: 'font-ready-v1',
+    color: '#0f172a',
+    textAlign: 'start',
+    transform: identityTransform(),
+  };
+}
+
+function sameValue(first: unknown, second: unknown): boolean {
+  return JSON.stringify(first) === JSON.stringify(second);
+}
+
+function identityTransform() {
+  return { a: 1, b: 0, c: 0, d: 1, e: 0, f: 0 } as const;
 }
 
 function pointerEvent(
@@ -1081,16 +1972,20 @@ function pointerEvent(
     sequence,
     phase,
     point: { x: 10, y: 20 },
+    modifiers: { shift: false, alt: false, metaOrCtrl: false },
+    screenScale: 1,
   };
 }
 
 function keyboardEvent({
   key,
   metaKey = false,
+  ctrlKey = false,
   shiftKey = false,
 }: {
   key: string;
   metaKey?: boolean;
+  ctrlKey?: boolean;
   shiftKey?: boolean;
 }): KeyboardEvent {
   return new KeyboardEvent('keydown', {
@@ -1098,6 +1993,7 @@ function keyboardEvent({
     cancelable: true,
     key,
     metaKey,
+    ctrlKey,
     shiftKey,
   });
 }

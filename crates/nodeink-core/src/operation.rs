@@ -203,10 +203,14 @@ mod tests {
             op_id: op_id.to_string(),
             rectangle: RectElementV1 {
                 id: "rect-1".to_string(),
+                transform: crate::Affine2D::identity(),
                 x: 1.0,
                 y: 2.0,
                 width: 3.0,
                 height: 4.0,
+                fill: crate::FillV1::default_rectangle(),
+                stroke: crate::DEFAULT_RECTANGLE_STROKE_COLOR.to_string(),
+                stroke_width: crate::DEFAULT_RECTANGLE_STROKE_WIDTH,
             },
         }
     }

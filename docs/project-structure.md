@@ -45,8 +45,8 @@ docs/                       Product, architecture, decisions, plans, and repo me
 1. `pnpm exec vp run wasm:build` invokes [scripts/build-wasm.sh#L1](../scripts/build-wasm.sh#L1) and regenerates the ignored browser package.
 2. [apps/playground/src/create-controller.ts#L1](../apps/playground/src/create-controller.ts#L1) opens the local snapshot catalog and independent Camera session store, acquires a document lease, verifies or migrates the selected snapshot, and only then creates the real EnginePort.
 3. [packages/persistence-web/src/local-document.ts#L1](../packages/persistence-web/src/local-document.ts#L1) owns local-document recovery selection and the debounced save coordinator.
-4. [packages/editor-web/src/index.ts#L1](../packages/editor-web/src/index.ts#L1) owns host-neutral actions, normalized pointer/keyboard input, Camera/viewport mapping, subscriptions, lifecycle, and derived persistence presentation.
-5. [crates/nodeink-core/src/selection.rs#L1](../crates/nodeink-core/src/selection.rs#L1) owns transient Selection, semantic hit testing and selection bounds without adding them to Document persistence or history.
+4. [packages/editor-web/src/index.ts#L1](../packages/editor-web/src/index.ts#L1) owns host-neutral actions, normalized pointer/keyboard input, Camera/viewport mapping, subscriptions, lifecycle, and derived persistence presentation; [style-presets.ts#L1](../packages/editor-web/src/style-presets.ts#L1) defines the shared finite product palette/Profile presets, [freehand-input.ts#L1](../packages/editor-web/src/freehand-input.ts#L1) converts DOM batches, while [text-editor-overlay.ts#L1](../packages/editor-web/src/text-editor-overlay.ts#L1) keeps IME composition in an HTML textarea and [text-metrics.ts#L1](../packages/editor-web/src/text-metrics.ts#L1) measures the bundled fixed font.
+5. [crates/nodeink-core/src/tool.rs#L1](../crates/nodeink-core/src/tool.rs#L1) owns transient active Tool state and enforces input routing; [selection.rs#L1](../crates/nodeink-core/src/selection.rs#L1) owns semantic hit testing, selection bounds, and Rust-derived selected style; [style.rs#L1](../crates/nodeink-core/src/style.rs#L1) owns persistent paint/Profile validation; [text.rs#L1](../crates/nodeink-core/src/text.rs#L1) owns text run keys, metrics requests/cache, Unicode line splitting, alignment, and resolved Scene runs. Transient state remains outside Document persistence and history.
 6. [packages/renderer-svg/src/index.ts#L1](../packages/renderer-svg/src/index.ts#L1) reconciles resolved Scene nodes and non-interactive Editor overlays into SVG.
 7. `/`, `/vue.html`, and `/vanilla.html` independently mount React, Vue, and framework-free hosts over the same contracts.
 
@@ -71,4 +71,4 @@ docs/                       Product, architecture, decisions, plans, and repo me
 - WASM release build uses wasm-pack for Cargo/wasm-bindgen and lockfile-pinned Binaryen 117 for `-Oz`; optimization writes a fresh sibling file before replacing the generated WASM, avoiding the observed wasm-pack/provenance replacement failure.
 
 ---
-*Last updated: 2026-07-22 | Reason: record the Rust-owned Selection and framework-neutral overlay path*
+*Last updated: 2026-07-23 | Reason: record persistent style and Render Profile ownership paths*

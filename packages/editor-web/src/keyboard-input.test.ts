@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { attachEditorShortcuts } from './keyboard-input';
+import { attachEditorShortcuts, attachEditorShortcutsV2 } from './keyboard-input';
 
 describe('attachEditorShortcuts', () => {
   it.each([
@@ -12,7 +12,31 @@ describe('attachEditorShortcuts', () => {
   ] as const)('maps %o to %s', (options, expectedAction) => {
     const shortcutTarget = document.implementation.createHTMLDocument();
     const listener = vi.fn(() => true);
-    attachEditorShortcuts(shortcutTarget, listener);
+    attachEditorShortcutsV2(shortcutTarget, listener);
+    const event = keyboardEvent(options);
+
+    shortcutTarget.body.dispatchEvent(event);
+
+    expect(listener).toHaveBeenCalledWith(expectedAction);
+    expect(event.defaultPrevented).toBe(true);
+  });
+
+  it.each([
+    [{ key: 'a', metaKey: true }, 'select_all'],
+    [{ key: 'A', ctrlKey: true }, 'select_all'],
+    [{ key: 'c', metaKey: true }, 'copy_selection'],
+    [{ key: 'x', ctrlKey: true }, 'cut_selection'],
+    [{ key: 'v', metaKey: true }, 'paste'],
+    [{ key: 'g', ctrlKey: true }, 'group_selection'],
+    [{ key: 'G', metaKey: true, shiftKey: true }, 'ungroup_selection'],
+    [{ key: ']' }, 'bring_forward'],
+    [{ key: '[' }, 'send_backward'],
+    [{ key: ']', metaKey: true }, 'bring_to_front'],
+    [{ key: '[', ctrlKey: true }, 'send_to_back'],
+  ] as const)('maps editing shortcut %o to %s', (options, expectedAction) => {
+    const shortcutTarget = document.implementation.createHTMLDocument();
+    const listener = vi.fn(() => true);
+    attachEditorShortcutsV2(shortcutTarget, listener);
     const event = keyboardEvent(options);
 
     shortcutTarget.body.dispatchEvent(event);
@@ -61,9 +85,34 @@ describe('attachEditorShortcuts', () => {
   });
 
   it.each([
+    { key: 'a', metaKey: true },
+    { key: 'c', ctrlKey: true },
+    { key: 'x', metaKey: true },
+    { key: 'v', ctrlKey: true },
+    { key: 'g', metaKey: true },
+    { key: 'G', ctrlKey: true, shiftKey: true },
+    { key: ']', metaKey: true },
+  ])('leaves %o inside text editing elements', (options) => {
+    const shortcutTarget = document.implementation.createHTMLDocument();
+    const textarea = shortcutTarget.createElement('textarea');
+    shortcutTarget.body.append(textarea);
+    const listener = vi.fn(() => true);
+    attachEditorShortcutsV2(shortcutTarget, listener);
+    const event = keyboardEvent(options);
+
+    textarea.dispatchEvent(event);
+
+    expect(listener).not.toHaveBeenCalled();
+    expect(event.defaultPrevented).toBe(false);
+  });
+
+  it.each([
     ['Delete', 'delete_selection'],
     ['Backspace', 'delete_selection'],
-    ['Escape', 'clear_selection'],
+    ['Escape', 'escape'],
+    ['v', 'select_tool'],
+    ['P', 'freehand_tool'],
+    ['t', 'text_tool'],
   ] as const)('maps %s to %s without browser side effects', (key, expectedAction) => {
     const shortcutTarget = document.implementation.createHTMLDocument();
     const listener = vi.fn(() => true);

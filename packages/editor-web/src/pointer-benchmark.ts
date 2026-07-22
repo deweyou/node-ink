@@ -113,6 +113,8 @@ function pointerEvent(
     sequence,
     phase,
     point: { x, y },
+    modifiers: { shift: false, alt: false, metaOrCtrl: false },
+    screenScale: 1,
   };
 }
 

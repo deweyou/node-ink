@@ -1,13 +1,13 @@
 {
-  "commit": "1038224",
+  "commit": "schema-v2-worktree",
   "build": "release-wasm-dev-host",
-  "engineAlgorithmVersion": "nodeink-scene-v1",
+  "engineAlgorithmVersion": "nodeink-scene-v2",
   "browser": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36",
   "os": "MacIntel",
   "hardware": {
     "logicalProcessors": 18,
     "deviceMemoryGb": 32,
-    "display": "2056x1329@2x"
+    "display": "3008x1692@2x"
   },
   "sample": {
     "repeatedResolutions": 1000,
@@ -16,19 +16,19 @@
     "fillStyle": "hachure"
   },
   "hashes": {
-    "clean": "fnv1a64:161767abbb52ac49",
-    "sketchSeed42": "fnv1a64:ddce7e37dbe5a687",
-    "sketchSeed43": "fnv1a64:9c7c25290e150686",
-    "sketchRoughness2": "fnv1a64:b52452b806f9f8f5"
+    "clean": "fnv1a64:5b2061b1f75e7c2c",
+    "sketchSeed42": "fnv1a64:f12e0a0336d64e6b",
+    "sketchSeed43": "fnv1a64:8bcf6f600f48a03f",
+    "sketchRoughness2": "fnv1a64:739072c8fe33ca8c"
   },
   "nativeExpectedHashes": {
-    "clean": "fnv1a64:161767abbb52ac49",
-    "sketchRoughness2": "fnv1a64:b52452b806f9f8f5",
-    "sketchSeed42": "fnv1a64:ddce7e37dbe5a687",
-    "sketchSeed43": "fnv1a64:9c7c25290e150686"
+    "clean": "fnv1a64:5b2061b1f75e7c2c",
+    "sketchRoughness2": "fnv1a64:739072c8fe33ca8c",
+    "sketchSeed42": "fnv1a64:f12e0a0336d64e6b",
+    "sketchSeed43": "fnv1a64:8bcf6f600f48a03f"
   },
   "metrics": {
-    "wasmRepeatedElapsedMs": 11,
+    "wasmRepeatedElapsedMs": 12.5,
     "uniqueRepeatedHashCount": 1
   },
   "decision": {

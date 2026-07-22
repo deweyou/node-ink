@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::{ElementId, StrokeElementV1, Vec2};
+use crate::{DEFAULT_INK_COLOR, DEFAULT_STROKE_WIDTH, ElementId, StrokeElementV1, Vec2};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -89,6 +89,10 @@ impl StrokeMachine {
         self.state = StrokeState::Idle;
     }
 
+    pub fn is_active(&self) -> bool {
+        matches!(self.state, StrokeState::Drawing { .. })
+    }
+
     pub fn preview(&self) -> Option<StrokePreview> {
         let StrokeState::Drawing {
             stroke_id, points, ..
@@ -97,11 +101,7 @@ impl StrokeMachine {
             return None;
         };
         Some(StrokePreview {
-            stroke: StrokeElementV1 {
-                id: stroke_id.clone(),
-                points: points.clone(),
-                stroke_width: 3.0,
-            },
+            stroke: stroke_element(stroke_id.clone(), points),
         })
     }
 
@@ -130,11 +130,7 @@ impl StrokeMachine {
         (
             ignored,
             StrokeTransition::Preview(StrokePreview {
-                stroke: StrokeElementV1 {
-                    id: stroke_id,
-                    points: vec![point],
-                    stroke_width: 3.0,
-                },
+                stroke: stroke_element(stroke_id, &[point]),
             }),
         )
     }
@@ -163,11 +159,7 @@ impl StrokeMachine {
         (
             ignored,
             StrokeTransition::Preview(StrokePreview {
-                stroke: StrokeElementV1 {
-                    id: stroke_id.clone(),
-                    points: points.clone(),
-                    stroke_width: 3.0,
-                },
+                stroke: stroke_element(stroke_id.clone(), points),
             }),
         )
     }
@@ -193,17 +185,13 @@ impl StrokeMachine {
             batch.sequence_start,
             batch.points.into_iter(),
         );
-        let transition = if points.len() >= 2 {
+        let transition = if points.is_empty() {
+            StrokeTransition::Cancelled
+        } else {
             StrokeTransition::Commit(StrokeCommit {
-                stroke: StrokeElementV1 {
-                    id: stroke_id.clone(),
-                    points: points.clone(),
-                    stroke_width: 3.0,
-                },
+                stroke: stroke_element(stroke_id.clone(), points),
                 expected_revision: *expected_revision,
             })
-        } else {
-            StrokeTransition::Cancelled
         };
         self.state = StrokeState::Idle;
         (ignored, transition)
@@ -220,6 +208,20 @@ impl StrokeMachine {
             }
             _ => (0, StrokeTransition::None),
         }
+    }
+}
+
+fn stroke_element(id: ElementId, points: &[Vec2]) -> StrokeElementV1 {
+    let mut normalized_points = points.to_vec();
+    if normalized_points.len() == 1 {
+        normalized_points.push(normalized_points[0]);
+    }
+    StrokeElementV1 {
+        id,
+        transform: crate::Affine2D::identity(),
+        points: normalized_points,
+        stroke: DEFAULT_INK_COLOR.to_string(),
+        stroke_width: DEFAULT_STROKE_WIDTH,
     }
 }
 

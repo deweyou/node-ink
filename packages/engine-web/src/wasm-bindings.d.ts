@@ -6,7 +6,11 @@ declare module '*nodeink_engine.js' {
     fitCamera(viewportWidth: number, viewportHeight: number, padding: number): string;
     applyCameraAction(actionJson: string): string;
     executeCommand(commandJson: string): string;
-    setSelection(elementId: string | undefined): string;
+    setActiveTool(tool: string): string;
+    setSelection(elementIdsJson: string, primaryElementId: string | undefined): string;
+    copySelection(): string;
+    beginTextEditAt(pointJson: string): string;
+    provideTextMetrics(snapshotJson: string): string;
     executeDiagramOperation(batchJson: string): string;
     handlePointerEvents(eventsJson: string, commandId: string): string;
     handleStrokeBatchJson(batchJson: string, commandId: string): string;

@@ -98,13 +98,13 @@ UI / Internal Operation
 #### 文本
 
 ```text
-双击文本
+Text 单击或 Select 双击语义文本
 → TypeScript HTML textarea overlay
 → IME composition stays in browser
-→ Commit text content
-→ Rust UpdateText command
+→ blur / Cmd/Ctrl+Enter commits once; Escape cancels
+→ Rust CreateText / UpdateText / DeleteElements command
 → MeasureRequest
-→ Browser font measurement
+→ Bundled fixed-font browser measurement
 → Scene resolution resumes
 ```
 
@@ -188,53 +188,47 @@ TypeScript 负责平台能力和用户体验集成：
 type DocumentId = string;
 type ElementId = string;
 
-interface NodeInkDocumentV1 {
-  schemaVersion: 1;
+interface NodeInkDocumentV3 {
+  schemaVersion: 3;
   documentId: DocumentId;
   revision: number;
-  title: string;
-  createdAt: string;
-  updatedAt: string;
-  renderProfile: RenderProfile;
+  renderProfile: RenderProfileV1;
   rootOrder: ElementId[];
   elements: Record<ElementId, ElementRecordV1>;
-  metadata: Record<string, JsonValue>;
 }
 
-type RenderProfile =
+type RenderProfileV1 =
   | { kind: 'clean'; version: 1 }
   | {
       kind: 'sketch';
       version: 1;
+      seed: number;
       roughness: number;
       bowing: number;
       fillStyle: 'solid' | 'hachure';
     };
 ```
 
-`rootOrder` 是根层级唯一顺序真相。Group 自己持有 `childOrder`；元素不能同时出现在多个 order 中。加载和每次 Transaction 都验证引用完整性、无环和唯一父级。
+Schema V3 是当前持久格式。V0/V1 先补齐原视觉默认值与 Clean Profile，V2 再为每个元素补 identity affine；两条路径都由 Rust copy-on-write migration 完成且不修改源 payload。`rootOrder` 只包含根元素，Group 的 `childOrder` 持有直接子节点顺序；每个非根元素必须恰好出现一次，层级必须无环。
 
-时间字段用于产品展示，不参与几何确定性；重放测试比较规范化内容与 Scene hash，不比较 `updatedAt`。
+### 8.2 元素公共字段（当前实现）
 
-### 8.2 元素公共字段
+Schema V3 的 Rect、Stroke、Text 与 Group 都持有同一种 affine matrix。元素自身的几何字段保持在 local space；Rust 组合祖先与自身 transform，Scene 只输出最终 world transform。当前仍只持久化有限样式：Rect 的 fill/stroke/strokeWidth、Stroke 的 stroke/strokeWidth、Text 的 color/fontSize/fontWeight/textAlign。
 
 ```ts
 interface ElementBaseV1 {
   id: ElementId;
   kind: string;
-  transform: Transform2D;
-  opacity: number;
-  isLocked: boolean;
-  seed: number;
-  metadata: Record<string, JsonValue>;
+  transform: Affine2D;
 }
 
-interface Transform2D {
-  x: number;
-  y: number;
-  rotation: number;
-  scaleX: number;
-  scaleY: number;
+interface Affine2D {
+  a: number;
+  b: number;
+  c: number;
+  d: number;
+  e: number;
+  f: number;
 }
 
 interface ShapeStyleV1 {
@@ -247,7 +241,7 @@ interface ShapeStyleV1 {
 
 持久化时对浮点值执行明确的 finite 检查和规范化舍入，拒绝 `NaN`、`Infinity` 和超出安全边界的坐标。渲染阶段可以保留更高内部精度。
 
-### 8.3 Phase 1 元素
+### 8.3 当前元素与后续扩展
 
 ```ts
 type ElementRecordV1 =
@@ -339,9 +333,14 @@ type CommandV1 =
   | { type: 'update_elements'; updates: ElementUpdateV1[] }
   | { type: 'delete_elements'; elementIds: ElementId[] }
   | { type: 'move_elements'; elementIds: ElementId[]; delta: Vec2 }
-  | { type: 'set_render_profile'; profile: RenderProfile }
+  | { type: 'update_element_style'; elementId: ElementId; patch: ElementStylePatchV1 }
+  | { type: 'set_render_profile'; renderProfile: RenderProfileV1 }
+  | { type: 'transform_elements'; elementIds: ElementId[]; transform: Affine2D }
   | { type: 'group_elements'; groupId: ElementId; elementIds: ElementId[] }
-  | { type: 'ungroup_elements'; groupId: ElementId };
+  | { type: 'ungroup_elements'; groupId: ElementId }
+  | { type: 'reorder_elements'; elementIds: ElementId[]; placement: ReorderPlacementV1 }
+  | { type: 'align_elements'; elementIds: ElementId[]; alignment: AlignmentV1 }
+  | { type: 'paste_clipboard'; payload: string; idPrefix: string; offset: Vec2 };
 ```
 
 创建命令必须携带最终 ID 和 seed。生成器可以帮助调用方创建它们，但被记录和重放的是完整 Envelope，不能在执行时依赖隐式随机数。
@@ -398,7 +397,7 @@ PointerDown
 
 - Escape、pointer cancel 或失焦在提交前撤销 transient state。
 - 自由笔在拖动过程中产生 preview points；PointerUp 后创建一个 `StrokeElement`。
-- 文本 composition 期间不修改 Document；composition end/blur/快捷键确认时提交一个文本 Transaction。
+- 文本 composition 与普通输入过程都不修改 Document；composition end 只更新 overlay buffer，blur 或 `Cmd/Ctrl+Enter` 提交一个文本 Transaction，`Escape` 取消。
 - Inspector 连续拖动数值可使用 preview + commit，或显式 merge key 合并为一个 Undo entry；不能产生数百个用户不可理解的撤销步骤。
 
 ### 9.5 Command 与高层 Operation 的关系
@@ -518,12 +517,11 @@ interface TextMeasureRequestV1 {
     fontFamily: string;
     fontSize: number;
     fontWeight: 400 | 500;
-    maxWidth?: number;
+    maxWidth: number | null;
   }>;
 }
 
-interface TextMeasureResultV1 {
-  requestId: string;
+interface TextMetricsSnapshotV1 {
   fontFingerprint: string;
   metrics: Array<{
     key: string;
@@ -535,7 +533,7 @@ interface TextMeasureResultV1 {
 }
 ```
 
-流程是 `resolve → missing metrics → host measure → resume resolve`。Engine 按 `fontFingerprint + run key` 缓存，字体加载变化时整体失效。若首期要求跨设备 Scene hash 完全一致，画布内容必须使用随应用提供并等待加载完成的固定字体；否则确定性只保证在相同字体度量输入下成立。
+流程是 `resolve → missing metrics → host measure → provide metrics → resume resolve`。Engine 按 `fontFingerprint + run key` 缓存，metrics 回填只增加 Scene revision，不改变 Document revision 或 Undo history。Phase 1A 已固定使用随应用加载的 `Noto Sans SC Variable`，Host 等待 400/500 weight 后才创建 Engine；`lineBreaks` 跨端统一使用 Unicode code-point index，避免 JavaScript UTF-16 surrogate pair 导致换行错位。
 
 ### 11.4 Layout 边界
 
@@ -638,7 +636,7 @@ interface ScenePatchV1 {
 - **理由**：SVG、Canvas、Headless 和导出共享确定性几何；Renderer 保持简单。
 - **替代方案**：Renderer 根据 roughness/seed 各自生成路径。
 - **适用边界**：若未来 GPU Renderer 需要专用 tessellation，可在 Scene 中携带规范化 path/segment，而不是重做随机几何。
-- **当前实施**：Phase 0 验证同 seed Scene hash，Phase 1A 实施。
+- **当前实施**：Phase 0 验证同 seed Scene hash；Phase 1A 已把 Clean/Sketch 作为持久 Document Profile，并让两种 resolver 消费同一份元素 paint。Renderer 只接收最终 fill/stroke/textAnchor。
 - **未来切换成本**：若从 Renderer 后移回 Scene，成本高；因此从第一天固定在 Scene 层。
 
 ## 13. Renderer 接口
@@ -700,6 +698,7 @@ interface EditorWebControllerV1 {
 
 - `EditorActionV1` 是 UI 意图，例如切换工具、撤销、删除或设置样式；Controller 再把它映射为 NormalizedInput 或 Command。
 - `EditorUiSnapshotV1` 只包含 UI 需要的只读派生状态，例如 active tool、selection summary、undo/redo availability 和 save status。
+- active tool 由 Rust 非持久 Tool State 持有；Controller 只路由规范化后的 Select pointer 或 Freehand batch，Rust 对错路由显式拒绝。
 - React 与 Vue adapter 把 `subscribe` 映射为框架状态订阅；Vanilla host 使用相同契约，不新增第二套 Engine 或 Renderer API。
 - `dispose` 是唯一宿主销毁入口，负责释放 DOM listener、Text Overlay、Renderer、保存调度器和 Engine handle。
 - UI adapter 不直接调用 Renderer 私有方法，也不直接访问 wasm-bindgen glue 或 IndexedDB。

@@ -36,7 +36,7 @@ describe('CanvasTextMetricsAdapter', () => {
         },
         {
           key: 'emoji',
-          text: '✍️🎨',
+          text: '🎨\n画布',
           fontFamily: 'Arial',
           fontSize: 24,
           fontWeight: 400 as const,
@@ -56,8 +56,9 @@ describe('CanvasTextMetricsAdapter', () => {
       baseline: 16,
       lineBreaks: [7],
     });
+    expect(first.snapshot.metrics[2]?.lineBreaks).toEqual([1]);
     expect(cached).toMatchObject({ cacheHitCount: 3, measuredRunCount: 0, durationMs: 2 });
-    expect(measureText).toHaveBeenCalledTimes(4);
+    expect(measureText).toHaveBeenCalledTimes(5);
   });
 
   it('changes fingerprint and clears cache after a font epoch change', () => {

@@ -9,10 +9,18 @@ import {
 } from 'vue';
 
 import {
+  NODEINK_COLOR_PRESETS,
+  NODEINK_FILL_PRESETS,
+  NODEINK_STROKE_WIDTH_PRESETS,
+  NODEINK_TEXT_ALIGN_PRESETS,
+  NODEINK_TEXT_SIZE_PRESETS,
+  fillPresetMatches,
   getEditorCameraPresentation,
   getEditorPersistencePresentation,
+  type ElementStylePatchV1,
   type EditorActionV1,
   type EditorWebControllerV1,
+  type SelectionStyleV1,
 } from '@nodeink-internal/editor-web';
 
 export interface NodeInkEditorProps {
@@ -80,6 +88,7 @@ export const NodeInkEditor = defineComponent({
       const currentSnapshot = snapshot.value;
       const isReady = currentSnapshot.status === 'ready';
       const isEditable = isReady && currentSnapshot.documentAccess === 'writer';
+      const selectionCount = currentSnapshot.selectedElementIds.length;
       const cameraPresentation = getEditorCameraPresentation(currentSnapshot);
       const persistence = getEditorPersistencePresentation(currentSnapshot);
       const visibleError =
@@ -96,12 +105,66 @@ export const NodeInkEditor = defineComponent({
       return h('main', { class: 'nodeink-shell', 'data-nodeink-host': 'vue' }, [
         h('header', { class: 'nodeink-topbar' }, [
           h('div', [
-            h('span', { class: 'nodeink-kicker' }, 'NodeInk · Phase 1A'),
+            h('span', { class: 'nodeink-kicker' }, 'NodeInk · Phase 1B'),
             h('h1', 'Framework-neutral canvas'),
           ]),
-          h('span', { class: 'nodeink-host-badge' }, props.hostLabel),
+          h('div', { class: 'nodeink-topbar-actions' }, [
+            h(
+              'nav',
+              { class: 'nodeink-profile-toggle', 'aria-label': 'Rendering profile' },
+              (['clean', 'sketch'] as const).map((profile) =>
+                h(
+                  'button',
+                  {
+                    type: 'button',
+                    'aria-pressed': currentSnapshot.renderProfile.kind === profile,
+                    disabled: !isEditable,
+                    onClick: () => dispatch({ type: 'set_render_profile', profile }),
+                  },
+                  profile === 'clean' ? 'Clean' : 'Sketch',
+                ),
+              ),
+            ),
+            h('span', { class: 'nodeink-host-badge' }, props.hostLabel),
+          ]),
         ]),
         h('aside', { class: 'nodeink-toolbar', 'aria-label': 'Canvas actions' }, [
+          h(
+            'button',
+            {
+              type: 'button',
+              'data-tool': 'select',
+              'aria-pressed': currentSnapshot.activeTool === 'select',
+              disabled: !isEditable,
+              title: 'Select tool (V)',
+              onClick: () => dispatch({ type: 'set_tool', tool: 'select' }),
+            },
+            'Select',
+          ),
+          h(
+            'button',
+            {
+              type: 'button',
+              'data-tool': 'freehand',
+              'aria-pressed': currentSnapshot.activeTool === 'freehand',
+              disabled: !isEditable,
+              title: 'Freehand tool (P)',
+              onClick: () => dispatch({ type: 'set_tool', tool: 'freehand' }),
+            },
+            'Draw',
+          ),
+          h(
+            'button',
+            {
+              type: 'button',
+              'data-tool': 'text',
+              'aria-pressed': currentSnapshot.activeTool === 'text',
+              disabled: !isEditable,
+              title: 'Text tool (T)',
+              onClick: () => dispatch({ type: 'set_tool', tool: 'text' }),
+            },
+            'Text',
+          ),
           h(
             'button',
             {
@@ -115,7 +178,7 @@ export const NodeInkEditor = defineComponent({
             'button',
             {
               type: 'button',
-              disabled: !isEditable || !currentSnapshot.activeElementId,
+              disabled: !isEditable || selectionCount === 0,
               onClick: () => dispatch({ type: 'move_active', delta: { x: 32, y: 16 } }),
             },
             'Move',
@@ -125,7 +188,7 @@ export const NodeInkEditor = defineComponent({
             {
               type: 'button',
               'data-danger': 'true',
-              disabled: !isEditable || !currentSnapshot.activeElementId,
+              disabled: !isEditable || selectionCount === 0,
               onClick: () => dispatch({ type: 'delete_selection' }),
             },
             'Delete',
@@ -151,6 +214,12 @@ export const NodeInkEditor = defineComponent({
         ]),
         h('section', { class: 'nodeink-stage', 'aria-label': 'Infinite canvas proof' }, [
           h('div', { ref: canvas, class: 'nodeink-canvas' }),
+          renderSelectionActionControls(selectionCount, isEditable, dispatch),
+          isEditable && currentSnapshot.selectionStyle
+            ? renderSelectionStylePanel(currentSnapshot.selectionStyle, (patch) =>
+                dispatch({ type: 'update_selection_style', patch }),
+              )
+            : null,
           h('nav', { class: 'nodeink-zoom-controls', 'aria-label': 'Canvas view controls' }, [
             h(
               'button',
@@ -192,7 +261,8 @@ export const NodeInkEditor = defineComponent({
             h('span', currentSnapshot.status),
             h('span', `document r${currentSnapshot.documentRevision}`),
             h('span', `${currentSnapshot.elementCount} elements`),
-            h('span', currentSnapshot.activeElementId ? '1 selected' : 'No selection'),
+            h('span', selectionCount === 0 ? 'No selection' : `${selectionCount} selected`),
+            h('span', `${currentSnapshot.activeTool} tool`),
           ]),
           persistence.notice
             ? h('p', { class: 'nodeink-notice', role: 'status' }, persistence.notice)
@@ -221,3 +291,193 @@ export const NodeInkEditor = defineComponent({
     };
   },
 });
+
+function renderSelectionActionControls(
+  selectionCount: number,
+  isEditable: boolean,
+  dispatch: (action: EditorActionV1) => void,
+) {
+  const selectionDisabled = !isEditable || selectionCount === 0;
+  const multipleDisabled = !isEditable || selectionCount < 2;
+  const button = (label: string, action: EditorActionV1, disabled: boolean, title?: string) =>
+    h(
+      'button',
+      {
+        type: 'button',
+        title,
+        disabled,
+        onClick: () => dispatch(action),
+      },
+      label,
+    );
+
+  return h('nav', { class: 'nodeink-selection-actions', 'aria-label': 'Selection actions' }, [
+    h(
+      'div',
+      { class: 'nodeink-selection-action-group', role: 'group', 'aria-label': 'Clipboard' },
+      [
+        button('Copy', { type: 'copy' }, selectionDisabled),
+        button('Cut', { type: 'cut' }, selectionDisabled),
+        button('Paste', { type: 'paste' }, !isEditable),
+      ],
+    ),
+    h('div', { class: 'nodeink-selection-action-group', role: 'group', 'aria-label': 'Grouping' }, [
+      button('Group', { type: 'group' }, multipleDisabled),
+      button('Ungroup', { type: 'ungroup' }, selectionDisabled),
+    ]),
+    h(
+      'div',
+      { class: 'nodeink-selection-action-group', role: 'group', 'aria-label': 'Stacking order' },
+      [
+        button(
+          'Front',
+          { type: 'reorder', placement: 'front' },
+          selectionDisabled,
+          'Bring to front',
+        ),
+        button(
+          'Forward',
+          { type: 'reorder', placement: 'forward' },
+          selectionDisabled,
+          'Bring forward',
+        ),
+        button(
+          'Backward',
+          { type: 'reorder', placement: 'backward' },
+          selectionDisabled,
+          'Send backward',
+        ),
+        button('Back', { type: 'reorder', placement: 'back' }, selectionDisabled, 'Send to back'),
+      ],
+    ),
+    h(
+      'div',
+      { class: 'nodeink-selection-action-group', role: 'group', 'aria-label': 'Alignment' },
+      [
+        button('Left', { type: 'align', alignment: 'left' }, multipleDisabled),
+        button('Center', { type: 'align', alignment: 'center' }, multipleDisabled),
+        button('Right', { type: 'align', alignment: 'right' }, multipleDisabled),
+        button('Top', { type: 'align', alignment: 'top' }, multipleDisabled),
+        button('Middle', { type: 'align', alignment: 'middle' }, multipleDisabled),
+        button('Bottom', { type: 'align', alignment: 'bottom' }, multipleDisabled),
+      ],
+    ),
+  ]);
+}
+
+function renderSelectionStylePanel(
+  style: SelectionStyleV1,
+  dispatch: (patch: ElementStylePatchV1) => void,
+) {
+  const groups =
+    style.kind === 'rect'
+      ? [
+          styleGroup(
+            'Fill',
+            NODEINK_FILL_PRESETS.map((preset) =>
+              swatchButton(
+                `Fill ${preset.label}`,
+                preset.value.kind === 'solid' ? preset.value.color : null,
+                fillPresetMatches(style.fill, preset.value),
+                () => dispatch({ kind: 'rect', fill: preset.value }),
+              ),
+            ),
+          ),
+          colorGroup('Stroke', style.stroke, (stroke) => dispatch({ kind: 'rect', stroke })),
+          widthGroup(style.strokeWidth, (strokeWidth) => dispatch({ kind: 'rect', strokeWidth })),
+        ]
+      : style.kind === 'stroke'
+        ? [
+            colorGroup('Color', style.stroke, (stroke) => dispatch({ kind: 'stroke', stroke })),
+            widthGroup(style.strokeWidth, (strokeWidth) =>
+              dispatch({ kind: 'stroke', strokeWidth }),
+            ),
+          ]
+        : [
+            colorGroup('Color', style.color, (color) => dispatch({ kind: 'text', color })),
+            styleGroup(
+              'Size',
+              NODEINK_TEXT_SIZE_PRESETS.map((fontSize) =>
+                h(
+                  'button',
+                  {
+                    type: 'button',
+                    'aria-pressed': style.fontSize === fontSize,
+                    onClick: () => dispatch({ kind: 'text', fontSize }),
+                  },
+                  String(fontSize),
+                ),
+              ),
+            ),
+            styleGroup(
+              'Align',
+              NODEINK_TEXT_ALIGN_PRESETS.map((preset) =>
+                h(
+                  'button',
+                  {
+                    type: 'button',
+                    'aria-pressed': style.textAlign === preset.value,
+                    onClick: () => dispatch({ kind: 'text', textAlign: preset.value }),
+                  },
+                  preset.label,
+                ),
+              ),
+            ),
+          ];
+
+  return h('aside', { class: 'nodeink-style-panel', 'aria-label': 'Selection style' }, [
+    h('h2', { class: 'nodeink-style-title' }, [
+      'Style',
+      h('span', style.kind === 'rect' ? 'Rectangle' : style.kind === 'stroke' ? 'Stroke' : 'Text'),
+    ]),
+    ...groups,
+  ]);
+}
+
+function colorGroup(label: string, value: string, onChange: (color: string) => void) {
+  return styleGroup(
+    label,
+    NODEINK_COLOR_PRESETS.map((preset) =>
+      swatchButton(`${label} ${preset.label}`, preset.value, value === preset.value, () =>
+        onChange(preset.value),
+      ),
+    ),
+  );
+}
+
+function widthGroup(value: number, onChange: (value: number) => void) {
+  return styleGroup(
+    'Width',
+    NODEINK_STROKE_WIDTH_PRESETS.map((strokeWidth) =>
+      h(
+        'button',
+        {
+          type: 'button',
+          'aria-pressed': value === strokeWidth,
+          onClick: () => onChange(strokeWidth),
+        },
+        `${strokeWidth}px`,
+      ),
+    ),
+  );
+}
+
+function styleGroup(label: string, children: ReturnType<typeof h>[]) {
+  return h('fieldset', { class: 'nodeink-style-group' }, [
+    h('legend', label),
+    h('div', { class: 'nodeink-style-options' }, children),
+  ]);
+}
+
+function swatchButton(label: string, color: string | null, pressed: boolean, onClick: () => void) {
+  return h('button', {
+    type: 'button',
+    class: 'nodeink-swatch',
+    'data-none': color === null ? 'true' : undefined,
+    'aria-label': label,
+    title: label,
+    'aria-pressed': pressed,
+    style: color ? { '--swatch-color': color } : undefined,
+    onClick,
+  });
+}

@@ -47,9 +47,13 @@ describe('attachPointerInput', () => {
       releasePointerCapture,
     });
     const batches: NormalizedPointerEventV1[][] = [];
-    const detach = attachPointerInput(target, (events) => batches.push(events));
+    const detach = attachPointerInput(target, (events) => batches.push(events), {
+      screenScale: () => 2,
+    });
 
-    rectangle.dispatchEvent(pointerEvent('pointerdown', { clientX: 30, clientY: 50 }));
+    rectangle.dispatchEvent(
+      pointerEvent('pointerdown', { clientX: 30, clientY: 50, shiftKey: true }),
+    );
     rectangle.dispatchEvent(
       pointerEvent('pointermove', {
         clientX: 45,
@@ -69,6 +73,8 @@ describe('attachPointerInput', () => {
           sequence: 1,
           phase: 'down',
           point: { x: 20, y: 30 },
+          modifiers: { shift: true, alt: false, metaOrCtrl: false },
+          screenScale: 2,
         },
       ],
       [
@@ -77,12 +83,16 @@ describe('attachPointerInput', () => {
           sequence: 2,
           phase: 'move',
           point: { x: 25, y: 35 },
+          modifiers: { shift: false, alt: false, metaOrCtrl: false },
+          screenScale: 2,
         },
         {
           pointerId: 1,
           sequence: 3,
           phase: 'move',
           point: { x: 35, y: 45 },
+          modifiers: { shift: false, alt: false, metaOrCtrl: false },
+          screenScale: 2,
         },
       ],
       [
@@ -91,6 +101,8 @@ describe('attachPointerInput', () => {
           sequence: 4,
           phase: 'up',
           point: { x: 40, y: 50 },
+          modifiers: { shift: false, alt: false, metaOrCtrl: false },
+          screenScale: 2,
         },
       ],
     ]);
@@ -142,6 +154,39 @@ describe('attachPointerInput', () => {
     expect(listener).not.toHaveBeenCalled();
     expect(setPointerCapture).not.toHaveBeenCalled();
   });
+
+  it('cancels an active gesture on window blur and lost pointer capture', () => {
+    const target = document.createElement('div');
+    document.body.append(target);
+    mockBounds(target);
+    Object.assign(target, {
+      setPointerCapture: vi.fn(),
+      hasPointerCapture: () => false,
+    });
+    const batches: NormalizedPointerEventV1[][] = [];
+    attachPointerInput(target, (events) => batches.push(events));
+
+    target.dispatchEvent(pointerEvent('pointerdown', { clientX: 30, clientY: 50 }));
+    window.dispatchEvent(new Event('blur'));
+    target.dispatchEvent(pointerEvent('pointerdown', { clientX: 40, clientY: 60 }));
+    target.dispatchEvent(pointerEvent('lostpointercapture'));
+
+    expect(batches.map((batch) => batch[0]?.phase)).toEqual(['down', 'cancel', 'down', 'cancel']);
+    expect(batches[1]?.[0]).toMatchObject({ sequence: 2, point: { x: 20, y: 30 } });
+  });
+
+  it('maps a primary double click to semantic canvas coordinates', () => {
+    const target = document.createElement('div');
+    mockBounds(target);
+    const onDoubleClick = vi.fn();
+    attachPointerInput(target, vi.fn(), { onDoubleClick });
+
+    target.dispatchEvent(mouseEvent('dblclick', { clientX: 50, clientY: 80 }));
+    target.dispatchEvent(mouseEvent('dblclick', { button: 2 }));
+
+    expect(onDoubleClick).toHaveBeenCalledOnce();
+    expect(onDoubleClick).toHaveBeenCalledWith({ x: 40, y: 60 });
+  });
 });
 
 interface PointerEventOptions {
@@ -149,6 +194,10 @@ interface PointerEventOptions {
   clientX?: number;
   clientY?: number;
   button?: number;
+  shiftKey?: boolean;
+  altKey?: boolean;
+  metaKey?: boolean;
+  ctrlKey?: boolean;
   coalescedEvents?: PointerEvent[];
 }
 
@@ -159,9 +208,23 @@ function pointerEvent(type: string, options: PointerEventOptions = {}): PointerE
     clientX: { value: options.clientX ?? 10 },
     clientY: { value: options.clientY ?? 20 },
     button: { value: options.button ?? 0 },
+    shiftKey: { value: options.shiftKey ?? false },
+    altKey: { value: options.altKey ?? false },
+    metaKey: { value: options.metaKey ?? false },
+    ctrlKey: { value: options.ctrlKey ?? false },
     getCoalescedEvents: { value: () => options.coalescedEvents ?? [] },
   });
   return event;
+}
+
+function mouseEvent(type: string, options: PointerEventOptions = {}): MouseEvent {
+  return new MouseEvent(type, {
+    bubbles: true,
+    cancelable: true,
+    button: options.button ?? 0,
+    clientX: options.clientX ?? 10,
+    clientY: options.clientY ?? 20,
+  });
 }
 
 function mockBounds(target: HTMLElement): void {

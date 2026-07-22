@@ -190,6 +190,37 @@
 - 拖动在 PointerUp 时提交一次 `move_elements` Transaction；`Delete`、`Backspace` 和显式工具栏按钮都通过一次 `delete_elements` Transaction 删除当前元素，因此可 Undo/Redo。
 - 此处删除的是当前 Document 内的元素，不决定 P-04 的文档级回收站语义。
 
+### D-28 Phase 1A 自由笔工具状态
+
+- Rust 持有非持久 Tool State，首期工具为 `select | freehand`；状态随 Engine Update 返回，但不进入 Document、序列化、Camera 或 Undo/Redo。
+- React、Vue 与 Vanilla 只通过同一个 Controller 切换工具；`V` 选择、`P` 自由笔，活动按钮使用 `aria-pressed`，创建矩形显式回到 Select。
+- 自由笔复用 S2 的 Float64Array batch-2 传输，PointerUp 形成一个 `create_stroke` Transaction；单击规范化为稳定圆点，取消与失焦只清除 preview。
+- Phase 1 使用 mouse/trackpad/pen 的位置输入和固定 3px 笔宽，不承诺 pressure、可变宽轮廓或移动触摸编辑。这些能力需要独立几何、命中和设备验收。
+
+### D-29 Phase 1A 产品文本与固定字体
+
+- 画布文本固定使用随应用加载的 `Noto Sans SC Variable`（`@fontsource-variable/noto-sans-sc@5.3.0`，OFL-1.1）；UI 字体仍使用系统栈。Host 在创建 Engine 前等待 400/500 weight 可用，失败时明确阻止进入可写编辑器。
+- `TextElementV1` 持久化内容、位置、24px/400 默认样式、可选 `maxWidth` 与非空 `fontFingerprint`；创建、更新、清空删除、移动及 Undo/Redo 全部经过 Rust Command/Transaction。
+- Rust 发出 `textMeasureRequest`，浏览器用固定字体测量并通过 `provideTextMetrics` 回填；metrics cache 与 Scene revision 属于瞬态解析状态，不增加 Document revision 或 Undo history。换行索引统一按 Unicode code point，而不是 JavaScript UTF-16 code unit。
+- IME buffer 只存在于 HTML textarea overlay。Enter 插入换行，`Cmd/Ctrl+Enter` 或 blur 提交一次，`Escape` 取消；空白新文本不产生 Command，清空已有文本走 `delete_elements`。
+- Text 工具快捷键为 `T`；Text 单击开始创建，Select 对已有文本的双击通过 Rust 语义命中进入编辑，不能依赖 SVG DOM target。
+
+### D-30 Phase 1A 持久样式与 Clean/Sketch
+
+- `renderProfile` 是 Rust Document 的持久字段；UI 只暴露 `Clean | Sketch`。Sketch v1 使用固定 preset：`seed=1313817669`、`roughness=1.2`、`bowing=0.8`、`fillStyle=hachure`，不把 benchmark 参数面板直接暴露给用户。
+- 元素样式同样属于 Document：矩形持久 fill/stroke/strokeWidth，自由笔持久 stroke/strokeWidth，文本持久 color/fontSize/fontWeight/textAlign。Style 与 Profile 修改都通过一次 Rust Command/Transaction，并形成一个可理解的 Undo entry。
+- Phase 1A 使用固定 preset：fill 为 mint/blue/amber/none，stroke/text color 为 ink/emerald/blue/rose，线宽为 1/2/4px，字号为 18/24/32px，文本对齐为 start/center/end。协议只接受显式 none 或 canonical 小写六位 sRGB hex，不接受任意 CSS paint。
+- Rust 从选中语义元素派生只读 style presentation；React、Vue、Vanilla 不读取 SVG 属性或反序列化 Document 来猜测当前值。右侧样式面板是画布 overlay，只在可编辑选择存在时显示。
+- schemaVersion 2 通过 Rust copy-on-write migration 把 V1 默认成 Clean 与当前视觉样式；迁移不修改源 bytes。Scene 自描述 resolved Profile，Clean/Sketch 都消费持久 paint，Sketch 随机几何仍只由 Rust resolver 生成。
+
+### D-31 Phase 1B 选择、变换、层级与编辑动作
+
+- 框选按 painted visual bounds 相交；`Shift` 对点击/框选结果执行 toggle。普通点击组内内容选择最外层 Group，`Cmd/Ctrl+click` 穿透到 leaf；允许嵌套 Group，但 Group 只接收同 parent 兄弟项。
+- 选择框提供 8 个 resize handle 与 1 个 rotate handle；不允许越零翻转。`Shift` 等比、`Alt` 中心缩放、`Shift` 旋转按 15°。Stroke width 不随 resize 变粗，混合多选/Group 使用完整 affine composition。
+- Group 插入原选择最高绘制位置并保留 child order；删除 Group 删除 subtree，保留 child 必须显式 Ungroup。Z-order 仅作用同 parent，稳定保留多选内部顺序，边界动作是 no-op。
+- Clipboard 是 Rust 生成/校验、TS 仅暂存的内部版本化 opaque payload；Copy 无 revision，Cut/Paste 各一个 Undo entry，Paste 全量 remap ID 并按 24px screen-space 级联偏移。
+- 本期只做六种 Align，不做 Distribute。Snap 只对未选元素 edges/centers，阈值 6px screen-space，`Cmd/Ctrl` 临时关闭；tie-break 为最小修正量、绘制顺序、稳定 ID，Guide 只在实际 snap 时展示。
+
 ## 22. 需要产品负责人决策的问题
 
 以下问题不阻碍继续评审文档，但会阻碍对应功能进入实现。
@@ -209,7 +240,7 @@
 - **替代 B**：把文本 bounds 从确定性 Scene 验收中排除。
 - **影响**：跨设备换行、布局、Scene hash、包体积和字体许可。
 - **决策时点**：Phase 0 文本测量 Spike 后、Phase 1A 文本实现前。
-- **当前状态**：待确认。
+- **当前状态**：已确认采用推荐方案。Phase 1A 固定使用随应用加载的 `Noto Sans SC Variable`，持久化 `fontFingerprint` 并等待字体就绪后创建 Engine，详见 D-29。
 - **Phase 0 证据**：两阶段测量与 fingerprint 失效可行；本机首次 3-run 测量 7.5ms、缓存 3/3 命中。跨设备一致性仍要求固定字体或明确降级契约。
 
 ### P-03 多标签页行为
@@ -252,7 +283,7 @@
 - **替代**：Phase 1 只保证 mouse/trackpad，自由笔忽略 pressure。
 - **影响**：产品“ink”体验、输入 benchmark 和设备测试矩阵。
 - **决策时点**：Phase 0 自由笔 Spike 后。
-- **当前状态**：待确认。
+- **当前状态**：已确认采用替代方案。Phase 1 使用 mouse/trackpad/pen 的位置输入，固定 3px 笔宽并忽略 pressure；移动触摸 UI 和可变宽笔迹另行设计，详见 D-28。
 
 ## 决策模板
 
@@ -276,4 +307,4 @@
 P-01 已确认，Phase 0 可以实施。进入相应产品功能前必须确认其余问题；未到决策时点的问题可以保留待确认，但不能由实现者自行选择用户可见行为。
 
 ---
-*Last updated: 2026-07-22 | Reason: record the confirmed Rust-owned single-selection and element deletion semantics*
+*Last updated: 2026-07-23 | Reason: confirm the Phase 1B direct-manipulation contract*

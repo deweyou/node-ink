@@ -1,20 +1,25 @@
 import {
-  parseDiagramOperationBatchResult,
   parseCamera,
+  parseClipboardPayload,
+  parseDiagramOperationBatchResult,
   parseEngineUpdate,
   parseMigrationAttempt,
+  parseNodeInkDocument,
   parsePointerUpdate,
   parseScenePatch,
   parseSceneResolution,
   parseSceneSnapshot,
   parseStrokeUpdate,
+  parseTextEditTarget,
   parseTextFixtureResolution,
   type CommandEnvelopeV1,
   type CameraActionV1,
   type CameraV1,
   type CameraViewportV1,
+  type ClipboardPayloadV1,
   type DiagramOperationBatchResultV1,
   type DiagramOperationBatchV1,
+  type EditorToolV1,
   type EnginePortV1,
   type EngineUpdateV1,
   type MigrationAttemptV1,
@@ -31,8 +36,10 @@ import {
   type StrokeTransportV1,
   type StrokeUpdateV1,
   type TextFixtureResolutionV1,
+  type TextEditTargetV1,
   type TextMetricsSnapshotV1,
   type TextRunV1,
+  type Vec2,
 } from '@nodeink-internal/protocol';
 
 interface WasmEngineHandle {
@@ -42,7 +49,11 @@ interface WasmEngineHandle {
   fitCamera(viewportWidth: number, viewportHeight: number, padding: number): string;
   applyCameraAction(actionJson: string): string;
   executeCommand(commandJson: string): string;
-  setSelection(elementId: string | undefined): string;
+  setActiveTool(tool: string): string;
+  setSelection(elementIdsJson: string, primaryElementId: string | undefined): string;
+  copySelection(): string;
+  beginTextEditAt(pointJson: string): string;
+  provideTextMetrics(snapshotJson: string): string;
   executeDiagramOperation(batchJson: string): string;
   handlePointerEvents(eventsJson: string, commandId: string): string;
   handleStrokeBatchJson(batchJson: string, commandId: string): string;
@@ -135,9 +146,49 @@ class WasmEnginePort implements EnginePortV1 {
     }
   }
 
-  async setSelection(elementId: string | null): Promise<EngineUpdateV1> {
+  async setActiveTool(tool: EditorToolV1): Promise<EngineUpdateV1> {
     try {
-      return parseEngineUpdate(this.requireHandle().setSelection(elementId ?? undefined));
+      return parseEngineUpdate(this.requireHandle().setActiveTool(tool));
+    } catch (error) {
+      throw normalizeEngineError(error);
+    }
+  }
+
+  async setSelection(
+    elementIds: string[],
+    primaryElementId: string | null,
+  ): Promise<EngineUpdateV1> {
+    try {
+      return parseEngineUpdate(
+        this.requireHandle().setSelection(
+          JSON.stringify(elementIds),
+          primaryElementId ?? undefined,
+        ),
+      );
+    } catch (error) {
+      throw normalizeEngineError(error);
+    }
+  }
+
+  async copySelection(): Promise<ClipboardPayloadV1> {
+    try {
+      return parseClipboardPayload(this.requireHandle().copySelection());
+    } catch (error) {
+      throw normalizeEngineError(error);
+    }
+  }
+
+  async beginTextEditAt(point: Vec2): Promise<TextEditTargetV1> {
+    try {
+      return parseTextEditTarget(this.requireHandle().beginTextEditAt(JSON.stringify(point)));
+    } catch (error) {
+      throw normalizeEngineError(error);
+    }
+  }
+
+  async provideTextMetrics(snapshot: TextMetricsSnapshotV1): Promise<EngineUpdateV1> {
+    try {
+      return parseEngineUpdate(this.requireHandle().provideTextMetrics(JSON.stringify(snapshot)));
     } catch (error) {
       throw normalizeEngineError(error);
     }
@@ -259,7 +310,7 @@ class WasmEnginePort implements EnginePortV1 {
     try {
       const handle = this.requireHandle();
       const canonicalPayload = handle.serializeDocument();
-      const document = parseSerializedDocument(canonicalPayload);
+      const document = parseNodeInkDocument(canonicalPayload);
       return {
         canonicalPayload,
         document,
@@ -338,19 +389,4 @@ function normalizeEngineError(error: unknown): Error {
   } catch {
     return new Error(message);
   }
-}
-
-function parseSerializedDocument(canonicalPayload: string): NodeInkDocumentV1 {
-  const document = JSON.parse(canonicalPayload) as Partial<NodeInkDocumentV1>;
-  if (
-    document.schemaVersion !== 1 ||
-    typeof document.documentId !== 'string' ||
-    typeof document.revision !== 'number' ||
-    !Array.isArray(document.rootOrder) ||
-    typeof document.elements !== 'object' ||
-    document.elements === null
-  ) {
-    throw new Error('Engine returned an invalid serialized Document');
-  }
-  return document as NodeInkDocumentV1;
 }

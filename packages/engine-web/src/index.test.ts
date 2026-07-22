@@ -1,7 +1,19 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import type { CommandEnvelopeV1, DiagramOperationBatchV1 } from '@nodeink-internal/protocol';
-import { createBlankDocument } from '@nodeink-internal/protocol';
+import type {
+  CommandEnvelopeV1,
+  DiagramOperationBatchV1,
+  TextElementV1,
+  TextMetricsSnapshotV1,
+} from '@nodeink-internal/protocol';
+import {
+  canvasFontFamily,
+  createBlankDocument,
+  createIdentityAffine2D,
+  nodeInkClipboardMime,
+} from '@nodeink-internal/protocol';
+
+const fixtureFontFingerprint = 'noto-sans-sc-v40-fontsource-5.3.0';
 
 const wasm = vi.hoisted(() => {
   const handle = {
@@ -11,7 +23,11 @@ const wasm = vi.hoisted(() => {
     applyCameraAction: vi.fn(),
     currentUpdate: vi.fn(),
     executeCommand: vi.fn(),
+    setActiveTool: vi.fn(),
     setSelection: vi.fn(),
+    copySelection: vi.fn(),
+    beginTextEditAt: vi.fn(),
+    provideTextMetrics: vi.fn(),
     executeDiagramOperation: vi.fn(),
     handlePointerEvents: vi.fn(),
     handleStrokeBatchJson: vi.fn(),
@@ -51,7 +67,11 @@ describe('createWasmEngine', () => {
     wasm.handle.applyCameraAction.mockReturnValue('{"x":12,"y":6,"zoom":2}');
     wasm.handle.currentUpdate.mockReturnValue(update);
     wasm.handle.executeCommand.mockReturnValue(update);
+    wasm.handle.setActiveTool.mockReturnValue(validUpdate('freehand'));
     wasm.handle.setSelection.mockReturnValue(update);
+    wasm.handle.copySelection.mockReturnValue(clipboardPayload());
+    wasm.handle.beginTextEditAt.mockReturnValue(textEditTarget());
+    wasm.handle.provideTextMetrics.mockReturnValue(validUpdate('text'));
     wasm.handle.executeDiagramOperation.mockReturnValue(diagramOperationResult());
     wasm.handle.handlePointerEvents.mockReturnValue(pointerUpdate());
     wasm.handle.handleStrokeBatchJson.mockReturnValue(strokeUpdate());
@@ -77,7 +97,7 @@ describe('createWasmEngine', () => {
       expectedRevision: 0,
       command: {
         type: 'create_rectangle',
-        rectangle: { kind: 'rect', id: 'rect-1', x: 1, y: 2, width: 3, height: 4 },
+        rectangle: rectangleElement(),
       },
     };
     const batch = diagramOperationBatch();
@@ -106,8 +126,94 @@ describe('createWasmEngine', () => {
     await expect(engine.executeCommand(command)).resolves.toMatchObject({
       history: { canUndo: false },
     });
-    await expect(engine.setSelection('rect-1')).resolves.toMatchObject({
+    const createTextCommand: CommandEnvelopeV1 = {
+      protocolVersion: 1,
+      commandId: 'create-text-1',
+      documentId: 'doc-1',
+      expectedRevision: 0,
+      command: { type: 'create_text', text: textElement() },
+    };
+    const updateTextCommand: CommandEnvelopeV1 = {
+      protocolVersion: 1,
+      commandId: 'update-text-1',
+      documentId: 'doc-1',
+      expectedRevision: 0,
+      command: {
+        type: 'update_text',
+        elementId: 'text-1',
+        patch: { text: 'Updated\ntext', maxWidth: null },
+      },
+    };
+    const updateStyleCommand: CommandEnvelopeV1 = {
+      protocolVersion: 1,
+      commandId: 'update-style-1',
+      documentId: 'doc-1',
+      expectedRevision: 0,
+      command: {
+        type: 'update_element_style',
+        elementId: 'text-1',
+        patch: {
+          kind: 'text',
+          color: '#2563eb',
+          fontSize: 28,
+          fontWeight: 500,
+          textAlign: 'center',
+        },
+      },
+    };
+    const renderProfileCommand: CommandEnvelopeV1 = {
+      protocolVersion: 1,
+      commandId: 'set-render-profile-1',
+      documentId: 'doc-1',
+      expectedRevision: 0,
+      command: {
+        type: 'set_render_profile',
+        renderProfile: {
+          kind: 'sketch',
+          version: 1,
+          seed: 42,
+          roughness: 1.2,
+          bowing: 0.8,
+          fillStyle: 'hachure',
+        },
+      },
+    };
+    await expect(engine.executeCommand(createTextCommand)).resolves.toBeDefined();
+    await expect(engine.executeCommand(updateTextCommand)).resolves.toBeDefined();
+    await expect(engine.executeCommand(updateStyleCommand)).resolves.toBeDefined();
+    await expect(engine.executeCommand(renderProfileCommand)).resolves.toBeDefined();
+    await expect(engine.setActiveTool('freehand')).resolves.toMatchObject({
+      activeTool: 'freehand',
+    });
+    await expect(engine.setSelection(['rect-1', 'rect-2'], 'rect-2')).resolves.toMatchObject({
       selection: { selectedElementId: null },
+    });
+    await expect(engine.setSelection([], null)).resolves.toMatchObject({
+      selection: { selectedElementIds: [] },
+    });
+    await expect(engine.copySelection()).resolves.toEqual({
+      mime: nodeInkClipboardMime,
+      data: '{"version":1,"elements":[]}',
+    });
+    await expect(engine.beginTextEditAt({ x: 40, y: 48 })).resolves.toMatchObject({
+      element: { id: 'text-1', text: '第一行\nSecond line' },
+      update: { activeTool: 'text' },
+    });
+    const textMetrics: TextMetricsSnapshotV1 = {
+      fontFingerprint: 'noto-sans-sc-v40-fontsource-5.3.0',
+      metrics: [
+        {
+          key: 'text-1:line-0',
+          width: 120,
+          height: 24,
+          baseline: 18,
+          lineBreaks: [5],
+        },
+      ],
+    };
+    await expect(engine.provideTextMetrics(textMetrics)).resolves.toMatchObject({
+      activeTool: 'text',
+      textMeasureRequest: null,
     });
     await expect(engine.executeDiagramOperation(batch)).resolves.toMatchObject({
       batchId: 'batch-1',
@@ -120,6 +226,8 @@ describe('createWasmEngine', () => {
         sequence: 1,
         phase: 'down' as const,
         point: { x: 1, y: 2 },
+        modifiers: { shift: true, alt: false, metaOrCtrl: true },
+        screenScale: 2,
       },
     ];
     await expect(engine.handlePointerEvents(pointerEvents, 'drag-1')).resolves.toMatchObject({
@@ -147,14 +255,14 @@ describe('createWasmEngine', () => {
       {
         key: 'cjk',
         text: '你好',
-        fontFamily: 'Arial',
+        fontFamily: 'Noto Sans SC Variable',
         fontSize: 20,
         fontWeight: 400 as const,
         maxWidth: null,
       },
     ];
     await expect(
-      engine.resolveTextFixture('measure-1', 'font-v1', textRuns, null),
+      engine.resolveTextFixture('measure-1', 'noto-sans-sc-v40-fontsource-5.3.0', textRuns, null),
     ).resolves.toMatchObject({ request: { requestId: 'measure-1' }, scene: null });
     await expect(
       engine.handleStrokeBatch(strokeBatch, 'stroke-typed', 'typed_array'),
@@ -184,7 +292,19 @@ describe('createWasmEngine', () => {
     expect(wasm.default).toHaveBeenCalledOnce();
     expect(wasm.openDocument).toHaveBeenCalledWith(JSON.stringify(document));
     expect(wasm.handle.executeCommand).toHaveBeenCalledWith(JSON.stringify(command));
-    expect(wasm.handle.setSelection).toHaveBeenCalledWith('rect-1');
+    expect(wasm.handle.executeCommand).toHaveBeenCalledWith(JSON.stringify(createTextCommand));
+    expect(wasm.handle.executeCommand).toHaveBeenCalledWith(JSON.stringify(updateTextCommand));
+    expect(wasm.handle.executeCommand).toHaveBeenCalledWith(JSON.stringify(updateStyleCommand));
+    expect(wasm.handle.executeCommand).toHaveBeenCalledWith(JSON.stringify(renderProfileCommand));
+    expect(wasm.handle.setActiveTool).toHaveBeenCalledWith('freehand');
+    expect(wasm.handle.setSelection).toHaveBeenCalledWith(
+      JSON.stringify(['rect-1', 'rect-2']),
+      'rect-2',
+    );
+    expect(wasm.handle.setSelection).toHaveBeenCalledWith('[]', undefined);
+    expect(wasm.handle.copySelection).toHaveBeenCalledOnce();
+    expect(wasm.handle.beginTextEditAt).toHaveBeenCalledWith('{"x":40,"y":48}');
+    expect(wasm.handle.provideTextMetrics).toHaveBeenCalledWith(JSON.stringify(textMetrics));
     expect(wasm.handle.setCamera).toHaveBeenCalledWith('{"x":24,"y":12,"zoom":1.5}');
     expect(wasm.handle.fitCamera).toHaveBeenCalledWith(500, 300, 50);
     expect(wasm.handle.applyCameraAction).toHaveBeenCalledWith(
@@ -212,7 +332,7 @@ describe('createWasmEngine', () => {
     );
     expect(wasm.handle.resolveTextFixture).toHaveBeenCalledWith(
       'measure-1',
-      'font-v1',
+      'noto-sans-sc-v40-fontsource-5.3.0',
       JSON.stringify(textRuns),
       undefined,
     );
@@ -261,6 +381,36 @@ describe('createWasmEngine', () => {
       throw new Error(JSON.stringify({ code: 'revision_conflict', message: 'stale revision' }));
     });
     await expect(engine.executeCommand(command)).rejects.toThrow('stale revision');
+
+    wasm.handle.setActiveTool.mockImplementation(() => {
+      throw new Error(JSON.stringify({ message: 'tool rejected' }));
+    });
+    await expect(engine.setActiveTool('freehand')).rejects.toThrow('tool rejected');
+
+    wasm.handle.setSelection.mockImplementation(() => {
+      throw new Error(JSON.stringify({ message: 'selection rejected' }));
+    });
+    await expect(engine.setSelection(['rect-1'], 'rect-1')).rejects.toThrow('selection rejected');
+
+    wasm.handle.copySelection.mockImplementation(() => {
+      throw new Error(JSON.stringify({ message: 'copy rejected' }));
+    });
+    await expect(engine.copySelection()).rejects.toThrow('copy rejected');
+
+    wasm.handle.beginTextEditAt.mockImplementation(() => {
+      throw new Error(JSON.stringify({ message: 'text target rejected' }));
+    });
+    await expect(engine.beginTextEditAt({ x: 0, y: 0 })).rejects.toThrow('text target rejected');
+
+    wasm.handle.provideTextMetrics.mockImplementation(() => {
+      throw new Error(JSON.stringify({ message: 'metrics snapshot rejected' }));
+    });
+    await expect(
+      engine.provideTextMetrics({
+        fontFingerprint: 'noto-sans-sc-v40-fontsource-5.3.0',
+        metrics: [],
+      }),
+    ).rejects.toThrow('metrics snapshot rejected');
 
     wasm.handle.executeDiagramOperation.mockImplementation(() => {
       throw new Error(JSON.stringify({ message: 'batch rejected' }));
@@ -311,9 +461,9 @@ describe('createWasmEngine', () => {
     wasm.handle.resolveTextFixture.mockImplementation(() => {
       throw new Error(JSON.stringify({ message: 'metrics rejected' }));
     });
-    await expect(engine.resolveTextFixture('measure', 'font-v1', [], null)).rejects.toThrow(
-      'metrics rejected',
-    );
+    await expect(
+      engine.resolveTextFixture('measure', 'noto-sans-sc-v40-fontsource-5.3.0', [], null),
+    ).rejects.toThrow('metrics rejected');
 
     wasm.handle.benchmarkScenePatch.mockImplementation(() => {
       throw new Error(JSON.stringify({ message: 'fixture rejected' }));
@@ -362,7 +512,7 @@ function diagramOperationBatch(): DiagramOperationBatchV1 {
       {
         type: 'create_rectangle',
         opId: 'create-1',
-        rectangle: { kind: 'rect', id: 'rect-1', x: 1, y: 2, width: 3, height: 4 },
+        rectangle: rectangleElement(),
       },
     ],
   };
@@ -379,19 +529,81 @@ function diagramOperationResult(): string {
   });
 }
 
-function validUpdate(): string {
+function validUpdate(activeTool: 'select' | 'freehand' | 'text' = 'select'): string {
   return JSON.stringify({
+    activeTool,
+    textMeasureRequest: null,
     operation: null,
     scene: {
       protocolVersion: 1,
       documentId: 'doc-1',
       documentRevision: 0,
       sceneRevision: 0,
+      renderProfile: { kind: 'clean', version: 1 },
       rootNodeIds: [],
       nodes: {},
     },
     history: { canUndo: false, canRedo: false },
-    selection: { selectedElementId: null, bounds: null },
+    selection: {
+      selectedElementIds: [],
+      primaryElementId: null,
+      selectedElementId: null,
+      visualBounds: null,
+      orientedBounds: null,
+      handles: [],
+      marquee: null,
+      guides: [],
+      style: null,
+    },
+  });
+}
+
+function textElement(): TextElementV1 {
+  return {
+    kind: 'text',
+    id: 'text-1',
+    transform: createIdentityAffine2D(),
+    x: 40,
+    y: 48,
+    text: '第一行\nSecond line',
+    fontFamily: canvasFontFamily,
+    fontSize: 20,
+    fontWeight: 400,
+    maxWidth: 240,
+    fontFingerprint: fixtureFontFingerprint,
+    color: '#0f172a',
+    textAlign: 'start',
+  };
+}
+
+function textEditTarget(): string {
+  return JSON.stringify({
+    element: textElement(),
+    update: {
+      ...JSON.parse(validUpdate('text')),
+      selection: {
+        selectedElementIds: ['text-1'],
+        primaryElementId: 'text-1',
+        selectedElementId: 'text-1',
+        visualBounds: { x: 40, y: 48, width: 240, height: 48 },
+        orientedBounds: {
+          center: { x: 160, y: 72 },
+          width: 240,
+          height: 48,
+          rotation: 0,
+        },
+        handles: [],
+        marquee: null,
+        guides: [],
+        style: {
+          kind: 'text',
+          color: '#0f172a',
+          fontSize: 20,
+          fontWeight: 400,
+          textAlign: 'start',
+        },
+      },
+    },
   });
 }
 
@@ -424,7 +636,11 @@ function sceneResolution(): string {
 
 function textResolution(): string {
   return JSON.stringify({
-    request: { requestId: 'measure-1', fontFingerprint: 'font-v1', runs: [] },
+    request: {
+      requestId: 'measure-1',
+      fontFingerprint: 'noto-sans-sc-v40-fontsource-5.3.0',
+      runs: [],
+    },
     scene: null,
     canonicalHash: null,
   });
@@ -455,11 +671,33 @@ function migrationAttempt(): string {
   return JSON.stringify({
     result: {
       sourceSchemaVersion: 0,
-      targetSchemaVersion: 1,
+      targetSchemaVersion: 3,
       migrated: true,
       document: createBlankDocument('doc-1'),
       canonicalPayload: JSON.stringify(createBlankDocument('doc-1')),
     },
     report: null,
+  });
+}
+
+function rectangleElement() {
+  return {
+    kind: 'rect' as const,
+    id: 'rect-1',
+    transform: createIdentityAffine2D(),
+    x: 1,
+    y: 2,
+    width: 3,
+    height: 4,
+    fill: { kind: 'solid' as const, color: '#d1fae5' },
+    stroke: '#047857',
+    strokeWidth: 2,
+  };
+}
+
+function clipboardPayload(): string {
+  return JSON.stringify({
+    mime: nodeInkClipboardMime,
+    data: '{"version":1,"elements":[]}',
   });
 }
