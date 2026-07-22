@@ -188,8 +188,8 @@ TypeScript 负责平台能力和用户体验集成：
 type DocumentId = string;
 type ElementId = string;
 
-interface NodeInkDocumentV2 {
-  schemaVersion: 2;
+interface NodeInkDocumentV3 {
+  schemaVersion: 3;
   documentId: DocumentId;
   revision: number;
   renderProfile: RenderProfileV1;
@@ -209,29 +209,26 @@ type RenderProfileV1 =
     };
 ```
 
-Schema V2 是 Phase 1A 当前持久格式：V0/V1 通过 Rust copy-on-write migration 补齐原视觉默认值与 Clean Profile，迁移不修改源 payload。`rootOrder` 是当前扁平元素顺序真相；Group、Transform 与 parent/child order 在 Phase 1B 的下一 schema 中显式引入。
+Schema V3 是当前持久格式。V0/V1 先补齐原视觉默认值与 Clean Profile，V2 再为每个元素补 identity affine；两条路径都由 Rust copy-on-write migration 完成且不修改源 payload。`rootOrder` 只包含根元素，Group 的 `childOrder` 持有直接子节点顺序；每个非根元素必须恰好出现一次，层级必须无环。
 
-### 8.2 元素公共字段（Phase 1B 目标）
+### 8.2 元素公共字段（当前实现）
 
-下面的公共 Transform/metadata 是后续目标模型，不属于 Phase 1A Schema V2。当前 V2 的 Rect、Stroke、Text 继续保留各自直接几何字段，并持久化有限样式：Rect 的 fill/stroke/strokeWidth、Stroke 的 stroke/strokeWidth、Text 的 color/fontSize/fontWeight/textAlign。
+Schema V3 的 Rect、Stroke、Text 与 Group 都持有同一种 affine matrix。元素自身的几何字段保持在 local space；Rust 组合祖先与自身 transform，Scene 只输出最终 world transform。当前仍只持久化有限样式：Rect 的 fill/stroke/strokeWidth、Stroke 的 stroke/strokeWidth、Text 的 color/fontSize/fontWeight/textAlign。
 
 ```ts
 interface ElementBaseV1 {
   id: ElementId;
   kind: string;
-  transform: Transform2D;
-  opacity: number;
-  isLocked: boolean;
-  seed: number;
-  metadata: Record<string, JsonValue>;
+  transform: Affine2D;
 }
 
-interface Transform2D {
-  x: number;
-  y: number;
-  rotation: number;
-  scaleX: number;
-  scaleY: number;
+interface Affine2D {
+  a: number;
+  b: number;
+  c: number;
+  d: number;
+  e: number;
+  f: number;
 }
 
 interface ShapeStyleV1 {
@@ -244,7 +241,7 @@ interface ShapeStyleV1 {
 
 持久化时对浮点值执行明确的 finite 检查和规范化舍入，拒绝 `NaN`、`Infinity` 和超出安全边界的坐标。渲染阶段可以保留更高内部精度。
 
-### 8.3 Phase 1B 目标元素
+### 8.3 当前元素与后续扩展
 
 ```ts
 type ElementRecordV1 =
@@ -338,8 +335,12 @@ type CommandV1 =
   | { type: 'move_elements'; elementIds: ElementId[]; delta: Vec2 }
   | { type: 'update_element_style'; elementId: ElementId; patch: ElementStylePatchV1 }
   | { type: 'set_render_profile'; renderProfile: RenderProfileV1 }
+  | { type: 'transform_elements'; elementIds: ElementId[]; transform: Affine2D }
   | { type: 'group_elements'; groupId: ElementId; elementIds: ElementId[] }
-  | { type: 'ungroup_elements'; groupId: ElementId };
+  | { type: 'ungroup_elements'; groupId: ElementId }
+  | { type: 'reorder_elements'; elementIds: ElementId[]; placement: ReorderPlacementV1 }
+  | { type: 'align_elements'; elementIds: ElementId[]; alignment: AlignmentV1 }
+  | { type: 'paste_clipboard'; payload: string; idPrefix: string; offset: Vec2 };
 ```
 
 创建命令必须携带最终 ID 和 seed。生成器可以帮助调用方创建它们，但被记录和重放的是完整 Envelope，不能在执行时依赖隐式随机数。

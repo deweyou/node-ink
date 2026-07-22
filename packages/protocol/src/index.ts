@@ -1,9 +1,10 @@
 export const protocolVersion = 1 as const;
-export const schemaVersion = 2 as const;
+export const schemaVersion = 3 as const;
 export const canvasFontFamily = 'Noto Sans SC Variable' as const;
+export const nodeInkClipboardMime = 'application/x-nodeink-elements+json' as const;
 
 export interface NodeInkDocumentV1 {
-  schemaVersion: 2;
+  schemaVersion: 3;
   documentId: string;
   revision: number;
   renderProfile: RenderProfileV1;
@@ -11,15 +12,25 @@ export interface NodeInkDocumentV1 {
   elements: Record<string, ElementRecordV1>;
 }
 
-export type ElementRecordV1 = RectElementV1 | StrokeElementV1 | TextElementV1;
+export type ElementRecordV1 = RectElementV1 | StrokeElementV1 | TextElementV1 | GroupElementV1;
 
 export type FillV1 = { kind: 'none' } | { kind: 'solid'; color: string };
 
 export type TextAlignV1 = 'start' | 'center' | 'end';
 
+export interface Affine2D {
+  a: number;
+  b: number;
+  c: number;
+  d: number;
+  e: number;
+  f: number;
+}
+
 export interface RectElementV1 {
   kind: 'rect';
   id: string;
+  transform: Affine2D;
   x: number;
   y: number;
   width: number;
@@ -32,6 +43,7 @@ export interface RectElementV1 {
 export interface StrokeElementV1 {
   kind: 'stroke';
   id: string;
+  transform: Affine2D;
   points: Vec2[];
   strokeWidth: number;
   stroke: string;
@@ -40,6 +52,7 @@ export interface StrokeElementV1 {
 export interface TextElementV1 {
   kind: 'text';
   id: string;
+  transform: Affine2D;
   x: number;
   y: number;
   text: string;
@@ -50,6 +63,13 @@ export interface TextElementV1 {
   fontFingerprint: string;
   color: string;
   textAlign: TextAlignV1;
+}
+
+export interface GroupElementV1 {
+  kind: 'group';
+  id: string;
+  transform: Affine2D;
+  childOrder: string[];
 }
 
 export interface Vec2 {
@@ -93,7 +113,33 @@ export type CommandV1 =
   | { type: 'update_rectangle'; elementId: string; patch: RectanglePatchV1 }
   | { type: 'update_element_style'; elementId: string; patch: ElementStylePatchV1 }
   | { type: 'set_render_profile'; renderProfile: RenderProfileV1 }
+  | { type: 'transform_elements'; elementIds: string[]; transform: Affine2D }
+  | { type: 'group_elements'; groupId: string; elementIds: string[] }
+  | { type: 'ungroup_elements'; groupId: string }
+  | {
+      type: 'reorder_elements';
+      elementIds: string[];
+      placement: ReorderPlacementV1;
+    }
+  | { type: 'align_elements'; elementIds: string[]; alignment: AlignmentV1 }
+  | {
+      type: 'paste_clipboard';
+      payload: string;
+      idPrefix: string;
+      offset: Vec2;
+    }
   | { type: 'delete_elements'; elementIds: string[] };
+
+export type ReorderPlacementV1 = 'front' | 'forward' | 'backward' | 'back';
+export type AlignmentV1 = 'left' | 'center' | 'right' | 'top' | 'middle' | 'bottom';
+
+export interface ClipboardPayloadV1 {
+  mime: typeof nodeInkClipboardMime;
+  data: string;
+}
+
+export type ClipboardExportResultV1 = ClipboardPayloadV1;
+export type ClipboardImportResultV1 = EngineUpdateV1;
 
 export type ElementStylePatchV1 =
   | {
@@ -199,9 +245,51 @@ export interface SelectionBoundsV1 {
   height: number;
 }
 
+export interface OrientedSelectionBoundsV1 {
+  center: Vec2;
+  width: number;
+  height: number;
+  rotation: number;
+}
+
+export type SelectionHandleIdV1 =
+  | 'north_west'
+  | 'north'
+  | 'north_east'
+  | 'east'
+  | 'south_east'
+  | 'south'
+  | 'south_west'
+  | 'west'
+  | 'rotate';
+
+export interface SelectionHandleV1 {
+  id: SelectionHandleIdV1;
+  kind: 'resize' | 'rotate';
+  position: Vec2;
+}
+
+export interface SelectionMarqueeV1 {
+  bounds: SelectionBoundsV1;
+  mode: 'replace' | 'add' | 'toggle';
+}
+
+export interface AlignmentGuideV1 {
+  axis: 'x' | 'y';
+  position: number;
+  start: number;
+  end: number;
+}
+
 export interface SelectionStateV1 {
+  selectedElementIds: string[];
+  primaryElementId: string | null;
   selectedElementId: string | null;
-  bounds: SelectionBoundsV1 | null;
+  visualBounds: SelectionBoundsV1 | null;
+  orientedBounds: OrientedSelectionBoundsV1 | null;
+  handles: SelectionHandleV1[];
+  marquee: SelectionMarqueeV1 | null;
+  guides: AlignmentGuideV1[];
   style: SelectionStyleV1 | null;
 }
 
@@ -348,6 +436,7 @@ export interface SceneRectV1 {
   kind: 'rect';
   id: string;
   sourceElementId: string;
+  transform: Affine2D;
   x: number;
   y: number;
   width: number;
@@ -361,6 +450,7 @@ export interface ScenePathV1 {
   kind: 'path';
   id: string;
   sourceElementId: string;
+  transform: Affine2D;
   pathData: string;
   fill: string;
   stroke: string;
@@ -371,6 +461,7 @@ export interface SceneTextV1 {
   kind: 'text';
   id: string;
   sourceElementId: string;
+  transform: Affine2D;
   runs: SceneTextRunV1[];
 }
 
@@ -404,7 +495,8 @@ export interface EnginePortV1 {
   applyCameraAction(action: CameraActionV1): Promise<CameraV1>;
   executeCommand(command: CommandEnvelopeV1): Promise<EngineUpdateV1>;
   setActiveTool(tool: EditorToolV1): Promise<EngineUpdateV1>;
-  setSelection(elementId: string | null): Promise<EngineUpdateV1>;
+  setSelection(elementIds: string[], primaryElementId: string | null): Promise<EngineUpdateV1>;
+  copySelection(): Promise<ClipboardPayloadV1>;
   beginTextEditAt(point: Vec2): Promise<TextEditTargetV1>;
   provideTextMetrics(snapshot: TextMetricsSnapshotV1): Promise<EngineUpdateV1>;
   executeDiagramOperation(batch: DiagramOperationBatchV1): Promise<DiagramOperationBatchResultV1>;
@@ -448,6 +540,14 @@ export interface NormalizedPointerEventV1 {
   sequence: number;
   phase: PointerPhaseV1;
   point: Vec2;
+  modifiers: PointerModifiersV1;
+  screenScale: number;
+}
+
+export interface PointerModifiersV1 {
+  shift: boolean;
+  alt: boolean;
+  metaOrCtrl: boolean;
 }
 
 export interface PointerUpdateV1 {
@@ -486,7 +586,11 @@ export interface RendererV1 {
 
 export interface EditorOverlayV1 {
   selectionBounds: SelectionBoundsV1 | null;
+  selectionOrientedBounds: OrientedSelectionBoundsV1 | null;
+  selectionHandles: SelectionHandleV1[];
   selectionPaddingWorld: number;
+  marquee: SelectionMarqueeV1 | null;
+  guides: AlignmentGuideV1[];
 }
 
 export type RenderApplyResultV1 =
@@ -509,10 +613,57 @@ export function createBlankDocument(documentId: string): NodeInkDocumentV1 {
   };
 }
 
+export function createIdentityAffine2D(): Affine2D {
+  return { a: 1, b: 0, c: 0, d: 1, e: 0, f: 0 };
+}
+
 export function parseNodeInkDocument(value: string): NodeInkDocumentV1 {
   const parsed: unknown = JSON.parse(value);
   if (!isNodeInkDocument(parsed)) {
     throw new Error('Engine returned an invalid serialized Document');
+  }
+  return parsed;
+}
+
+export function parseCommandEnvelope(value: string): CommandEnvelopeV1 {
+  const parsed: unknown = JSON.parse(value);
+  if (
+    !isRecord(parsed) ||
+    !hasOnlyKeys(parsed, [
+      'protocolVersion',
+      'commandId',
+      'documentId',
+      'expectedRevision',
+      'command',
+    ]) ||
+    parsed.protocolVersion !== protocolVersion ||
+    !isNonEmptyString(parsed.commandId) ||
+    !isNonEmptyString(parsed.documentId) ||
+    !isNonNegativeSafeInteger(parsed.expectedRevision) ||
+    !isCommand(parsed.command)
+  ) {
+    throw new Error('Command envelope does not satisfy protocol V1');
+  }
+  return parsed as unknown as CommandEnvelopeV1;
+}
+
+export function parseClipboardPayload(value: string): ClipboardPayloadV1 {
+  const parsed: unknown = JSON.parse(value);
+  if (
+    !isRecord(parsed) ||
+    !hasOnlyKeys(parsed, ['mime', 'data']) ||
+    parsed.mime !== nodeInkClipboardMime ||
+    !isNonEmptyString(parsed.data)
+  ) {
+    throw new Error('Clipboard payload does not satisfy protocol V1');
+  }
+  return parsed as unknown as ClipboardPayloadV1;
+}
+
+export function parseNormalizedPointerEvents(value: string): NormalizedPointerEventV1[] {
+  const parsed: unknown = JSON.parse(value);
+  if (!Array.isArray(parsed) || !parsed.every(isNormalizedPointerEvent)) {
+    throw new Error('Pointer events do not satisfy protocol V1');
   }
   return parsed;
 }
@@ -532,12 +683,7 @@ export function parseEngineUpdate(value: string): EngineUpdateV1 {
     !isOperationResultOrNull(parsed.operation) ||
     typeof parsed.history.canUndo !== 'boolean' ||
     typeof parsed.history.canRedo !== 'boolean' ||
-    (parsed.selection.selectedElementId !== null &&
-      !isNonEmptyString(parsed.selection.selectedElementId)) ||
-    !isSelectionBounds(parsed.selection.bounds) ||
-    !isSelectionStyleOrNull(parsed.selection.style) ||
-    (parsed.selection.selectedElementId === null && parsed.selection.bounds !== null) ||
-    (parsed.selection.selectedElementId === null) !== (parsed.selection.style === null)
+    !isSelectionState(parsed.selection)
   ) {
     throw new Error('Engine update does not satisfy protocol V1');
   }
@@ -762,6 +908,184 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
+function hasOnlyKeys(value: Record<string, unknown>, keys: readonly string[]): boolean {
+  const actualKeys = Object.keys(value);
+  return actualKeys.length === keys.length && actualKeys.every((key) => keys.includes(key));
+}
+
+function isCommand(value: unknown): value is CommandV1 {
+  if (!isRecord(value) || !isNonEmptyString(value.type)) {
+    return false;
+  }
+  switch (value.type) {
+    case 'create_rectangle':
+      return hasOnlyKeys(value, ['type', 'rectangle']) && isRectElement(value.rectangle);
+    case 'create_stroke':
+      return hasOnlyKeys(value, ['type', 'stroke']) && isStrokeElement(value.stroke);
+    case 'create_text':
+      return hasOnlyKeys(value, ['type', 'text']) && isTextElement(value.text);
+    case 'move_elements':
+      return (
+        hasOnlyKeys(value, ['type', 'elementIds', 'delta']) &&
+        isNonEmptyUniqueStringArray(value.elementIds) &&
+        isVec2(value.delta)
+      );
+    case 'update_text':
+      return (
+        hasOnlyKeys(value, ['type', 'elementId', 'patch']) &&
+        isNonEmptyString(value.elementId) &&
+        isTextPatch(value.patch)
+      );
+    case 'update_rectangle':
+      return (
+        hasOnlyKeys(value, ['type', 'elementId', 'patch']) &&
+        isNonEmptyString(value.elementId) &&
+        isRectanglePatch(value.patch)
+      );
+    case 'update_element_style':
+      return (
+        hasOnlyKeys(value, ['type', 'elementId', 'patch']) &&
+        isNonEmptyString(value.elementId) &&
+        isElementStylePatch(value.patch)
+      );
+    case 'set_render_profile':
+      return hasOnlyKeys(value, ['type', 'renderProfile']) && isRenderProfile(value.renderProfile);
+    case 'transform_elements':
+      return (
+        hasOnlyKeys(value, ['type', 'elementIds', 'transform']) &&
+        isNonEmptyUniqueStringArray(value.elementIds) &&
+        isAffine2D(value.transform)
+      );
+    case 'group_elements':
+      return (
+        hasOnlyKeys(value, ['type', 'groupId', 'elementIds']) &&
+        isNonEmptyString(value.groupId) &&
+        isNonEmptyUniqueStringArray(value.elementIds, 2) &&
+        !value.elementIds.includes(value.groupId)
+      );
+    case 'ungroup_elements':
+      return hasOnlyKeys(value, ['type', 'groupId']) && isNonEmptyString(value.groupId);
+    case 'reorder_elements':
+      return (
+        hasOnlyKeys(value, ['type', 'elementIds', 'placement']) &&
+        isNonEmptyUniqueStringArray(value.elementIds) &&
+        isReorderPlacement(value.placement)
+      );
+    case 'align_elements':
+      return (
+        hasOnlyKeys(value, ['type', 'elementIds', 'alignment']) &&
+        isNonEmptyUniqueStringArray(value.elementIds, 2) &&
+        isAlignment(value.alignment)
+      );
+    case 'paste_clipboard':
+      return (
+        hasOnlyKeys(value, ['type', 'payload', 'idPrefix', 'offset']) &&
+        isNonEmptyString(value.payload) &&
+        isNonEmptyString(value.idPrefix) &&
+        isVec2(value.offset)
+      );
+    case 'delete_elements':
+      return (
+        hasOnlyKeys(value, ['type', 'elementIds']) && isNonEmptyUniqueStringArray(value.elementIds)
+      );
+    default:
+      return false;
+  }
+}
+
+function isTextPatch(value: unknown): value is TextPatchV1 {
+  if (!isRecord(value) || Object.keys(value).length === 0) {
+    return false;
+  }
+  const keys = Object.keys(value);
+  return (
+    keys.every((key) => key === 'text' || key === 'maxWidth') &&
+    (value.text === undefined || typeof value.text === 'string') &&
+    (value.maxWidth === undefined ||
+      value.maxWidth === null ||
+      isPositiveFiniteNumber(value.maxWidth))
+  );
+}
+
+function isRectanglePatch(value: unknown): value is RectanglePatchV1 {
+  if (!isRecord(value) || Object.keys(value).length === 0) {
+    return false;
+  }
+  const keys = Object.keys(value);
+  return (
+    keys.every((key) => key === 'x' || key === 'y' || key === 'width' || key === 'height') &&
+    (value.x === undefined || isFiniteNumber(value.x)) &&
+    (value.y === undefined || isFiniteNumber(value.y)) &&
+    (value.width === undefined || isPositiveFiniteNumber(value.width)) &&
+    (value.height === undefined || isPositiveFiniteNumber(value.height))
+  );
+}
+
+function isElementStylePatch(value: unknown): value is ElementStylePatchV1 {
+  if (!isRecord(value) || Object.keys(value).length < 2) {
+    return false;
+  }
+  const keys = Object.keys(value);
+  if (value.kind === 'rect') {
+    return (
+      keys.every(
+        (key) => key === 'kind' || key === 'fill' || key === 'stroke' || key === 'strokeWidth',
+      ) &&
+      (value.fill === undefined || isFill(value.fill)) &&
+      (value.stroke === undefined || isCanonicalColor(value.stroke)) &&
+      (value.strokeWidth === undefined || isValidStrokeWidth(value.strokeWidth))
+    );
+  }
+  if (value.kind === 'stroke') {
+    return (
+      keys.every((key) => key === 'kind' || key === 'stroke' || key === 'strokeWidth') &&
+      (value.stroke === undefined || isCanonicalColor(value.stroke)) &&
+      (value.strokeWidth === undefined || isValidStrokeWidth(value.strokeWidth))
+    );
+  }
+  return (
+    value.kind === 'text' &&
+    keys.every(
+      (key) =>
+        key === 'kind' ||
+        key === 'color' ||
+        key === 'fontSize' ||
+        key === 'fontWeight' ||
+        key === 'textAlign',
+    ) &&
+    (value.color === undefined || isCanonicalColor(value.color)) &&
+    (value.fontSize === undefined || isValidFontSize(value.fontSize)) &&
+    (value.fontWeight === undefined || value.fontWeight === 400 || value.fontWeight === 500) &&
+    (value.textAlign === undefined || isTextAlign(value.textAlign))
+  );
+}
+
+function isNormalizedPointerEvent(value: unknown): value is NormalizedPointerEventV1 {
+  return (
+    isRecord(value) &&
+    hasOnlyKeys(value, ['pointerId', 'sequence', 'phase', 'point', 'modifiers', 'screenScale']) &&
+    isUint32(value.pointerId) &&
+    isNonNegativeSafeInteger(value.sequence) &&
+    (value.phase === 'down' ||
+      value.phase === 'move' ||
+      value.phase === 'up' ||
+      value.phase === 'cancel') &&
+    isVec2(value.point) &&
+    isPointerModifiers(value.modifiers) &&
+    isPositiveFiniteNumber(value.screenScale)
+  );
+}
+
+function isPointerModifiers(value: unknown): value is PointerModifiersV1 {
+  return (
+    isRecord(value) &&
+    hasOnlyKeys(value, ['shift', 'alt', 'metaOrCtrl']) &&
+    typeof value.shift === 'boolean' &&
+    typeof value.alt === 'boolean' &&
+    typeof value.metaOrCtrl === 'boolean'
+  );
+}
+
 function isEditorTool(value: unknown): value is EditorToolV1 {
   return value === 'select' || value === 'freehand' || value === 'text';
 }
@@ -784,41 +1108,96 @@ function isNodeInkDocument(value: unknown): value is NodeInkDocumentV1 {
   const elements = value.elements as Record<string, unknown>;
   const elementEntries = Object.entries(elements);
   if (
-    elementEntries.length !== value.rootOrder.length ||
     !elementEntries.every(
       ([elementId, element]) => isElementRecord(element) && element.id === elementId,
     )
   ) {
     return false;
   }
-  return value.rootOrder.every((elementId) => elements[elementId] !== undefined);
+  const referencedIds = new Set<string>();
+  const visiting = new Set<string>();
+  const visited = new Set<string>();
+  const visit = (elementId: string): boolean => {
+    const element = elements[elementId] as ElementRecordV1 | undefined;
+    if (element === undefined || visiting.has(elementId) || referencedIds.has(elementId)) {
+      return false;
+    }
+    referencedIds.add(elementId);
+    visiting.add(elementId);
+    if (element.kind === 'group' && !element.childOrder.every(visit)) {
+      return false;
+    }
+    visiting.delete(elementId);
+    visited.add(elementId);
+    return true;
+  };
+  return value.rootOrder.every(visit) && visited.size === elementEntries.length;
 }
 
 function isElementRecord(value: unknown): value is ElementRecordV1 {
-  if (!isRecord(value) || !isNonEmptyString(value.id)) {
+  if (!isRecord(value) || !isNonEmptyString(value.id) || !isAffine2D(value.transform)) {
     return false;
   }
   if (value.kind === 'rect') {
-    return (
-      isFiniteNumber(value.x) &&
-      isFiniteNumber(value.y) &&
-      isPositiveFiniteNumber(value.width) &&
-      isPositiveFiniteNumber(value.height) &&
-      isFill(value.fill) &&
-      isCanonicalColor(value.stroke) &&
-      isValidStrokeWidth(value.strokeWidth)
-    );
+    return isRectElement(value);
   }
   if (value.kind === 'stroke') {
+    return isStrokeElement(value);
+  }
+  if (value.kind === 'group') {
     return (
-      Array.isArray(value.points) &&
-      value.points.length >= 2 &&
-      value.points.every(isVec2) &&
-      isValidStrokeWidth(value.strokeWidth) &&
-      isCanonicalColor(value.stroke)
+      hasOnlyKeys(value, ['kind', 'id', 'transform', 'childOrder']) &&
+      Array.isArray(value.childOrder) &&
+      value.childOrder.length > 0 &&
+      value.childOrder.every(isNonEmptyString) &&
+      new Set(value.childOrder).size === value.childOrder.length &&
+      !value.childOrder.includes(value.id)
     );
   }
   return isTextElement(value);
+}
+
+function isRectElement(value: unknown): value is RectElementV1 {
+  return (
+    isRecord(value) &&
+    hasOnlyKeys(value, [
+      'kind',
+      'id',
+      'transform',
+      'x',
+      'y',
+      'width',
+      'height',
+      'fill',
+      'stroke',
+      'strokeWidth',
+    ]) &&
+    value.kind === 'rect' &&
+    isNonEmptyString(value.id) &&
+    isAffine2D(value.transform) &&
+    isFiniteNumber(value.x) &&
+    isFiniteNumber(value.y) &&
+    isPositiveFiniteNumber(value.width) &&
+    isPositiveFiniteNumber(value.height) &&
+    isFill(value.fill) &&
+    isCanonicalColor(value.stroke) &&
+    isValidStrokeWidth(value.strokeWidth)
+  );
+}
+
+function isStrokeElement(value: unknown): value is StrokeElementV1 {
+  return (
+    isRecord(value) &&
+    hasOnlyKeys(value, ['kind', 'id', 'transform', 'points', 'strokeWidth', 'stroke']) &&
+    value.kind === 'stroke' &&
+    isNonEmptyString(value.id) &&
+    isAffine2D(value.transform) &&
+    Array.isArray(value.points) &&
+    value.points.length >= 2 &&
+    value.points.every(isVec2) &&
+    isValidStrokeWidth(value.strokeWidth) &&
+    isCanonicalColor(value.stroke)
+  );
 }
 
 function isSceneSnapshot(value: Record<string, unknown>): boolean {
@@ -846,11 +1225,29 @@ function isSceneNodeMap(value: Record<string, unknown>): boolean {
 }
 
 function isSceneNode(value: unknown): value is SceneNodeV1 {
-  if (!isRecord(value) || !isNonEmptyString(value.id) || !isNonEmptyString(value.sourceElementId)) {
+  if (
+    !isRecord(value) ||
+    !isNonEmptyString(value.id) ||
+    !isNonEmptyString(value.sourceElementId) ||
+    !isAffine2D(value.transform)
+  ) {
     return false;
   }
   if (value.kind === 'rect') {
     return (
+      hasOnlyKeys(value, [
+        'kind',
+        'id',
+        'sourceElementId',
+        'transform',
+        'x',
+        'y',
+        'width',
+        'height',
+        'fill',
+        'stroke',
+        'strokeWidth',
+      ]) &&
       isFiniteNumber(value.x) &&
       isFiniteNumber(value.y) &&
       isNonNegativeFiniteNumber(value.width) &&
@@ -862,18 +1259,43 @@ function isSceneNode(value: unknown): value is SceneNodeV1 {
   }
   if (value.kind === 'path') {
     return (
+      hasOnlyKeys(value, [
+        'kind',
+        'id',
+        'sourceElementId',
+        'transform',
+        'pathData',
+        'fill',
+        'stroke',
+        'strokeWidth',
+      ]) &&
       typeof value.pathData === 'string' &&
       isScenePaint(value.fill) &&
       isScenePaint(value.stroke) &&
       isNonNegativeFiniteNumber(value.strokeWidth)
     );
   }
-  return value.kind === 'text' && Array.isArray(value.runs) && value.runs.every(isSceneTextRun);
+  return (
+    value.kind === 'text' &&
+    hasOnlyKeys(value, ['kind', 'id', 'sourceElementId', 'transform', 'runs']) &&
+    Array.isArray(value.runs) &&
+    value.runs.every(isSceneTextRun)
+  );
 }
 
 function isSceneTextRun(value: unknown): value is SceneTextRunV1 {
   return (
     isRecord(value) &&
+    hasOnlyKeys(value, [
+      'text',
+      'x',
+      'y',
+      'fontFamily',
+      'fontSize',
+      'fontWeight',
+      'fill',
+      'textAnchor',
+    ]) &&
     typeof value.text === 'string' &&
     isFiniteNumber(value.x) &&
     isFiniteNumber(value.y) &&
@@ -914,9 +1336,25 @@ function isTextMeasureRequest(value: unknown): value is TextMeasureRequestV1 | n
 function isTextElement(value: unknown): value is TextElementV1 {
   return (
     isRecord(value) &&
+    hasOnlyKeys(value, [
+      'kind',
+      'id',
+      'transform',
+      'x',
+      'y',
+      'text',
+      'fontFamily',
+      'fontSize',
+      'fontWeight',
+      'maxWidth',
+      'fontFingerprint',
+      'color',
+      'textAlign',
+    ]) &&
     value.kind === 'text' &&
     typeof value.id === 'string' &&
     value.id.length > 0 &&
+    isAffine2D(value.transform) &&
     isFiniteNumber(value.x) &&
     isFiniteNumber(value.y) &&
     typeof value.text === 'string' &&
@@ -1000,20 +1438,124 @@ function isNonNegativeSafeInteger(value: unknown): value is number {
   return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
 }
 
+function isSelectionState(value: unknown): value is SelectionStateV1 {
+  if (
+    !isRecord(value) ||
+    !hasOnlyKeys(value, [
+      'selectedElementIds',
+      'primaryElementId',
+      'selectedElementId',
+      'visualBounds',
+      'orientedBounds',
+      'handles',
+      'marquee',
+      'guides',
+      'style',
+    ]) ||
+    !isUniqueStringArray(value.selectedElementIds) ||
+    (value.primaryElementId !== null && !isNonEmptyString(value.primaryElementId)) ||
+    value.selectedElementId !== value.primaryElementId ||
+    !isSelectionBounds(value.visualBounds) ||
+    !isOrientedSelectionBounds(value.orientedBounds) ||
+    !Array.isArray(value.handles) ||
+    !value.handles.every(isSelectionHandle) ||
+    new Set(value.handles.map((handle) => handle.id)).size !== value.handles.length ||
+    !isSelectionMarquee(value.marquee) ||
+    !Array.isArray(value.guides) ||
+    !value.guides.every(isAlignmentGuide) ||
+    !isSelectionStyleOrNull(value.style)
+  ) {
+    return false;
+  }
+  const selectedElementIds = value.selectedElementIds as string[];
+  const hasSelection = selectedElementIds.length > 0;
+  if (
+    hasSelection !== (value.primaryElementId !== null) ||
+    (value.primaryElementId !== null && !selectedElementIds.includes(value.primaryElementId)) ||
+    (value.visualBounds === null) !== (value.orientedBounds === null) ||
+    (!hasSelection &&
+      (value.visualBounds !== null ||
+        value.orientedBounds !== null ||
+        value.handles.length > 0 ||
+        value.guides.length > 0 ||
+        value.style !== null)) ||
+    (value.handles.length > 0 && value.orientedBounds === null)
+  ) {
+    return false;
+  }
+  return true;
+}
+
 function isSelectionBounds(value: unknown): boolean {
   return (
     value === null ||
     (isRecord(value) &&
-      typeof value.x === 'number' &&
-      Number.isFinite(value.x) &&
-      typeof value.y === 'number' &&
-      Number.isFinite(value.y) &&
-      typeof value.width === 'number' &&
-      Number.isFinite(value.width) &&
-      value.width >= 0 &&
-      typeof value.height === 'number' &&
-      Number.isFinite(value.height) &&
-      value.height >= 0)
+      hasOnlyKeys(value, ['x', 'y', 'width', 'height']) &&
+      isFiniteNumber(value.x) &&
+      isFiniteNumber(value.y) &&
+      isNonNegativeFiniteNumber(value.width) &&
+      isNonNegativeFiniteNumber(value.height))
+  );
+}
+
+function isOrientedSelectionBounds(value: unknown): value is OrientedSelectionBoundsV1 | null {
+  return (
+    value === null ||
+    (isRecord(value) &&
+      hasOnlyKeys(value, ['center', 'width', 'height', 'rotation']) &&
+      isVec2(value.center) &&
+      isNonNegativeFiniteNumber(value.width) &&
+      isNonNegativeFiniteNumber(value.height) &&
+      isFiniteNumber(value.rotation))
+  );
+}
+
+function isSelectionHandle(value: unknown): value is SelectionHandleV1 {
+  if (
+    !isRecord(value) ||
+    !hasOnlyKeys(value, ['id', 'kind', 'position']) ||
+    !isSelectionHandleId(value.id) ||
+    (value.kind !== 'resize' && value.kind !== 'rotate') ||
+    !isVec2(value.position)
+  ) {
+    return false;
+  }
+  return (value.id === 'rotate') === (value.kind === 'rotate');
+}
+
+function isSelectionHandleId(value: unknown): value is SelectionHandleIdV1 {
+  return (
+    value === 'north_west' ||
+    value === 'north' ||
+    value === 'north_east' ||
+    value === 'east' ||
+    value === 'south_east' ||
+    value === 'south' ||
+    value === 'south_west' ||
+    value === 'west' ||
+    value === 'rotate'
+  );
+}
+
+function isSelectionMarquee(value: unknown): value is SelectionMarqueeV1 | null {
+  return (
+    value === null ||
+    (isRecord(value) &&
+      hasOnlyKeys(value, ['bounds', 'mode']) &&
+      value.bounds !== null &&
+      isSelectionBounds(value.bounds) &&
+      (value.mode === 'replace' || value.mode === 'add' || value.mode === 'toggle'))
+  );
+}
+
+function isAlignmentGuide(value: unknown): value is AlignmentGuideV1 {
+  return (
+    isRecord(value) &&
+    hasOnlyKeys(value, ['axis', 'position', 'start', 'end']) &&
+    (value.axis === 'x' || value.axis === 'y') &&
+    isFiniteNumber(value.position) &&
+    isFiniteNumber(value.start) &&
+    isFiniteNumber(value.end)
   );
 }
 
@@ -1027,14 +1569,22 @@ function isSelectionStyle(value: unknown): value is SelectionStyleV1 {
   }
   if (value.kind === 'rect') {
     return (
-      isFill(value.fill) && isCanonicalColor(value.stroke) && isValidStrokeWidth(value.strokeWidth)
+      hasOnlyKeys(value, ['kind', 'fill', 'stroke', 'strokeWidth']) &&
+      isFill(value.fill) &&
+      isCanonicalColor(value.stroke) &&
+      isValidStrokeWidth(value.strokeWidth)
     );
   }
   if (value.kind === 'stroke') {
-    return isCanonicalColor(value.stroke) && isValidStrokeWidth(value.strokeWidth);
+    return (
+      hasOnlyKeys(value, ['kind', 'stroke', 'strokeWidth']) &&
+      isCanonicalColor(value.stroke) &&
+      isValidStrokeWidth(value.strokeWidth)
+    );
   }
   return (
     value.kind === 'text' &&
+    hasOnlyKeys(value, ['kind', 'color', 'fontSize', 'fontWeight', 'textAlign']) &&
     isCanonicalColor(value.color) &&
     isValidFontSize(value.fontSize) &&
     (value.fontWeight === 400 || value.fontWeight === 500) &&
@@ -1043,10 +1593,14 @@ function isSelectionStyle(value: unknown): value is SelectionStyleV1 {
 }
 
 function isFill(value: unknown): value is FillV1 {
-  return (
-    isRecord(value) &&
-    (value.kind === 'none' || (value.kind === 'solid' && isCanonicalColor(value.color)))
-  );
+  if (!isRecord(value)) {
+    return false;
+  }
+  return value.kind === 'none'
+    ? hasOnlyKeys(value, ['kind'])
+    : value.kind === 'solid' &&
+        hasOnlyKeys(value, ['kind', 'color']) &&
+        isCanonicalColor(value.color);
 }
 
 function isCanonicalColor(value: unknown): value is string {
@@ -1062,7 +1616,54 @@ function isTextAlign(value: unknown): value is TextAlignV1 {
 }
 
 function isVec2(value: unknown): value is Vec2 {
-  return isRecord(value) && isFiniteNumber(value.x) && isFiniteNumber(value.y);
+  return (
+    isRecord(value) &&
+    hasOnlyKeys(value, ['x', 'y']) &&
+    isFiniteNumber(value.x) &&
+    isFiniteNumber(value.y)
+  );
+}
+
+function isAffine2D(value: unknown): value is Affine2D {
+  if (
+    isRecord(value) &&
+    hasOnlyKeys(value, ['a', 'b', 'c', 'd', 'e', 'f']) &&
+    isFiniteNumber(value.a) &&
+    isFiniteNumber(value.b) &&
+    isFiniteNumber(value.c) &&
+    isFiniteNumber(value.d) &&
+    isFiniteNumber(value.e) &&
+    isFiniteNumber(value.f)
+  ) {
+    const determinant = value.a * value.d - value.b * value.c;
+    return Number.isFinite(determinant) && determinant !== 0;
+  }
+  return false;
+}
+
+function isUniqueStringArray(value: unknown): value is string[] {
+  return (
+    Array.isArray(value) && value.every(isNonEmptyString) && new Set(value).size === value.length
+  );
+}
+
+function isNonEmptyUniqueStringArray(value: unknown, minimumLength = 1): value is string[] {
+  return isUniqueStringArray(value) && value.length >= minimumLength;
+}
+
+function isReorderPlacement(value: unknown): value is ReorderPlacementV1 {
+  return value === 'front' || value === 'forward' || value === 'backward' || value === 'back';
+}
+
+function isAlignment(value: unknown): value is AlignmentV1 {
+  return (
+    value === 'left' ||
+    value === 'center' ||
+    value === 'right' ||
+    value === 'top' ||
+    value === 'middle' ||
+    value === 'bottom'
+  );
 }
 
 function isNonEmptyString(value: unknown): value is string {
@@ -1074,10 +1675,11 @@ function isRenderProfile(value: unknown): value is RenderProfileV1 {
     return false;
   }
   if (value.kind === 'clean') {
-    return true;
+    return hasOnlyKeys(value, ['kind', 'version']);
   }
   return (
     value.kind === 'sketch' &&
+    hasOnlyKeys(value, ['kind', 'version', 'seed', 'roughness', 'bowing', 'fillStyle']) &&
     isUint32(value.seed) &&
     isNonNegativeFiniteNumber(value.roughness) &&
     isNonNegativeFiniteNumber(value.bowing) &&

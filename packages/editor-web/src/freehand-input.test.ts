@@ -65,5 +65,12 @@ function event(
   x: number,
   y: number,
 ): NormalizedPointerEventV1 {
-  return { pointerId: 7, phase, sequence, point: { x, y } };
+  return {
+    pointerId: 7,
+    phase,
+    sequence,
+    point: { x, y },
+    modifiers: { shift: false, alt: false, metaOrCtrl: false },
+    screenScale: 1,
+  };
 }

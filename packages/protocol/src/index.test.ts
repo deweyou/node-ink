@@ -3,11 +3,16 @@ import { describe, expect, it } from 'vitest';
 import {
   canvasFontFamily,
   createBlankDocument,
-  parseDiagramOperationBatchResult,
+  createIdentityAffine2D,
+  nodeInkClipboardMime,
   parseCamera,
+  parseClipboardPayload,
+  parseCommandEnvelope,
+  parseDiagramOperationBatchResult,
   parseEngineUpdate,
   parseMigrationAttempt,
   parseNodeInkDocument,
+  parseNormalizedPointerEvents,
   parsePointerUpdate,
   parseScenePatch,
   parseSceneResolution,
@@ -19,7 +24,7 @@ import {
 
 const fixtureFontFingerprint = 'noto-sans-sc-v40-fontsource-5.3.0';
 
-describe('protocol V1 with schema V2 documents', () => {
+describe('protocol V1 with schema V3 documents', () => {
   it('parses finite Camera state within the supported zoom range', () => {
     expect(parseCamera('{"x":-12,"y":24,"zoom":1.5}')).toEqual({
       x: -12,
@@ -30,9 +35,21 @@ describe('protocol V1 with schema V2 documents', () => {
     expect(() => parseCamera('{"x":0,"y":0,"zoom":9}')).toThrow('Camera V1');
   });
 
+  it.each([
+    null,
+    { x: '0', y: 0, zoom: 1 },
+    { x: null, y: 0, zoom: 1 },
+    { x: 0, y: '0', zoom: 1 },
+    { x: 0, y: null, zoom: 1 },
+    { x: 0, y: 0, zoom: '1' },
+    { x: 0, y: 0, zoom: null },
+  ])('rejects each malformed Camera boundary %o', (camera) => {
+    expect(() => parseCamera(JSON.stringify(camera))).toThrow('Camera V1');
+  });
+
   it('creates a blank document with explicit versions', () => {
     expect(createBlankDocument('doc-1')).toEqual({
-      schemaVersion: 2,
+      schemaVersion: 3,
       documentId: 'doc-1',
       revision: 0,
       renderProfile: { kind: 'clean', version: 1 },
@@ -55,7 +72,7 @@ describe('protocol V1 with schema V2 documents', () => {
             nodes: {},
           },
           history: { canUndo: false, canRedo: false },
-          selection: { selectedElementId: null, bounds: null, style: null },
+          selection: emptySelectionFixture(),
         }),
       ),
     ).toThrow('protocol V1');
@@ -90,8 +107,19 @@ describe('protocol V1 with schema V2 documents', () => {
       },
       history: { canUndo: true, canRedo: false },
       selection: {
+        selectedElementIds: ['rect-1'],
+        primaryElementId: 'rect-1',
         selectedElementId: 'rect-1',
-        bounds: { x: 8, y: 12, width: 120, height: 80 },
+        visualBounds: { x: 8, y: 12, width: 120, height: 80 },
+        orientedBounds: {
+          center: { x: 68, y: 52 },
+          width: 120,
+          height: 80,
+          rotation: 0,
+        },
+        handles: selectionHandlesFixture(),
+        marquee: null,
+        guides: [],
         style: {
           kind: 'rect',
           fill: { kind: 'solid', color: '#d1fae5' },
@@ -108,8 +136,14 @@ describe('protocol V1 with schema V2 documents', () => {
     const update = {
       ...updateFixture(),
       selection: {
+        selectedElementIds: ['text-1'],
+        primaryElementId: 'text-1',
         selectedElementId: 'text-1',
-        bounds: null,
+        visualBounds: null,
+        orientedBounds: null,
+        handles: [],
+        marquee: null,
+        guides: [],
         style: textSelectionStyle(),
       },
     };
@@ -129,7 +163,7 @@ describe('protocol V1 with schema V2 documents', () => {
     });
   });
 
-  it('does not synthesize required schema V2 scene or selection style fields', () => {
+  it('does not synthesize required schema V3 scene or selection fields', () => {
     const missingProfile = updateFixture();
     delete (missingProfile.scene as { renderProfile?: unknown }).renderProfile;
     expect(() => parseEngineUpdate(JSON.stringify(missingProfile))).toThrow('protocol V1');
@@ -139,7 +173,7 @@ describe('protocol V1 with schema V2 documents', () => {
     expect(() => parseEngineUpdate(JSON.stringify(missingStyle))).toThrow('protocol V1');
   });
 
-  it('strictly parses schema V2 document paint, profile, and finite style values', () => {
+  it('strictly parses schema V3 document paint, profile, transform, and finite style values', () => {
     const document = styledDocumentFixture();
     expect(parseNodeInkDocument(JSON.stringify(document))).toEqual(document);
 
@@ -172,6 +206,298 @@ describe('protocol V1 with schema V2 documents', () => {
         }),
       ),
     ).toThrow('serialized Document');
+  });
+
+  it('parses a nested group tree where every element has one parent', () => {
+    const document = groupedDocumentFixture();
+
+    expect(parseNodeInkDocument(JSON.stringify(document))).toEqual(document);
+  });
+
+  it('parses every current leaf element kind with identity transforms', () => {
+    const rectangle = rectangleElementFixture('rect-1');
+    const stroke = {
+      kind: 'stroke' as const,
+      id: 'stroke-1',
+      transform: identity(),
+      points: [
+        { x: 0, y: 0 },
+        { x: 10, y: 10 },
+      ],
+      strokeWidth: 2,
+      stroke: '#0f172a',
+    };
+    const text = textElementFixture();
+    const document = {
+      schemaVersion: 3 as const,
+      documentId: 'all-leaves',
+      revision: 0,
+      renderProfile: { kind: 'clean' as const, version: 1 as const },
+      rootOrder: [rectangle.id, stroke.id, text.id],
+      elements: { [rectangle.id]: rectangle, [stroke.id]: stroke, [text.id]: text },
+    };
+
+    expect(parseNodeInkDocument(JSON.stringify(document))).toEqual(document);
+  });
+
+  it.each([
+    [
+      'missing transform',
+      (() => {
+        const document = styledDocumentFixture();
+        delete (document.elements['rect-1'] as { transform?: unknown }).transform;
+        return document;
+      })(),
+    ],
+    [
+      'non-finite transform',
+      (() => {
+        const document = styledDocumentFixture();
+        return {
+          ...document,
+          elements: {
+            ...document.elements,
+            'rect-1': { ...document.elements['rect-1'], transform: { ...identity(), e: null } },
+          },
+        };
+      })(),
+    ],
+    [
+      'dangling child',
+      (() => {
+        const document = groupedDocumentFixture();
+        (document.elements['group-1'] as { childOrder: string[] }).childOrder.push('missing');
+        return document;
+      })(),
+    ],
+    [
+      'duplicate parent',
+      (() => {
+        const document = groupedDocumentFixture();
+        document.rootOrder.push('rect-1');
+        return document;
+      })(),
+    ],
+    [
+      'cycle',
+      (() => {
+        const document = groupedDocumentFixture();
+        (document.elements['group-1'] as { childOrder: string[] }).childOrder = ['group-1'];
+        return document;
+      })(),
+    ],
+    [
+      'unreachable element',
+      (() => {
+        const document = groupedDocumentFixture();
+        document.elements['rect-2'] = rectangleElementFixture('rect-2');
+        return document;
+      })(),
+    ],
+  ])('rejects a schema V3 document with %s', (_label, document) => {
+    expect(() => parseNodeInkDocument(JSON.stringify(document))).toThrow('serialized Document');
+  });
+
+  it.each([
+    { type: 'create_rectangle', rectangle: rectangleElementFixture('rect-1') },
+    {
+      type: 'create_stroke',
+      stroke: {
+        kind: 'stroke',
+        id: 'stroke-1',
+        transform: identity(),
+        points: [
+          { x: 0, y: 0 },
+          { x: 10, y: 10 },
+        ],
+        strokeWidth: 2,
+        stroke: '#0f172a',
+      },
+    },
+    { type: 'create_text', text: textElementFixture() },
+    { type: 'move_elements', elementIds: ['rect-1'], delta: { x: 10, y: -5 } },
+    { type: 'update_text', elementId: 'text-1', patch: { text: 'updated' } },
+    { type: 'update_rectangle', elementId: 'rect-1', patch: { width: 200 } },
+    {
+      type: 'update_element_style',
+      elementId: 'rect-1',
+      patch: { kind: 'rect', stroke: '#0f172a' },
+    },
+    { type: 'set_render_profile', renderProfile: { kind: 'clean', version: 1 } },
+    { type: 'transform_elements', elementIds: ['rect-1'], transform: identity() },
+    { type: 'group_elements', groupId: 'group-1', elementIds: ['rect-1', 'rect-2'] },
+    { type: 'ungroup_elements', groupId: 'group-1' },
+    { type: 'reorder_elements', elementIds: ['rect-1'], placement: 'front' },
+    { type: 'reorder_elements', elementIds: ['rect-1'], placement: 'forward' },
+    { type: 'reorder_elements', elementIds: ['rect-1'], placement: 'backward' },
+    { type: 'reorder_elements', elementIds: ['rect-1'], placement: 'back' },
+    { type: 'align_elements', elementIds: ['rect-1', 'rect-2'], alignment: 'left' },
+    { type: 'align_elements', elementIds: ['rect-1', 'rect-2'], alignment: 'center' },
+    { type: 'align_elements', elementIds: ['rect-1', 'rect-2'], alignment: 'right' },
+    { type: 'align_elements', elementIds: ['rect-1', 'rect-2'], alignment: 'top' },
+    { type: 'align_elements', elementIds: ['rect-1', 'rect-2'], alignment: 'middle' },
+    { type: 'align_elements', elementIds: ['rect-1', 'rect-2'], alignment: 'bottom' },
+    {
+      type: 'paste_clipboard',
+      payload: '{"version":1}',
+      idPrefix: 'paste-1',
+      offset: { x: 24, y: 24 },
+    },
+    { type: 'delete_elements', elementIds: ['rect-1'] },
+  ])('strictly parses the %s command', (command) => {
+    const envelope = commandEnvelopeFixture(command);
+
+    expect(parseCommandEnvelope(JSON.stringify(envelope))).toEqual(envelope);
+  });
+
+  it.each([
+    commandEnvelopeFixture({
+      type: 'transform_elements',
+      elementIds: ['rect-1'],
+      transform: { ...identity(), a: null },
+    }),
+    commandEnvelopeFixture({
+      type: 'transform_elements',
+      elementIds: ['rect-1'],
+      transform: { ...identity(), d: 0 },
+    }),
+    commandEnvelopeFixture({
+      type: 'transform_elements',
+      elementIds: [],
+      transform: identity(),
+    }),
+    commandEnvelopeFixture({
+      type: 'transform_elements',
+      elementIds: ['rect-1'],
+      transform: identity(),
+      extra: true,
+    }),
+    commandEnvelopeFixture({
+      type: 'group_elements',
+      groupId: 'group-1',
+      elementIds: ['rect-1'],
+    }),
+    commandEnvelopeFixture({
+      type: 'group_elements',
+      groupId: 'rect-1',
+      elementIds: ['rect-1', 'rect-2'],
+    }),
+    commandEnvelopeFixture({
+      type: 'group_elements',
+      groupId: '',
+      elementIds: ['rect-1', 'rect-2'],
+    }),
+    commandEnvelopeFixture({
+      type: 'group_elements',
+      groupId: 'group-1',
+      elementIds: ['rect-1', 'rect-2'],
+      extra: true,
+    }),
+    commandEnvelopeFixture({ type: 'ungroup_elements', groupId: '' }),
+    commandEnvelopeFixture({ type: 'ungroup_elements', groupId: 'group-1', extra: true }),
+    commandEnvelopeFixture({
+      type: 'reorder_elements',
+      elementIds: ['rect-1', 'rect-1'],
+      placement: 'front',
+    }),
+    commandEnvelopeFixture({
+      type: 'reorder_elements',
+      elementIds: ['rect-1'],
+      placement: 'above',
+    }),
+    commandEnvelopeFixture({
+      type: 'reorder_elements',
+      elementIds: [],
+      placement: 'front',
+    }),
+    commandEnvelopeFixture({
+      type: 'reorder_elements',
+      elementIds: ['rect-1'],
+      placement: 'front',
+      extra: true,
+    }),
+    commandEnvelopeFixture({
+      type: 'align_elements',
+      elementIds: ['rect-1'],
+      alignment: 'left',
+    }),
+    commandEnvelopeFixture({
+      type: 'align_elements',
+      elementIds: ['rect-1', 'rect-2'],
+      alignment: 'diagonal',
+    }),
+    commandEnvelopeFixture({
+      type: 'align_elements',
+      elementIds: ['rect-1', 'rect-2'],
+      alignment: 'left',
+      extra: true,
+    }),
+    commandEnvelopeFixture({
+      type: 'paste_clipboard',
+      payload: '',
+      idPrefix: 'paste-1',
+      offset: { x: 24, y: 24 },
+    }),
+    commandEnvelopeFixture({
+      type: 'paste_clipboard',
+      payload: '{"version":1}',
+      idPrefix: '',
+      offset: { x: 24, y: 24 },
+    }),
+    commandEnvelopeFixture({
+      type: 'paste_clipboard',
+      payload: '{"version":1}',
+      idPrefix: 'paste-1',
+      offset: { x: null, y: 24 },
+    }),
+    commandEnvelopeFixture({
+      type: 'paste_clipboard',
+      payload: '{"version":1}',
+      idPrefix: 'paste-1',
+      offset: { x: 24, y: 24 },
+      extra: true,
+    }),
+    { ...commandEnvelopeFixture({ type: 'ungroup_elements', groupId: 'group-1' }), extra: true },
+  ])('rejects an invalid command envelope %#', (envelope) => {
+    expect(() => parseCommandEnvelope(JSON.stringify(envelope))).toThrow('protocol V1');
+  });
+
+  it('strictly parses the NodeInk clipboard wrapper', () => {
+    const payload = { mime: nodeInkClipboardMime, data: '{"version":1,"elements":[]}' };
+
+    expect(parseClipboardPayload(JSON.stringify(payload))).toEqual(payload);
+    expect(() => parseClipboardPayload(JSON.stringify({ ...payload, mime: 'text/plain' }))).toThrow(
+      'protocol V1',
+    );
+    expect(() => parseClipboardPayload(JSON.stringify({ ...payload, extra: true }))).toThrow(
+      'protocol V1',
+    );
+  });
+
+  it('strictly parses pointer modifiers and screen scale', () => {
+    const events = [
+      {
+        pointerId: 7,
+        sequence: 1,
+        phase: 'down',
+        point: { x: 12, y: 24 },
+        modifiers: { shift: true, alt: false, metaOrCtrl: true },
+        screenScale: 2,
+      },
+    ];
+
+    expect(parseNormalizedPointerEvents(JSON.stringify(events))).toEqual(events);
+    expect(() =>
+      parseNormalizedPointerEvents(JSON.stringify([{ ...events[0], screenScale: 0 }])),
+    ).toThrow('protocol V1');
+    expect(() =>
+      parseNormalizedPointerEvents(
+        JSON.stringify([{ ...events[0], modifiers: { shift: true, alt: false } }]),
+      ),
+    ).toThrow('protocol V1');
+    expect(() =>
+      parseNormalizedPointerEvents(JSON.stringify([{ ...events[0], extra: true }])),
+    ).toThrow('protocol V1');
   });
 
   it.each([null, '', 'pen', {}, 1])('rejects an invalid active tool %o', (activeTool) => {
@@ -224,6 +550,52 @@ describe('protocol V1 with schema V2 documents', () => {
     expect(parseSceneSnapshot(JSON.stringify(scene))).toEqual(scene);
   });
 
+  it('parses rectangle and path Scene nodes with resolved affine transforms', () => {
+    const rectangle = {
+      kind: 'rect' as const,
+      id: 'rect-1:rect',
+      sourceElementId: 'rect-1',
+      transform: identity(),
+      x: 10,
+      y: 20,
+      width: 100,
+      height: 60,
+      fill: '#d1fae5',
+      stroke: '#047857',
+      strokeWidth: 2,
+    };
+    const path = {
+      kind: 'path' as const,
+      id: 'stroke-1:path',
+      sourceElementId: 'stroke-1',
+      transform: identity(),
+      pathData: 'M 0 0 L 10 10',
+      fill: 'none',
+      stroke: '#0f172a',
+      strokeWidth: 3,
+    };
+    const scene = {
+      ...updateFixture().scene,
+      rootNodeIds: [rectangle.id, path.id],
+      nodes: { [rectangle.id]: rectangle, [path.id]: path },
+    };
+
+    expect(parseSceneSnapshot(JSON.stringify(scene))).toEqual(scene);
+  });
+
+  it('parses a committed operation summary in an engine update', () => {
+    const operation = {
+      commandId: 'command-1',
+      previousRevision: 0,
+      revision: 1,
+      changedElementIds: ['rect-1'],
+      sceneRevision: 1,
+    };
+    const update = { ...updateFixture(), operation };
+
+    expect(parseEngineUpdate(JSON.stringify(update))).toEqual(update);
+  });
+
   it('parses a text edit target without deriving the semantic target from SVG', () => {
     const value = {
       element: textElementFixture(),
@@ -231,8 +603,19 @@ describe('protocol V1 with schema V2 documents', () => {
         ...updateFixture(),
         activeTool: 'text',
         selection: {
+          selectedElementIds: ['text-1'],
+          primaryElementId: 'text-1',
           selectedElementId: 'text-1',
-          bounds: { x: 40, y: 48, width: 240, height: 48 },
+          visualBounds: { x: 40, y: 48, width: 240, height: 48 },
+          orientedBounds: {
+            center: { x: 160, y: 72 },
+            width: 240,
+            height: 48,
+            rotation: 0,
+          },
+          handles: [],
+          marquee: null,
+          guides: [],
           style: {
             kind: 'text',
             color: '#0f172a',
@@ -264,6 +647,8 @@ describe('protocol V1 with schema V2 documents', () => {
 
   it.each([
     { ...sceneTextFixture(), sourceElementId: null },
+    { ...sceneTextFixture(), transform: null },
+    { ...sceneTextFixture(), transform: { ...identity(), f: null } },
     { ...sceneTextFixture(), runs: {} },
     {
       ...sceneTextFixture(),
@@ -360,34 +745,161 @@ describe('protocol V1 with schema V2 documents', () => {
 
   it.each([
     {},
-    { selectedElementId: 1, bounds: null, style: null },
-    { selectedElementId: null, bounds: {}, style: null },
     {
-      selectedElementId: null,
-      bounds: { x: 0, y: 0, width: 10, height: 10 },
-      style: null,
-    },
-    { selectedElementId: null, bounds: null, style: textSelectionStyle() },
-    { selectedElementId: 'rect-1', bounds: null, style: null },
-    {
+      ...emptySelectionFixture(),
+      selectedElementIds: ['rect-1', 'rect-1'],
+      primaryElementId: 'rect-1',
       selectedElementId: 'rect-1',
-      bounds: { x: 0, y: 0, width: -1, height: 10 },
-      style: rectangleSelectionStyle(),
     },
     {
+      ...selectedRectangleFixture(),
+      primaryElementId: 'rect-2',
+      selectedElementId: 'rect-2',
+    },
+    { ...selectedRectangleFixture(), selectedElementId: 'rect-2' },
+    { ...emptySelectionFixture(), visualBounds: { x: 0, y: 0, width: 10, height: 10 } },
+    { ...emptySelectionFixture(), style: textSelectionStyle() },
+    {
+      ...selectedRectangleFixture(),
+      orientedBounds: null,
+    },
+    {
+      ...selectedRectangleFixture(),
+      visualBounds: { x: 0, y: 0, width: -1, height: 10 },
+    },
+    {
+      ...selectedRectangleFixture(),
+      orientedBounds: {
+        center: { x: 5, y: 5 },
+        width: 10,
+        height: 10,
+        rotation: null,
+      },
+    },
+    {
+      ...selectedRectangleFixture(),
+      handles: [{ id: 'rotate', kind: 'resize', position: { x: 5, y: -10 } }],
+    },
+    {
+      ...selectedRectangleFixture(),
+      marquee: { bounds: { x: 0, y: 0, width: 10, height: 10 }, mode: 'subtract' },
+    },
+    {
+      ...selectedRectangleFixture(),
+      guides: [{ axis: 'z', position: 5, start: 0, end: 10 }],
+    },
+    {
+      ...selectedRectangleFixture(),
       selectedElementId: 'rect-1',
-      bounds: { x: 0, y: 0, width: 10, height: 10 },
       style: { ...rectangleSelectionStyle(), strokeWidth: Number.NaN },
     },
     {
-      selectedElementId: 'text-1',
-      bounds: { x: 0, y: 0, width: 10, height: 10 },
+      ...selectedRectangleFixture(),
       style: { ...textSelectionStyle(), color: '#0F172A' },
     },
   ])('rejects invalid selection state %o', (selection) => {
     expect(() => parseEngineUpdate(JSON.stringify({ ...updateFixture(), selection }))).toThrow(
       'protocol V1',
     );
+  });
+
+  it.each([
+    null,
+    { id: 'north_west', kind: 'resize', position: { x: 0, y: 0 }, extra: true },
+    { id: 'unknown', kind: 'resize', position: { x: 0, y: 0 } },
+    { id: 'north', kind: 'move', position: { x: 0, y: 0 } },
+    { id: 'east', kind: 'resize', position: { x: null, y: 0 } },
+    { id: 'north', kind: 'rotate', position: { x: 0, y: 0 } },
+    { id: 'rotate', kind: 'resize', position: { x: 0, y: 0 } },
+  ])('rejects each malformed selection handle boundary %o', (handle) => {
+    const selection = { ...selectedRectangleFixture(), handles: [handle] };
+    expect(() => parseEngineUpdate(JSON.stringify({ ...updateFixture(), selection }))).toThrow(
+      'protocol V1',
+    );
+  });
+
+  it.each([
+    { id: 'north', kind: 'resize', position: { x: 5, y: 0 } },
+    { id: 'east', kind: 'resize', position: { x: 10, y: 5 } },
+    { id: 'south', kind: 'resize', position: { x: 5, y: 10 } },
+    { id: 'west', kind: 'resize', position: { x: 0, y: 5 } },
+  ])('accepts the remaining resize handle id %s', (handle) => {
+    const selection = { ...selectedRectangleFixture(), handles: [handle] };
+    expect(parseEngineUpdate(JSON.stringify({ ...updateFixture(), selection })).selection).toEqual(
+      selection,
+    );
+  });
+
+  it.each([
+    { center: null, width: 10, height: 10, rotation: 0 },
+    { center: { x: 5, y: 5 }, width: -1, height: 10, rotation: 0 },
+    { center: { x: 5, y: 5 }, width: 10, height: -1, rotation: 0 },
+    { center: { x: 5, y: 5 }, width: 10, height: 10, rotation: 0, extra: true },
+  ])('rejects each malformed oriented selection bound %o', (orientedBounds) => {
+    const selection = { ...selectedRectangleFixture(), orientedBounds };
+    expect(() => parseEngineUpdate(JSON.stringify({ ...updateFixture(), selection }))).toThrow(
+      'protocol V1',
+    );
+  });
+
+  it.each([
+    { bounds: null, mode: 'replace' },
+    { bounds: { x: 0, y: 0, width: -1, height: 10 }, mode: 'replace' },
+    { bounds: { x: 0, y: 0, width: 10, height: 10 }, mode: 'replace', extra: true },
+  ])('rejects each malformed marquee boundary %o', (marquee) => {
+    const selection = { ...selectedRectangleFixture(), marquee };
+    expect(() => parseEngineUpdate(JSON.stringify({ ...updateFixture(), selection }))).toThrow(
+      'protocol V1',
+    );
+  });
+
+  it.each(['replace', 'toggle'] as const)('accepts marquee mode %s', (mode) => {
+    const marquee = { bounds: { x: 0, y: 0, width: 10, height: 10 }, mode };
+    const selection = { ...selectedRectangleFixture(), marquee };
+    expect(parseEngineUpdate(JSON.stringify({ ...updateFixture(), selection })).selection).toEqual(
+      selection,
+    );
+  });
+
+  it.each([
+    { axis: 'x', position: null, start: 0, end: 10 },
+    { axis: 'x', position: 5, start: null, end: 10 },
+    { axis: 'x', position: 5, start: 0, end: null },
+    { axis: 'x', position: 5, start: 0, end: 10, extra: true },
+  ])('rejects each malformed guide boundary %o', (guide) => {
+    const selection = { ...selectedRectangleFixture(), guides: [guide] };
+    expect(() => parseEngineUpdate(JSON.stringify({ ...updateFixture(), selection }))).toThrow(
+      'protocol V1',
+    );
+  });
+
+  it('accepts a horizontal guide and the stroke selection style', () => {
+    const selection = {
+      ...selectedRectangleFixture(),
+      guides: [{ axis: 'y' as const, position: 5, start: 0, end: 10 }],
+      style: { kind: 'stroke' as const, stroke: '#0f172a', strokeWidth: 2 },
+    };
+    expect(parseEngineUpdate(JSON.stringify({ ...updateFixture(), selection })).selection).toEqual(
+      selection,
+    );
+  });
+
+  it('parses multi-selection overlays with a primary element, marquee, and guides', () => {
+    const selection = {
+      ...selectedRectangleFixture(),
+      selectedElementIds: ['rect-1', 'rect-2'],
+      primaryElementId: 'rect-2',
+      selectedElementId: 'rect-2',
+      style: null,
+      marquee: {
+        bounds: { x: -10, y: -10, width: 160, height: 120 },
+        mode: 'add' as const,
+      },
+      guides: [{ axis: 'x' as const, position: 64, start: 0, end: 120 }],
+    };
+    const update = { ...updateFixture(), selection };
+
+    expect(parseEngineUpdate(JSON.stringify(update))).toEqual(update);
   });
 
   it.each([
@@ -514,11 +1026,39 @@ describe('protocol V1 with schema V2 documents', () => {
     expect(parseTextFixtureResolution(JSON.stringify(resolved))).toEqual(resolved);
   });
 
+  it('parses a resolved text fixture containing measured runs', () => {
+    const run = {
+      key: 'text-1:run-0',
+      text: 'NodeInk',
+      fontFamily: canvasFontFamily,
+      fontSize: 24,
+      fontWeight: 400 as const,
+      maxWidth: null,
+    };
+    const metrics = {
+      key: run.key,
+      width: 96,
+      height: 32,
+      baseline: 24,
+      lineBreaks: [],
+    };
+    const resolved = {
+      request: null,
+      scene: {
+        fontFingerprint: fixtureFontFingerprint,
+        runs: [{ run, metrics }],
+      },
+      canonicalHash: 'fnv1a64:text-runs',
+    };
+
+    expect(parseTextFixtureResolution(JSON.stringify(resolved))).toEqual(resolved);
+  });
+
   it('parses successful and failed migration attempts', () => {
     const success = {
       result: {
         sourceSchemaVersion: 0,
-        targetSchemaVersion: 2,
+        targetSchemaVersion: 3,
         migrated: true,
         document: createBlankDocument('doc-1'),
         canonicalPayload: '{}',
@@ -531,7 +1071,7 @@ describe('protocol V1 with schema V2 documents', () => {
         stage: 'schema',
         code: 'unknown_schema',
         sourceSchemaVersion: 99,
-        targetSchemaVersion: 2,
+        targetSchemaVersion: 3,
         message: 'unsupported',
         recovery: 'try_next_snapshot_then_readonly_diagnostic',
       },
@@ -564,6 +1104,53 @@ describe('protocol V1 with schema V2 documents', () => {
   });
 });
 
+function identity() {
+  return createIdentityAffine2D();
+}
+
+function emptySelectionFixture() {
+  return {
+    selectedElementIds: [] as string[],
+    primaryElementId: null,
+    selectedElementId: null,
+    visualBounds: null,
+    orientedBounds: null,
+    handles: [],
+    marquee: null,
+    guides: [],
+    style: null,
+  };
+}
+
+function selectedRectangleFixture() {
+  return {
+    selectedElementIds: ['rect-1'],
+    primaryElementId: 'rect-1',
+    selectedElementId: 'rect-1',
+    visualBounds: { x: 0, y: 0, width: 10, height: 10 },
+    orientedBounds: {
+      center: { x: 5, y: 5 },
+      width: 10,
+      height: 10,
+      rotation: 0,
+    },
+    handles: selectionHandlesFixture(),
+    marquee: null,
+    guides: [],
+    style: rectangleSelectionStyle(),
+  };
+}
+
+function selectionHandlesFixture() {
+  return [
+    { id: 'north_west' as const, kind: 'resize' as const, position: { x: 0, y: 0 } },
+    { id: 'north_east' as const, kind: 'resize' as const, position: { x: 10, y: 0 } },
+    { id: 'south_east' as const, kind: 'resize' as const, position: { x: 10, y: 10 } },
+    { id: 'south_west' as const, kind: 'resize' as const, position: { x: 0, y: 10 } },
+    { id: 'rotate' as const, kind: 'rotate' as const, position: { x: 5, y: -12 } },
+  ];
+}
+
 function updateFixture(
   sceneOverride: Record<string, unknown> = {},
   historyOverride: Record<string, unknown> = {},
@@ -583,7 +1170,7 @@ function updateFixture(
       ...sceneOverride,
     },
     history: { canUndo: false, canRedo: false, ...historyOverride },
-    selection: { selectedElementId: null, bounds: null, style: null },
+    selection: emptySelectionFixture(),
   };
 }
 
@@ -592,6 +1179,7 @@ function sceneTextFixture() {
     kind: 'text' as const,
     id: 'text-1:text',
     sourceElementId: 'text-1',
+    transform: identity(),
     runs: [
       {
         text: '第一行',
@@ -621,6 +1209,7 @@ function textElementFixture() {
   return {
     kind: 'text' as const,
     id: 'text-1',
+    transform: identity(),
     x: 40,
     y: 48,
     text: '第一行\nSecond line',
@@ -655,7 +1244,7 @@ function textSelectionStyle() {
 
 function styledDocumentFixture() {
   return {
-    schemaVersion: 2 as const,
+    schemaVersion: 3 as const,
     documentId: 'doc-1',
     revision: 3,
     renderProfile: {
@@ -668,15 +1257,58 @@ function styledDocumentFixture() {
     },
     rootOrder: ['rect-1'],
     elements: {
-      'rect-1': {
-        id: 'rect-1',
-        x: 12,
-        y: 24,
-        width: 160,
-        height: 96,
-        ...rectangleSelectionStyle(),
-      },
+      'rect-1': rectangleElementFixture('rect-1'),
     },
+  };
+}
+
+function groupedDocumentFixture() {
+  return {
+    schemaVersion: 3 as const,
+    documentId: 'doc-groups',
+    revision: 1,
+    renderProfile: { kind: 'clean' as const, version: 1 as const },
+    rootOrder: ['group-1'],
+    elements: {
+      'group-1': {
+        kind: 'group' as const,
+        id: 'group-1',
+        transform: identity(),
+        childOrder: ['rect-1'],
+      },
+      'rect-1': rectangleElementFixture('rect-1'),
+    } as Record<
+      string,
+      | ReturnType<typeof rectangleElementFixture>
+      | {
+          kind: 'group';
+          id: string;
+          transform: ReturnType<typeof identity>;
+          childOrder: string[];
+        }
+    >,
+  };
+}
+
+function rectangleElementFixture(id: string) {
+  return {
+    ...rectangleSelectionStyle(),
+    id,
+    transform: identity(),
+    x: 12,
+    y: 24,
+    width: 160,
+    height: 96,
+  };
+}
+
+function commandEnvelopeFixture(command: Record<string, unknown>) {
+  return {
+    protocolVersion: 1,
+    commandId: 'command-1',
+    documentId: 'doc-1',
+    expectedRevision: 0,
+    command,
   };
 }
 

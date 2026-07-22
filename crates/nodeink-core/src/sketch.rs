@@ -97,6 +97,7 @@ pub(crate) fn sketch_rectangle(
     let mut paths = vec![ScenePathV1 {
         id: format!("{}:sketch:outline:v1", rectangle.id),
         source_element_id: rectangle.id.clone(),
+        transform: crate::Affine2D::identity(),
         path_data: path_data(&outline_points),
         fill: if *fill_style == SketchFillStyleV1::Solid {
             rectangle.fill.scene_paint().to_string()
@@ -112,6 +113,7 @@ pub(crate) fn sketch_rectangle(
         paths.push(ScenePathV1 {
             id: format!("{}:sketch:fill:v1", rectangle.id),
             source_element_id: rectangle.id.clone(),
+            transform: crate::Affine2D::identity(),
             path_data: hachure_path(rectangle, amplitude, &mut random),
             fill: "none".to_string(),
             stroke: fill_color.to_string(),
@@ -137,6 +139,7 @@ pub(crate) fn sketch_stroke(stroke: &StrokeElementV1, profile: &RenderProfileV1)
     ScenePathV1 {
         id: format!("{}:sketch:path:v1", stroke.id),
         source_element_id: stroke.id.clone(),
+        transform: crate::Affine2D::identity(),
         path_data: path_data(&points),
         fill: "none".to_string(),
         stroke: stroke.stroke.clone(),

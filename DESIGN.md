@@ -78,7 +78,7 @@ The interface should disappear until the user needs it. Content owns the visual 
 - Freehand uses fixed 3px round ink in this slice. Pen pressure, variable-width outlines, mobile touch editing, and style controls are separate capabilities.
 - The Camera percentage is relative to the current fit-content zoom. Clicking it recenters all content with 64px screen padding; content changes may update the percentage but must not move the Camera automatically.
 - A primary click selects the topmost semantic element; an empty-canvas click or `Escape` clears selection. `Delete`, `Backspace`, and the visible Delete button invoke the same undoable element-deletion action.
-- Selection uses a straight solid-blue ring separated from the element's visible painted bounds by a 6px screen-space gap. The overlay keeps constant screen-space stroke and spacing, ignores pointer events, and must not add resize or rotate handles before Phase 1B.
+- Selection uses a straight solid-blue ring separated from painted bounds by a 6px screen-space gap. Phase 1B adds eight square resize handles, a rotate connector/handle, a translucent marquee, and restrained snap guides; their stroke, size, hit regions, and spacing stay screen-space stable and overlay paint itself ignores pointer events.
 - Persistence uses five explicit presentation states shared by every host: `未保存`, `保存中`, `已保存`, `保存失败`, and `只读`.
 - A save failure remains visible with an explicit `重试` action. Read-only mode explains why editing is unavailable instead of silently disabling controls.
 - Avoid ornamental transitions. Honor reduced-motion preferences.

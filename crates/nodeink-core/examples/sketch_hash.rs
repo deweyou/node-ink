@@ -36,6 +36,7 @@ fn fixture_document() -> NodeInkDocumentV1 {
     let mut document = NodeInkDocumentV1::blank("sketch-fixture");
     let rectangle = RectElementV1 {
         id: "rect-1".to_string(),
+        transform: nodeink_core::Affine2D::identity(),
         x: 24.0,
         y: 40.0,
         width: 160.0,
@@ -46,6 +47,7 @@ fn fixture_document() -> NodeInkDocumentV1 {
     };
     let stroke = StrokeElementV1 {
         id: "stroke-1".to_string(),
+        transform: nodeink_core::Affine2D::identity(),
         points: vec![
             Vec2 { x: 8.0, y: 12.0 },
             Vec2 { x: 24.0, y: 28.0 },

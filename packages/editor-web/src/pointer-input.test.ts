@@ -47,9 +47,13 @@ describe('attachPointerInput', () => {
       releasePointerCapture,
     });
     const batches: NormalizedPointerEventV1[][] = [];
-    const detach = attachPointerInput(target, (events) => batches.push(events));
+    const detach = attachPointerInput(target, (events) => batches.push(events), {
+      screenScale: () => 2,
+    });
 
-    rectangle.dispatchEvent(pointerEvent('pointerdown', { clientX: 30, clientY: 50 }));
+    rectangle.dispatchEvent(
+      pointerEvent('pointerdown', { clientX: 30, clientY: 50, shiftKey: true }),
+    );
     rectangle.dispatchEvent(
       pointerEvent('pointermove', {
         clientX: 45,
@@ -69,6 +73,8 @@ describe('attachPointerInput', () => {
           sequence: 1,
           phase: 'down',
           point: { x: 20, y: 30 },
+          modifiers: { shift: true, alt: false, metaOrCtrl: false },
+          screenScale: 2,
         },
       ],
       [
@@ -77,12 +83,16 @@ describe('attachPointerInput', () => {
           sequence: 2,
           phase: 'move',
           point: { x: 25, y: 35 },
+          modifiers: { shift: false, alt: false, metaOrCtrl: false },
+          screenScale: 2,
         },
         {
           pointerId: 1,
           sequence: 3,
           phase: 'move',
           point: { x: 35, y: 45 },
+          modifiers: { shift: false, alt: false, metaOrCtrl: false },
+          screenScale: 2,
         },
       ],
       [
@@ -91,6 +101,8 @@ describe('attachPointerInput', () => {
           sequence: 4,
           phase: 'up',
           point: { x: 40, y: 50 },
+          modifiers: { shift: false, alt: false, metaOrCtrl: false },
+          screenScale: 2,
         },
       ],
     ]);
@@ -182,6 +194,10 @@ interface PointerEventOptions {
   clientX?: number;
   clientY?: number;
   button?: number;
+  shiftKey?: boolean;
+  altKey?: boolean;
+  metaKey?: boolean;
+  ctrlKey?: boolean;
   coalescedEvents?: PointerEvent[];
 }
 
@@ -192,6 +208,10 @@ function pointerEvent(type: string, options: PointerEventOptions = {}): PointerE
     clientX: { value: options.clientX ?? 10 },
     clientY: { value: options.clientY ?? 20 },
     button: { value: options.button ?? 0 },
+    shiftKey: { value: options.shiftKey ?? false },
+    altKey: { value: options.altKey ?? false },
+    metaKey: { value: options.metaKey ?? false },
+    ctrlKey: { value: options.ctrlKey ?? false },
     getCoalescedEvents: { value: () => options.coalescedEvents ?? [] },
   });
   return event;

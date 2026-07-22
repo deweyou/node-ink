@@ -10,6 +10,7 @@ import {
   getEditorCameraPresentation,
   getEditorPersistencePresentation,
   type ElementStylePatchV1,
+  type EditorActionV1,
   type EditorWebControllerV1,
   type SelectionStyleV1,
 } from '@nodeink-internal/editor-web';
@@ -37,6 +38,7 @@ export function NodeInkEditor({ controller, hostLabel = 'React adapter' }: NodeI
 
   const isReady = snapshot.status === 'ready';
   const isEditable = isReady && snapshot.documentAccess === 'writer';
+  const selectionCount = snapshot.selectedElementIds.length;
   const camera = getEditorCameraPresentation(snapshot);
   const persistence = getEditorPersistencePresentation(snapshot);
   const visibleError =
@@ -52,7 +54,7 @@ export function NodeInkEditor({ controller, hostLabel = 'React adapter' }: NodeI
     <main className="nodeink-shell" data-nodeink-host="react">
       <header className="nodeink-topbar">
         <div>
-          <span className="nodeink-kicker">NodeInk · Phase 1A</span>
+          <span className="nodeink-kicker">NodeInk · Phase 1B</span>
           <h1>Framework-neutral canvas</h1>
         </div>
         <div className="nodeink-topbar-actions">
@@ -112,7 +114,7 @@ export function NodeInkEditor({ controller, hostLabel = 'React adapter' }: NodeI
         </button>
         <button
           type="button"
-          disabled={!isEditable || !snapshot.activeElementId}
+          disabled={!isEditable || selectionCount === 0}
           onClick={() =>
             void controller.dispatch({
               type: 'move_active',
@@ -125,7 +127,7 @@ export function NodeInkEditor({ controller, hostLabel = 'React adapter' }: NodeI
         <button
           type="button"
           data-danger="true"
-          disabled={!isEditable || !snapshot.activeElementId}
+          disabled={!isEditable || selectionCount === 0}
           onClick={() => void controller.dispatch({ type: 'delete_selection' })}
         >
           Delete
@@ -147,6 +149,11 @@ export function NodeInkEditor({ controller, hostLabel = 'React adapter' }: NodeI
       </aside>
       <section className="nodeink-stage" aria-label="Infinite canvas proof">
         <div ref={canvasRef} className="nodeink-canvas" />
+        <SelectionActionControls
+          isEditable={isEditable}
+          selectionCount={selectionCount}
+          dispatch={(action) => void controller.dispatch(action)}
+        />
         {isEditable && snapshot.selectionStyle ? (
           <SelectionStylePanel
             style={snapshot.selectionStyle}
@@ -190,7 +197,7 @@ export function NodeInkEditor({ controller, hostLabel = 'React adapter' }: NodeI
           <span>{snapshot.status}</span>
           <span>document r{snapshot.documentRevision}</span>
           <span>{snapshot.elementCount} elements</span>
-          <span>{snapshot.activeElementId ? '1 selected' : 'No selection'}</span>
+          <span>{selectionCount === 0 ? 'No selection' : `${selectionCount} selected`}</span>
           <span>{snapshot.activeTool} tool</span>
         </output>
         {persistence.notice ? (
@@ -216,6 +223,139 @@ export function NodeInkEditor({ controller, hostLabel = 'React adapter' }: NodeI
         ) : null}
       </section>
     </main>
+  );
+}
+
+function SelectionActionControls({
+  isEditable,
+  selectionCount,
+  dispatch,
+}: {
+  isEditable: boolean;
+  selectionCount: number;
+  dispatch: (action: EditorActionV1) => void;
+}) {
+  const hasSelection = selectionCount > 0;
+  const hasMultiple = selectionCount > 1;
+  const selectionDisabled = !isEditable || !hasSelection;
+  const multipleDisabled = !isEditable || !hasMultiple;
+
+  return (
+    <nav className="nodeink-selection-actions" aria-label="Selection actions">
+      <div className="nodeink-selection-action-group" role="group" aria-label="Clipboard">
+        <button
+          type="button"
+          disabled={selectionDisabled}
+          onClick={() => dispatch({ type: 'copy' })}
+        >
+          Copy
+        </button>
+        <button
+          type="button"
+          disabled={selectionDisabled}
+          onClick={() => dispatch({ type: 'cut' })}
+        >
+          Cut
+        </button>
+        <button type="button" disabled={!isEditable} onClick={() => dispatch({ type: 'paste' })}>
+          Paste
+        </button>
+      </div>
+      <div className="nodeink-selection-action-group" role="group" aria-label="Grouping">
+        <button
+          type="button"
+          disabled={multipleDisabled}
+          onClick={() => dispatch({ type: 'group' })}
+        >
+          Group
+        </button>
+        <button
+          type="button"
+          disabled={selectionDisabled}
+          onClick={() => dispatch({ type: 'ungroup' })}
+        >
+          Ungroup
+        </button>
+      </div>
+      <div className="nodeink-selection-action-group" role="group" aria-label="Stacking order">
+        <button
+          type="button"
+          title="Bring to front"
+          disabled={selectionDisabled}
+          onClick={() => dispatch({ type: 'reorder', placement: 'front' })}
+        >
+          Front
+        </button>
+        <button
+          type="button"
+          title="Bring forward"
+          disabled={selectionDisabled}
+          onClick={() => dispatch({ type: 'reorder', placement: 'forward' })}
+        >
+          Forward
+        </button>
+        <button
+          type="button"
+          title="Send backward"
+          disabled={selectionDisabled}
+          onClick={() => dispatch({ type: 'reorder', placement: 'backward' })}
+        >
+          Backward
+        </button>
+        <button
+          type="button"
+          title="Send to back"
+          disabled={selectionDisabled}
+          onClick={() => dispatch({ type: 'reorder', placement: 'back' })}
+        >
+          Back
+        </button>
+      </div>
+      <div className="nodeink-selection-action-group" role="group" aria-label="Alignment">
+        <button
+          type="button"
+          disabled={multipleDisabled}
+          onClick={() => dispatch({ type: 'align', alignment: 'left' })}
+        >
+          Left
+        </button>
+        <button
+          type="button"
+          disabled={multipleDisabled}
+          onClick={() => dispatch({ type: 'align', alignment: 'center' })}
+        >
+          Center
+        </button>
+        <button
+          type="button"
+          disabled={multipleDisabled}
+          onClick={() => dispatch({ type: 'align', alignment: 'right' })}
+        >
+          Right
+        </button>
+        <button
+          type="button"
+          disabled={multipleDisabled}
+          onClick={() => dispatch({ type: 'align', alignment: 'top' })}
+        >
+          Top
+        </button>
+        <button
+          type="button"
+          disabled={multipleDisabled}
+          onClick={() => dispatch({ type: 'align', alignment: 'middle' })}
+        >
+          Middle
+        </button>
+        <button
+          type="button"
+          disabled={multipleDisabled}
+          onClick={() => dispatch({ type: 'align', alignment: 'bottom' })}
+        >
+          Bottom
+        </button>
+      </div>
+    </nav>
   );
 }
 

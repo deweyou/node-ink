@@ -43,6 +43,8 @@ describe('NodeInkEditor', () => {
     controller.setSnapshot({
       ...controller.getSnapshot(),
       activeElementId: 'rect-1',
+      selectedElementIds: ['rect-1'],
+      primaryElementId: 'rect-1',
       canUndo: true,
       canRedo: true,
       errorMessage: 'recoverable engine error',
@@ -81,6 +83,97 @@ describe('NodeInkEditor', () => {
     expect(target.querySelector('[role="alert"]')?.textContent).toContain(
       'recoverable engine error',
     );
+  });
+
+  it('renders and dispatches Phase 1B selection actions with shared availability rules', async () => {
+    const controller = new StubController();
+    const target = document.createElement('div');
+    app = createApp(NodeInkEditor, { controller });
+    app.mount(target);
+    await nextTick();
+
+    const actions = selectionActions(target);
+    expect(target.querySelector('.nodeink-kicker')?.textContent).toBe('NodeInk · Phase 1B');
+    expect(target.querySelector('.nodeink-status')?.textContent).toContain('No selection');
+    expect(button(actions, 'Copy').disabled).toBe(true);
+    expect(button(actions, 'Cut').disabled).toBe(true);
+    expect(button(actions, 'Paste').disabled).toBe(false);
+    expect(button(actions, 'Group').disabled).toBe(true);
+    expect(button(actions, 'Ungroup').disabled).toBe(true);
+    expect(button(actions, 'Front').disabled).toBe(true);
+    expect(button(actions, 'Left').disabled).toBe(true);
+
+    controller.setSnapshot({
+      ...controller.getSnapshot(),
+      activeElementId: 'rect-1',
+      selectedElementIds: ['rect-1'],
+      primaryElementId: 'rect-1',
+    });
+    await nextTick();
+    expect(target.querySelector('.nodeink-status')?.textContent).toContain('1 selected');
+    expect(button(actions, 'Copy').disabled).toBe(false);
+    expect(button(actions, 'Ungroup').disabled).toBe(false);
+    expect(button(actions, 'Front').disabled).toBe(false);
+    expect(button(actions, 'Group').disabled).toBe(true);
+    expect(button(actions, 'Left').disabled).toBe(true);
+
+    controller.setSnapshot({
+      ...controller.getSnapshot(),
+      activeElementId: 'rect-2',
+      selectedElementIds: ['rect-1', 'rect-2'],
+      primaryElementId: 'rect-2',
+    });
+    await nextTick();
+    expect(target.querySelector('.nodeink-status')?.textContent).toContain('2 selected');
+    expect(button(actions, 'Group').disabled).toBe(false);
+    expect(button(actions, 'Left').disabled).toBe(false);
+
+    for (const label of [
+      'Group',
+      'Ungroup',
+      'Copy',
+      'Cut',
+      'Paste',
+      'Front',
+      'Forward',
+      'Backward',
+      'Back',
+      'Left',
+      'Center',
+      'Right',
+      'Top',
+      'Middle',
+      'Bottom',
+    ]) {
+      button(actions, label).click();
+    }
+
+    expect(controller.actions).toEqual([
+      { type: 'group' },
+      { type: 'ungroup' },
+      { type: 'copy' },
+      { type: 'cut' },
+      { type: 'paste' },
+      { type: 'reorder', placement: 'front' },
+      { type: 'reorder', placement: 'forward' },
+      { type: 'reorder', placement: 'backward' },
+      { type: 'reorder', placement: 'back' },
+      { type: 'align', alignment: 'left' },
+      { type: 'align', alignment: 'center' },
+      { type: 'align', alignment: 'right' },
+      { type: 'align', alignment: 'top' },
+      { type: 'align', alignment: 'middle' },
+      { type: 'align', alignment: 'bottom' },
+    ]);
+
+    controller.setSnapshot({
+      ...controller.getSnapshot(),
+      documentAccess: 'readonly',
+    });
+    await nextTick();
+    for (const action of actions.querySelectorAll('button')) {
+      expect(action.disabled).toBe(true);
+    }
   });
 
   it('dispatches rendering profiles and contextual selection styles', async () => {
@@ -157,9 +250,9 @@ describe('NodeInkEditor', () => {
     await nextTick();
 
     expect(labelledButton(target, 'Color Blue').ariaPressed).toBe('true');
-    expect(button(target, '24').ariaPressed).toBe('true');
-    expect(button(target, 'Center').ariaPressed).toBe('true');
-    button(target, 'Right').click();
+    expect(styleButton(target, '24').ariaPressed).toBe('true');
+    expect(styleButton(target, 'Center').ariaPressed).toBe('true');
+    styleButton(target, 'Right').click();
     expect(controller.actions.at(-1)).toEqual({
       type: 'update_selection_style',
       patch: { kind: 'text', textAlign: 'end' },
@@ -278,8 +371,14 @@ class StubController implements EditorWebControllerV1 {
     sceneRevision: 0,
     elementCount: 0,
     activeElementId: null,
+    selectedElementIds: [],
+    primaryElementId: null,
     activeTool: 'select',
     selectionBounds: null,
+    selectionOrientedBounds: null,
+    selectionHandles: [],
+    selectionMarquee: null,
+    alignmentGuides: [],
     selectionStyle: null,
     renderProfile: { kind: 'clean', version: 1 },
     canUndo: false,
@@ -352,4 +451,20 @@ function labelledButton(target: HTMLElement, label: string): HTMLButtonElement {
     throw new Error(`button labelled ${label} was not rendered`);
   }
   return match;
+}
+
+function selectionActions(target: HTMLElement): HTMLElement {
+  const actions = target.querySelector<HTMLElement>('[aria-label="Selection actions"]');
+  if (!actions) {
+    throw new Error('selection actions were not rendered');
+  }
+  return actions;
+}
+
+function styleButton(target: HTMLElement, label: string): HTMLButtonElement {
+  const panel = target.querySelector<HTMLElement>('[aria-label="Selection style"]');
+  if (!panel) {
+    throw new Error('selection style was not rendered');
+  }
+  return button(panel, label);
 }

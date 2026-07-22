@@ -213,6 +213,14 @@
 - Rust 从选中语义元素派生只读 style presentation；React、Vue、Vanilla 不读取 SVG 属性或反序列化 Document 来猜测当前值。右侧样式面板是画布 overlay，只在可编辑选择存在时显示。
 - schemaVersion 2 通过 Rust copy-on-write migration 把 V1 默认成 Clean 与当前视觉样式；迁移不修改源 bytes。Scene 自描述 resolved Profile，Clean/Sketch 都消费持久 paint，Sketch 随机几何仍只由 Rust resolver 生成。
 
+### D-31 Phase 1B 选择、变换、层级与编辑动作
+
+- 框选按 painted visual bounds 相交；`Shift` 对点击/框选结果执行 toggle。普通点击组内内容选择最外层 Group，`Cmd/Ctrl+click` 穿透到 leaf；允许嵌套 Group，但 Group 只接收同 parent 兄弟项。
+- 选择框提供 8 个 resize handle 与 1 个 rotate handle；不允许越零翻转。`Shift` 等比、`Alt` 中心缩放、`Shift` 旋转按 15°。Stroke width 不随 resize 变粗，混合多选/Group 使用完整 affine composition。
+- Group 插入原选择最高绘制位置并保留 child order；删除 Group 删除 subtree，保留 child 必须显式 Ungroup。Z-order 仅作用同 parent，稳定保留多选内部顺序，边界动作是 no-op。
+- Clipboard 是 Rust 生成/校验、TS 仅暂存的内部版本化 opaque payload；Copy 无 revision，Cut/Paste 各一个 Undo entry，Paste 全量 remap ID 并按 24px screen-space 级联偏移。
+- 本期只做六种 Align，不做 Distribute。Snap 只对未选元素 edges/centers，阈值 6px screen-space，`Cmd/Ctrl` 临时关闭；tie-break 为最小修正量、绘制顺序、稳定 ID，Guide 只在实际 snap 时展示。
+
 ## 22. 需要产品负责人决策的问题
 
 以下问题不阻碍继续评审文档，但会阻碍对应功能进入实现。
@@ -299,4 +307,4 @@
 P-01 已确认，Phase 0 可以实施。进入相应产品功能前必须确认其余问题；未到决策时点的问题可以保留待确认，但不能由实现者自行选择用户可见行为。
 
 ---
-*Last updated: 2026-07-23 | Reason: confirm fixed-width desktop freehand scope*
+*Last updated: 2026-07-23 | Reason: confirm the Phase 1B direct-manipulation contract*

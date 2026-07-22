@@ -1,22 +1,29 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 mod camera;
+mod clipboard;
+mod hierarchy;
 mod migration;
 mod operation;
 mod pointer;
 mod scene_patch;
 mod selection;
+mod selection_geometry;
 mod sketch;
+mod snapping;
 mod stroke;
 mod style;
 mod text;
 mod tool;
+mod transform;
 
 use camera::CameraContentBounds;
 pub use camera::{CameraActionV1, CameraV1, CameraViewportV1, MAX_CAMERA_ZOOM, MIN_CAMERA_ZOOM};
+pub use clipboard::ClipboardPayloadV1;
+use hierarchy::Hierarchy;
 pub use migration::{
     MigrationAttemptV1, MigrationReportV1, MigrationResultV1, migrate_document_payload,
 };
@@ -26,11 +33,19 @@ pub use operation::{
     DiagramOperationResultV1, DiagramOperationStatusV1, DiagramOperationV1,
     MAX_OPERATION_BATCH_SIZE, RectanglePatchV1,
 };
-pub use pointer::{NormalizedPointerEventV1, PointerPhaseV1};
-use pointer::{PointerMachine, PointerPreview, PointerTransition, TargetedPointerEvent};
+pub use pointer::{NormalizedPointerEventV1, PointerModifiersV1, PointerPhaseV1};
+use pointer::{
+    PointerMachine, PointerPreview, PointerSelectionChange, PointerTransformKind,
+    PointerTransformPreview, PointerTransition, TargetedPointerEvent,
+};
 pub use scene_patch::{ScenePatchV1, benchmark_scene_patch, benchmark_scene_snapshot, diff_scene};
-pub use selection::{SelectionBoundsV1, SelectionStateV1};
-use selection::{SelectionModel, hit_test_document};
+pub use selection::{
+    AlignmentGuideAxisV1, AlignmentGuideV1, OrientedSelectionBoundsV1, SelectionBoundsV1,
+    SelectionHandleIdV1, SelectionHandleTypeV1, SelectionHandleV1, SelectionMarqueeModeV1,
+    SelectionMarqueeV1, SelectionStateV1,
+};
+use selection::{HitTestMode, SelectionModel, hit_test_document, hit_test_document_with_mode};
+use selection_geometry::VisualAabb;
 pub use sketch::{ENGINE_ALGORITHM_VERSION, RenderProfileV1, SketchFillStyleV1};
 use sketch::{sketch_rectangle, sketch_stroke};
 pub use stroke::{StrokeInputBatchV1, StrokePhaseV1};
@@ -49,9 +64,11 @@ pub use text::{
 use text::{TextMetricsCache, resolve_text_fixture, scene_runs};
 pub use tool::EditorToolV1;
 use tool::ToolState;
+pub use transform::Affine2D;
+use transform::Point2D;
 
 pub const PROTOCOL_VERSION: u32 = 1;
-pub const SCHEMA_VERSION: u32 = 2;
+pub const SCHEMA_VERSION: u32 = 3;
 
 pub type DocumentId = String;
 pub type ElementId = String;
@@ -87,6 +104,7 @@ pub enum ElementRecordV1 {
     Rect(RectElementV1),
     Stroke(StrokeElementV1),
     Text(TextElementV1),
+    Group(GroupElementV1),
 }
 
 impl ElementRecordV1 {
@@ -95,32 +113,32 @@ impl ElementRecordV1 {
             Self::Rect(rectangle) => &rectangle.id,
             Self::Stroke(stroke) => &stroke.id,
             Self::Text(text) => &text.id,
+            Self::Group(group) => &group.id,
         }
     }
 
     pub(crate) fn as_text(&self) -> Option<&TextElementV1> {
         match self {
             Self::Text(text) => Some(text),
-            Self::Rect(_) | Self::Stroke(_) => None,
+            Self::Rect(_) | Self::Stroke(_) | Self::Group(_) => None,
         }
     }
 
-    fn translate(&mut self, delta: Vec2) {
+    fn transform(&self) -> Affine2D {
         match self {
-            Self::Rect(rectangle) => {
-                rectangle.x += delta.x;
-                rectangle.y += delta.y;
-            }
-            Self::Stroke(stroke) => {
-                for point in &mut stroke.points {
-                    point.x += delta.x;
-                    point.y += delta.y;
-                }
-            }
-            Self::Text(text) => {
-                text.x += delta.x;
-                text.y += delta.y;
-            }
+            Self::Rect(rectangle) => rectangle.transform,
+            Self::Stroke(stroke) => stroke.transform,
+            Self::Text(text) => text.transform,
+            Self::Group(group) => group.transform,
+        }
+    }
+
+    fn set_transform(&mut self, transform: Affine2D) {
+        match self {
+            Self::Rect(rectangle) => rectangle.transform = transform,
+            Self::Stroke(stroke) => stroke.transform = transform,
+            Self::Text(text) => text.transform = transform,
+            Self::Group(group) => group.transform = transform,
         }
     }
 }
@@ -129,6 +147,7 @@ impl ElementRecordV1 {
 #[serde(rename_all = "camelCase")]
 pub struct RectElementV1 {
     pub id: ElementId,
+    pub transform: Affine2D,
     pub x: f64,
     pub y: f64,
     pub width: f64,
@@ -142,6 +161,7 @@ pub struct RectElementV1 {
 #[serde(rename_all = "camelCase")]
 pub struct StrokeElementV1 {
     pub id: ElementId,
+    pub transform: Affine2D,
     pub points: Vec<Vec2>,
     pub stroke: String,
     pub stroke_width: f64,
@@ -151,6 +171,7 @@ pub struct StrokeElementV1 {
 #[serde(rename_all = "camelCase")]
 pub struct TextElementV1 {
     pub id: ElementId,
+    pub transform: Affine2D,
     pub x: f64,
     pub y: f64,
     pub text: String,
@@ -173,6 +194,7 @@ impl TextElementV1 {
     ) -> Self {
         Self {
             id: id.into(),
+            transform: Affine2D::identity(),
             x,
             y,
             text: text.into(),
@@ -185,6 +207,14 @@ impl TextElementV1 {
             font_fingerprint: font_fingerprint.into(),
         }
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GroupElementV1 {
+    pub id: ElementId,
+    pub transform: Affine2D,
+    pub child_order: Vec<ElementId>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -251,9 +281,53 @@ pub enum CommandV1 {
     SetRenderProfile {
         render_profile: RenderProfileV1,
     },
+    TransformElements {
+        element_ids: Vec<ElementId>,
+        transform: Affine2D,
+    },
+    GroupElements {
+        group_id: ElementId,
+        element_ids: Vec<ElementId>,
+    },
+    UngroupElements {
+        group_id: ElementId,
+    },
+    ReorderElements {
+        element_ids: Vec<ElementId>,
+        placement: ReorderPlacementV1,
+    },
+    AlignElements {
+        element_ids: Vec<ElementId>,
+        alignment: AlignmentV1,
+    },
+    PasteClipboard {
+        payload: String,
+        id_prefix: String,
+        offset: Vec2,
+    },
     DeleteElements {
         element_ids: Vec<ElementId>,
     },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReorderPlacementV1 {
+    Front,
+    Forward,
+    Backward,
+    Back,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AlignmentV1 {
+    Left,
+    Center,
+    Right,
+    Top,
+    Middle,
+    Bottom,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -365,6 +439,7 @@ pub enum SceneNodeV1 {
 pub struct SceneRectV1 {
     pub id: SceneNodeId,
     pub source_element_id: ElementId,
+    pub transform: Affine2D,
     pub x: f64,
     pub y: f64,
     pub width: f64,
@@ -379,6 +454,7 @@ pub struct SceneRectV1 {
 pub struct ScenePathV1 {
     pub id: SceneNodeId,
     pub source_element_id: ElementId,
+    pub transform: Affine2D,
     pub path_data: String,
     pub fill: String,
     pub stroke: String,
@@ -390,6 +466,7 @@ pub struct ScenePathV1 {
 pub struct SceneTextV1 {
     pub id: SceneNodeId,
     pub source_element_id: ElementId,
+    pub transform: Affine2D,
     pub runs: Vec<SceneTextRunV1>,
 }
 
@@ -442,6 +519,12 @@ pub enum EngineErrorV1 {
     InvalidRenderProfile,
     #[error("invalid element style for {element_id}")]
     InvalidElementStyle { element_id: ElementId },
+    #[error("invalid clipboard payload")]
+    InvalidClipboard,
+    #[error("invalid affine transform for {element_id}")]
+    InvalidTransform { element_id: ElementId },
+    #[error("invalid element hierarchy: {reason}")]
+    InvalidHierarchy { reason: String },
     #[error("style patch kind does not match element {element_id}")]
     ElementStyleKindMismatch { element_id: ElementId },
     #[error("invalid text measurement fixture")]
@@ -547,7 +630,8 @@ impl Engine {
         }
         self.pointer_machine.cancel();
         self.stroke_machine.cancel();
-        let selection_after = selection_after_command(&envelope.command, &self.selection);
+        let selection_after =
+            selection_after_command(&envelope.command, &self.selection, &self.document);
         self.execute_command_without_pointer_reset(envelope, selection_after)
     }
 
@@ -634,44 +718,106 @@ impl Engine {
     ) -> Result<PointerUpdateV1, EngineErrorV1> {
         self.validate_active_tool(EditorToolV1::Select)?;
         self.stroke_machine.cancel();
+        let selection_state =
+            self.selection
+                .snapshot(&self.document, None, &self.text_metrics, self.camera.zoom);
         let targeted_events = events
             .into_iter()
             .map(|input| {
-                let target_element_id = (input.phase == PointerPhaseV1::Down)
+                let is_down = input.phase == PointerPhaseV1::Down;
+                let target_handle = is_down
+                    .then(|| hit_selection_handle(&selection_state, input.point, self.camera.zoom))
+                    .flatten();
+                let target_element_id = (is_down && target_handle.is_none())
                     .then(|| {
-                        hit_test_document(
+                        hit_test_document_with_mode(
                             &self.document,
                             input.point,
                             self.camera.zoom,
                             &self.text_metrics,
+                            if input.modifiers.meta_or_ctrl {
+                                HitTestMode::PierceLeaf
+                            } else {
+                                HitTestMode::OutermostGroup
+                            },
                         )
                     })
                     .flatten();
                 TargetedPointerEvent {
                     input,
                     target_element_id,
+                    selected_element_ids: selection_state.selected_element_ids.clone(),
+                    target_handle,
+                    oriented_bounds: selection_state.oriented_bounds,
                 }
             })
             .collect();
         let outcome = self
             .pointer_machine
             .process_batch(self.document.revision, targeted_events);
-        if let Some(selected_element_id) = outcome.selection_change {
-            self.selection.set_from_hit_test(selected_element_id);
+        if let Some(selection_change) = outcome.selection_change {
+            match selection_change {
+                PointerSelectionChange::Replace(element_id) => {
+                    self.selection.set_single(&self.document, element_id)?;
+                }
+                PointerSelectionChange::Toggle(element_id) => {
+                    self.selection
+                        .apply_hit(&self.document, Some(element_id), true)?;
+                }
+            }
         }
         let (update, did_commit) = match outcome.transition {
             PointerTransition::None => (self.current_update(), false),
-            PointerTransition::Preview(preview) => {
+            PointerTransition::Preview(PointerPreview::Marquee { bounds, mode }) => {
+                self.selection.update_marquee(bounds, mode)?;
                 self.scene_revision += 1;
-                (self.update_with_preview(Some(&preview)), false)
+                (self.current_update(), false)
+            }
+            PointerTransition::Preview(PointerPreview::Transform(preview)) => {
+                let preview = self.resolve_pointer_transform_preview(preview)?;
+                self.selection.set_guides(preview_guides(
+                    &self.document,
+                    &preview,
+                    &self.text_metrics,
+                ))?;
+                self.scene_revision += 1;
+                (
+                    self.update_with_preview(Some(&PointerPreview::Transform(preview))),
+                    false,
+                )
             }
             PointerTransition::Cancelled => {
+                self.selection.clear_marquee();
+                self.selection.clear_guides();
+                self.scene_revision += 1;
+                (self.current_update(), false)
+            }
+            PointerTransition::MarqueeCommit { bounds, mode } => {
+                self.selection
+                    .apply_marquee(&self.document, bounds, mode, &self.text_metrics)?;
+                self.selection.clear_marquee();
                 self.scene_revision += 1;
                 (self.current_update(), false)
             }
             PointerTransition::Commit(commit) => {
-                let has_movement = commit.delta.x != 0.0 || commit.delta.y != 0.0;
-                if !has_movement {
+                if commit.transform == Affine2D::identity() {
+                    self.selection.clear_guides();
+                    self.scene_revision += 1;
+                    return Ok(PointerUpdateV1 {
+                        update: self.current_update(),
+                        processed_event_count: outcome.processed_event_count,
+                        ignored_event_count: outcome.ignored_event_count,
+                        did_commit: false,
+                    });
+                }
+                let preview = self.resolve_pointer_transform_preview(PointerTransformPreview {
+                    element_ids: commit.element_ids,
+                    transform: commit.transform,
+                    kind: commit.kind,
+                    disable_snap: commit.disable_snap,
+                })?;
+                self.selection.clear_guides();
+                if preview.transform == Affine2D::identity() {
                     self.scene_revision += 1;
                     (self.current_update(), false)
                 } else {
@@ -680,9 +826,9 @@ impl Engine {
                         command_id,
                         document_id: self.document.document_id.clone(),
                         expected_revision: commit.expected_revision,
-                        command: CommandV1::MoveElements {
-                            element_ids: vec![commit.element_id],
-                            delta: commit.delta,
+                        command: CommandV1::TransformElements {
+                            element_ids: preview.element_ids,
+                            transform: preview.transform,
                         },
                     };
                     (
@@ -702,6 +848,74 @@ impl Engine {
             ignored_event_count: outcome.ignored_event_count,
             did_commit,
         })
+    }
+
+    fn resolve_pointer_transform_preview(
+        &self,
+        mut preview: PointerTransformPreview,
+    ) -> Result<PointerTransformPreview, EngineErrorV1> {
+        if preview.kind != PointerTransformKind::Move || preview.disable_snap {
+            return Ok(preview);
+        }
+        let selected = selected_roots(&self.document, preview.element_ids.clone())?;
+        let hierarchy = document_hierarchy(&self.document)?;
+        let world_transforms = resolved_world_transforms(&self.document, None)?;
+        let selected_set = selected.iter().cloned().collect::<BTreeSet<_>>();
+        let Some(base_bounds) = selected
+            .iter()
+            .filter_map(|element_id| {
+                element_world_bounds(
+                    &self.document,
+                    element_id,
+                    &world_transforms,
+                    &self.text_metrics,
+                )
+            })
+            .reduce(union_visual_bounds)
+        else {
+            return Ok(preview);
+        };
+        let moving_bounds =
+            selection_geometry::SelectionGeometry::resolve(base_bounds, preview.transform, 0.0)
+                .map_err(|_| EngineErrorV1::InvalidDelta)?
+                .visual_aabb;
+        let targets = self
+            .document
+            .root_order
+            .iter()
+            .enumerate()
+            .filter(|(_, element_id)| {
+                !selected_set.contains(*element_id)
+                    && !selected
+                        .iter()
+                        .any(|selected_id| is_ancestor(&hierarchy, element_id, selected_id))
+            })
+            .filter_map(|(draw_order, element_id)| {
+                element_world_bounds(
+                    &self.document,
+                    element_id,
+                    &world_transforms,
+                    &self.text_metrics,
+                )
+                .map(|bounds| snapping::SnapTarget {
+                    element_id: element_id.clone(),
+                    draw_order,
+                    bounds,
+                    is_selected: false,
+                })
+            })
+            .collect::<Vec<_>>();
+        let snap = snapping::snap_bounds(moving_bounds, &targets, self.camera.zoom, 6.0)
+            .map_err(|_| EngineErrorV1::InvalidDelta)?;
+        if snap.correction.x != 0.0 || snap.correction.y != 0.0 {
+            let correction =
+                Affine2D::translation(snap.correction).map_err(|_| EngineErrorV1::InvalidDelta)?;
+            preview.transform = preview
+                .transform
+                .compose(correction)
+                .map_err(|_| EngineErrorV1::InvalidDelta)?;
+        }
+        Ok(preview)
     }
 
     pub fn handle_stroke_batch(
@@ -785,7 +999,7 @@ impl Engine {
         let mut candidate = self.document.clone();
         let mut effects = Vec::with_capacity(commands.len());
         for command in commands {
-            effects.push(apply_command(&mut candidate, command)?);
+            effects.push(apply_command(&mut candidate, command, &self.text_metrics)?);
         }
         if effects.iter().any(|effect| effect.did_change) {
             candidate.revision = self.document.revision + 1;
@@ -807,9 +1021,9 @@ impl Engine {
         self.document = candidate;
         match selection_after {
             SelectionAfterCommand::Preserve => self.selection.reconcile(&self.document),
-            SelectionAfterCommand::Set(selected_element_id) => self
+            SelectionAfterCommand::Set(selected_element_ids, primary_element_id) => self
                 .selection
-                .set(&self.document, selected_element_id)
+                .set(&self.document, selected_element_ids, primary_element_id)
                 .expect("selection after a validated transaction must reference a live element"),
         }
         self.scene_revision += 1;
@@ -876,12 +1090,42 @@ impl Engine {
 
     pub fn set_selection(
         &mut self,
-        selected_element_id: Option<ElementId>,
+        selected_element_ids: Vec<ElementId>,
+        primary_element_id: Option<ElementId>,
     ) -> Result<EngineUpdateV1, EngineErrorV1> {
         self.pointer_machine.cancel();
         self.stroke_machine.cancel();
-        self.selection.set(&self.document, selected_element_id)?;
+        self.selection
+            .set(&self.document, selected_element_ids, primary_element_id)?;
         Ok(self.current_update())
+    }
+
+    pub fn copy_selection(&self) -> Result<ClipboardPayloadV1, EngineErrorV1> {
+        let selected = selected_roots(
+            &self.document,
+            self.selection.selected_element_ids().to_vec(),
+        )?;
+        if selected.is_empty() {
+            return Err(EngineErrorV1::InvalidClipboard);
+        }
+        let hierarchy = document_hierarchy(&self.document)?;
+        let mut included = BTreeSet::new();
+        for element_id in &selected {
+            collect_subtree(&hierarchy, element_id, &mut included);
+        }
+        let elements = included
+            .into_iter()
+            .map(|element_id| {
+                let element = self
+                    .document
+                    .elements
+                    .get(&element_id)
+                    .expect("selected clipboard subtree was validated")
+                    .clone();
+                (element_id, element)
+            })
+            .collect();
+        clipboard::encode_clipboard(&self.document.document_id, selected, elements)
     }
 
     pub fn begin_text_edit_at(&mut self, point: Vec2) -> Result<TextEditTargetV1, EngineErrorV1> {
@@ -901,7 +1145,8 @@ impl Engine {
                 .and_then(ElementRecordV1::as_text)
                 .cloned();
         if let Some(text) = &element {
-            self.selection.set(&self.document, Some(text.id.clone()))?;
+            self.selection
+                .set(&self.document, vec![text.id.clone()], Some(text.id.clone()))?;
         } else if active_tool == EditorToolV1::Text {
             self.selection.clear();
         }
@@ -1041,8 +1286,14 @@ impl Engine {
             },
             selection: self.selection.snapshot(
                 &self.document,
-                pointer_preview.map(|preview| (preview.element_id.as_str(), preview.delta)),
+                pointer_preview.and_then(|preview| match preview {
+                    PointerPreview::Transform(preview) => {
+                        Some((preview.element_ids.as_slice(), preview.transform))
+                    }
+                    PointerPreview::Marquee { .. } => None,
+                }),
                 &self.text_metrics,
+                self.camera.zoom,
             ),
             active_tool: self.tool_state.active_tool(),
             text_measure_request: self.text_metrics.request_for_document(
@@ -1056,49 +1307,84 @@ impl Engine {
 #[derive(Debug, Clone, PartialEq)]
 enum SelectionAfterCommand {
     Preserve,
-    Set(Option<ElementId>),
+    Set(Vec<ElementId>, Option<ElementId>),
 }
 
 fn selection_after_command(
     command: &CommandV1,
     selection: &SelectionModel,
+    document: &NodeInkDocumentV1,
 ) -> SelectionAfterCommand {
     match command {
         CommandV1::CreateRectangle { rectangle } => {
-            SelectionAfterCommand::Set(Some(rectangle.id.clone()))
+            SelectionAfterCommand::Set(vec![rectangle.id.clone()], Some(rectangle.id.clone()))
         }
-        CommandV1::CreateStroke { stroke } => SelectionAfterCommand::Set(Some(stroke.id.clone())),
-        CommandV1::CreateText { text } => SelectionAfterCommand::Set(Some(text.id.clone())),
+        CommandV1::CreateStroke { stroke } => {
+            SelectionAfterCommand::Set(vec![stroke.id.clone()], Some(stroke.id.clone()))
+        }
+        CommandV1::CreateText { text } => {
+            SelectionAfterCommand::Set(vec![text.id.clone()], Some(text.id.clone()))
+        }
         CommandV1::UpdateText { element_id, patch } => {
             if patch.text.as_ref().is_some_and(String::is_empty) {
                 if selection.selected_element_id() == Some(element_id.as_str()) {
-                    SelectionAfterCommand::Set(None)
+                    SelectionAfterCommand::Set(Vec::new(), None)
                 } else {
                     SelectionAfterCommand::Preserve
                 }
             } else {
-                SelectionAfterCommand::Set(Some(element_id.clone()))
+                SelectionAfterCommand::Set(vec![element_id.clone()], Some(element_id.clone()))
             }
         }
         CommandV1::MoveElements { element_ids, .. } => element_ids
             .first()
             .cloned()
             .map_or(SelectionAfterCommand::Preserve, |element_id| {
-                SelectionAfterCommand::Set(Some(element_id))
+                SelectionAfterCommand::Set(vec![element_id.clone()], Some(element_id))
             }),
         CommandV1::UpdateRectangle { element_id, .. } => {
-            SelectionAfterCommand::Set(Some(element_id.clone()))
+            SelectionAfterCommand::Set(vec![element_id.clone()], Some(element_id.clone()))
         }
         CommandV1::UpdateElementStyle { element_id, .. } => {
-            SelectionAfterCommand::Set(Some(element_id.clone()))
+            SelectionAfterCommand::Set(vec![element_id.clone()], Some(element_id.clone()))
         }
         CommandV1::SetRenderProfile { .. } => SelectionAfterCommand::Preserve,
+        CommandV1::TransformElements { .. }
+        | CommandV1::ReorderElements { .. }
+        | CommandV1::AlignElements { .. } => SelectionAfterCommand::Preserve,
+        CommandV1::GroupElements { group_id, .. } => {
+            SelectionAfterCommand::Set(vec![group_id.clone()], Some(group_id.clone()))
+        }
+        CommandV1::UngroupElements { group_id } => document
+            .elements
+            .get(group_id)
+            .and_then(|element| match element {
+                ElementRecordV1::Group(group) => Some(group.child_order.clone()),
+                _ => None,
+            })
+            .filter(|children| !children.is_empty())
+            .map_or(SelectionAfterCommand::Preserve, |children| {
+                let primary = children.last().cloned();
+                SelectionAfterCommand::Set(children, primary)
+            }),
+        CommandV1::PasteClipboard {
+            payload, id_prefix, ..
+        } => clipboard::decode_clipboard(payload)
+            .and_then(|decoded| {
+                clipboard::remap_clipboard(decoded, id_prefix, Point2D::new(0.0, 0.0))
+            })
+            .ok()
+            .filter(|decoded| !decoded.root_element_ids.is_empty())
+            .map_or(SelectionAfterCommand::Preserve, |decoded| {
+                let primary = decoded.root_element_ids.last().cloned();
+                SelectionAfterCommand::Set(decoded.root_element_ids, primary)
+            }),
         CommandV1::DeleteElements { element_ids } => {
             if selection
                 .selected_element_id()
                 .is_some_and(|selected| element_ids.iter().any(|element_id| element_id == selected))
             {
-                SelectionAfterCommand::Set(None)
+                SelectionAfterCommand::Set(Vec::new(), None)
             } else {
                 SelectionAfterCommand::Preserve
             }
@@ -1131,6 +1417,7 @@ impl CommandEffect {
 fn apply_command(
     document: &mut NodeInkDocumentV1,
     command: CommandV1,
+    text_metrics: &TextMetricsCache,
 ) -> Result<CommandEffect, EngineErrorV1> {
     match command {
         CommandV1::CreateRectangle { rectangle } => {
@@ -1151,21 +1438,9 @@ fn apply_command(
             if !delta.x.is_finite() || !delta.y.is_finite() {
                 return Err(EngineErrorV1::InvalidDelta);
             }
-            for element_id in &element_ids {
-                if !document.elements.contains_key(element_id) {
-                    return Err(EngineErrorV1::ElementNotFound {
-                        element_id: element_id.clone(),
-                    });
-                }
-            }
-            for element_id in &element_ids {
-                let element = document
-                    .elements
-                    .get_mut(element_id)
-                    .expect("element existence was validated before mutation");
-                element.translate(delta);
-            }
-            Ok(CommandEffect::changed(element_ids))
+            let translation = Affine2D::translation(Point2D::new(delta.x, delta.y))
+                .map_err(|_| EngineErrorV1::InvalidDelta)?;
+            apply_world_transform(document, element_ids, translation)
         }
         CommandV1::CreateStroke { stroke } => {
             validate_stroke(&stroke)?;
@@ -1210,11 +1485,7 @@ fn apply_command(
                 return Err(EngineErrorV1::ElementNotText { element_id });
             };
             if patch.text.as_ref().is_some_and(String::is_empty) {
-                document.elements.remove(&element_id);
-                document
-                    .root_order
-                    .retain(|candidate| candidate != &element_id);
-                return Ok(CommandEffect::changed(vec![element_id]));
+                return delete_elements(document, vec![element_id]);
             }
             if let Some(value) = patch.text {
                 text.text = value;
@@ -1262,23 +1533,529 @@ fn apply_command(
             document.render_profile = render_profile;
             Ok(CommandEffect::changed(document.root_order.clone()))
         }
-        CommandV1::DeleteElements { element_ids } => {
-            for element_id in &element_ids {
-                if !document.elements.contains_key(element_id) {
-                    return Err(EngineErrorV1::ElementNotFound {
-                        element_id: element_id.clone(),
-                    });
-                }
+        CommandV1::TransformElements {
+            element_ids,
+            transform,
+        } => {
+            if !transform.is_valid() {
+                return Err(EngineErrorV1::InvalidTransform {
+                    element_id: element_ids.first().cloned().unwrap_or_default(),
+                });
             }
-            for element_id in &element_ids {
-                document.elements.remove(element_id);
-            }
-            document
-                .root_order
-                .retain(|element_id| !element_ids.contains(element_id));
-            Ok(CommandEffect::changed(element_ids))
+            apply_world_transform(document, element_ids, transform)
+        }
+        CommandV1::GroupElements {
+            group_id,
+            element_ids,
+        } => group_elements(document, group_id, element_ids),
+        CommandV1::UngroupElements { group_id } => ungroup_elements(document, group_id),
+        CommandV1::ReorderElements {
+            element_ids,
+            placement,
+        } => reorder_elements(document, element_ids, placement),
+        CommandV1::AlignElements {
+            element_ids,
+            alignment,
+        } => align_elements(document, element_ids, alignment, text_metrics),
+        CommandV1::PasteClipboard {
+            payload,
+            id_prefix,
+            offset,
+        } => paste_clipboard(document, payload, id_prefix, offset),
+        CommandV1::DeleteElements { element_ids } => delete_elements(document, element_ids),
+    }
+}
+
+fn selected_roots(
+    document: &NodeInkDocumentV1,
+    element_ids: Vec<ElementId>,
+) -> Result<Vec<ElementId>, EngineErrorV1> {
+    let hierarchy = document_hierarchy(document)?;
+    let requested = element_ids.into_iter().collect::<BTreeSet<_>>();
+    for element_id in &requested {
+        if !document.elements.contains_key(element_id) {
+            return Err(EngineErrorV1::ElementNotFound {
+                element_id: element_id.clone(),
+            });
         }
     }
+    Ok(hierarchy
+        .stable_depth_first_order()
+        .into_iter()
+        .filter(|element_id| requested.contains(*element_id))
+        .filter(|element_id| {
+            let mut parent = hierarchy.parent_of(element_id).flatten();
+            while let Some(parent_id) = parent {
+                if requested.contains(parent_id) {
+                    return false;
+                }
+                parent = hierarchy.parent_of(parent_id).flatten();
+            }
+            true
+        })
+        .map(str::to_string)
+        .collect())
+}
+
+fn apply_world_transform(
+    document: &mut NodeInkDocumentV1,
+    element_ids: Vec<ElementId>,
+    delta_world: Affine2D,
+) -> Result<CommandEffect, EngineErrorV1> {
+    let element_ids = selected_roots(document, element_ids)?;
+    if element_ids.is_empty() {
+        return Ok(CommandEffect::unchanged());
+    }
+    let hierarchy = document_hierarchy(document)?;
+    let world_transforms = resolved_world_transforms(document, None)?;
+    let mut local_updates = Vec::with_capacity(element_ids.len());
+    for element_id in &element_ids {
+        let world =
+            *world_transforms
+                .get(element_id)
+                .ok_or_else(|| EngineErrorV1::ElementNotFound {
+                    element_id: element_id.clone(),
+                })?;
+        let parent_world = hierarchy
+            .parent_of(element_id)
+            .flatten()
+            .and_then(|parent_id| world_transforms.get(parent_id).copied())
+            .unwrap_or_else(Affine2D::identity);
+        let next_world =
+            world
+                .compose(delta_world)
+                .map_err(|_| EngineErrorV1::InvalidTransform {
+                    element_id: element_id.clone(),
+                })?;
+        let next_local = next_world
+            .compose(
+                parent_world
+                    .inverse()
+                    .map_err(|_| EngineErrorV1::InvalidTransform {
+                        element_id: element_id.clone(),
+                    })?,
+            )
+            .map_err(|_| EngineErrorV1::InvalidTransform {
+                element_id: element_id.clone(),
+            })?;
+        local_updates.push((element_id.clone(), next_local));
+    }
+    let did_change = local_updates.iter().any(|(element_id, transform)| {
+        document
+            .elements
+            .get(element_id)
+            .is_some_and(|element| element.transform() != *transform)
+    });
+    if !did_change {
+        return Ok(CommandEffect::unchanged());
+    }
+    for (element_id, transform) in local_updates {
+        document
+            .elements
+            .get_mut(&element_id)
+            .expect("selected element existence was validated")
+            .set_transform(transform);
+    }
+    Ok(CommandEffect::changed(element_ids))
+}
+
+fn group_elements(
+    document: &mut NodeInkDocumentV1,
+    group_id: ElementId,
+    element_ids: Vec<ElementId>,
+) -> Result<CommandEffect, EngineErrorV1> {
+    if group_id.trim().is_empty() || document.elements.contains_key(&group_id) {
+        return Err(EngineErrorV1::ElementAlreadyExists {
+            element_id: group_id,
+        });
+    }
+    let element_ids = selected_roots(document, element_ids)?;
+    if element_ids.len() < 2 {
+        return Err(EngineErrorV1::InvalidHierarchy {
+            reason: "grouping requires at least two sibling elements".to_string(),
+        });
+    }
+    let hierarchy = document_hierarchy(document)?;
+    let refs = element_ids.iter().map(String::as_str).collect::<Vec<_>>();
+    let parent_id =
+        hierarchy
+            .ensure_same_parent(&refs)
+            .map_err(|error| EngineErrorV1::InvalidHierarchy {
+                reason: format!("{error:?}"),
+            })?;
+    let sibling_order = match parent_id.as_deref() {
+        Some(parent_id) => hierarchy
+            .children_of(parent_id)
+            .expect("validated group parent has a child order")
+            .to_vec(),
+        None => hierarchy.root_order().to_vec(),
+    };
+    let selected = element_ids.iter().cloned().collect::<BTreeSet<_>>();
+    let highest_index = sibling_order
+        .iter()
+        .rposition(|id| selected.contains(id))
+        .expect("selected siblings occur in their parent order");
+    let group_children = sibling_order
+        .iter()
+        .filter(|id| selected.contains(*id))
+        .cloned()
+        .collect::<Vec<_>>();
+    let insert_index = sibling_order[..=highest_index]
+        .iter()
+        .filter(|id| !selected.contains(*id))
+        .count();
+    let mut next_order = sibling_order
+        .into_iter()
+        .filter(|id| !selected.contains(id))
+        .collect::<Vec<_>>();
+    next_order.insert(insert_index, group_id.clone());
+    set_sibling_order(document, parent_id.as_deref(), next_order)?;
+    document.elements.insert(
+        group_id.clone(),
+        ElementRecordV1::Group(GroupElementV1 {
+            id: group_id.clone(),
+            transform: Affine2D::identity(),
+            child_order: group_children,
+        }),
+    );
+    let mut changed = element_ids;
+    changed.push(group_id);
+    Ok(CommandEffect::changed(changed))
+}
+
+fn ungroup_elements(
+    document: &mut NodeInkDocumentV1,
+    group_id: ElementId,
+) -> Result<CommandEffect, EngineErrorV1> {
+    let hierarchy = document_hierarchy(document)?;
+    let group = match document.elements.get(&group_id) {
+        Some(ElementRecordV1::Group(group)) => group.clone(),
+        Some(_) => {
+            return Err(EngineErrorV1::InvalidHierarchy {
+                reason: format!("element {group_id} is not a group"),
+            });
+        }
+        None => {
+            return Err(EngineErrorV1::ElementNotFound {
+                element_id: group_id,
+            });
+        }
+    };
+    let parent_id = hierarchy
+        .parent_of(&group.id)
+        .expect("validated hierarchy indexes every element")
+        .map(str::to_string);
+    let sibling_order = match parent_id.as_deref() {
+        Some(parent_id) => hierarchy
+            .children_of(parent_id)
+            .expect("validated group parent has children")
+            .to_vec(),
+        None => hierarchy.root_order().to_vec(),
+    };
+    let group_index = sibling_order
+        .iter()
+        .position(|element_id| element_id == &group.id)
+        .expect("validated group occurs in its sibling order");
+    let mut next_order = sibling_order;
+    next_order.splice(group_index..=group_index, group.child_order.clone());
+    for child_id in &group.child_order {
+        let child = document
+            .elements
+            .get_mut(child_id)
+            .expect("validated group child exists");
+        let transform = child.transform().compose(group.transform).map_err(|_| {
+            EngineErrorV1::InvalidTransform {
+                element_id: child_id.clone(),
+            }
+        })?;
+        child.set_transform(transform);
+    }
+    set_sibling_order(document, parent_id.as_deref(), next_order)?;
+    document.elements.remove(&group.id);
+    let mut changed = group.child_order;
+    changed.push(group.id);
+    Ok(CommandEffect::changed(changed))
+}
+
+fn reorder_elements(
+    document: &mut NodeInkDocumentV1,
+    element_ids: Vec<ElementId>,
+    placement: ReorderPlacementV1,
+) -> Result<CommandEffect, EngineErrorV1> {
+    let element_ids = selected_roots(document, element_ids)?;
+    if element_ids.is_empty() {
+        return Ok(CommandEffect::unchanged());
+    }
+    let hierarchy = document_hierarchy(document)?;
+    let refs = element_ids.iter().map(String::as_str).collect::<Vec<_>>();
+    let parent_id =
+        hierarchy
+            .ensure_same_parent(&refs)
+            .map_err(|error| EngineErrorV1::InvalidHierarchy {
+                reason: format!("{error:?}"),
+            })?;
+    let order = match parent_id.as_deref() {
+        Some(parent_id) => hierarchy
+            .children_of(parent_id)
+            .expect("validated parent has a child order")
+            .to_vec(),
+        None => hierarchy.root_order().to_vec(),
+    };
+    let selected = element_ids.iter().cloned().collect::<BTreeSet<_>>();
+    let mut next = order.clone();
+    match placement {
+        ReorderPlacementV1::Front => {
+            next = order
+                .iter()
+                .filter(|id| !selected.contains(*id))
+                .chain(order.iter().filter(|id| selected.contains(*id)))
+                .cloned()
+                .collect();
+        }
+        ReorderPlacementV1::Back => {
+            next = order
+                .iter()
+                .filter(|id| selected.contains(*id))
+                .chain(order.iter().filter(|id| !selected.contains(*id)))
+                .cloned()
+                .collect();
+        }
+        ReorderPlacementV1::Forward => {
+            for index in (0..next.len().saturating_sub(1)).rev() {
+                if selected.contains(&next[index]) && !selected.contains(&next[index + 1]) {
+                    next.swap(index, index + 1);
+                }
+            }
+        }
+        ReorderPlacementV1::Backward => {
+            for index in 1..next.len() {
+                if selected.contains(&next[index]) && !selected.contains(&next[index - 1]) {
+                    next.swap(index - 1, index);
+                }
+            }
+        }
+    }
+    if next == order {
+        return Ok(CommandEffect::unchanged());
+    }
+    set_sibling_order(document, parent_id.as_deref(), next)?;
+    Ok(CommandEffect::changed(element_ids))
+}
+
+fn align_elements(
+    document: &mut NodeInkDocumentV1,
+    element_ids: Vec<ElementId>,
+    alignment: AlignmentV1,
+    text_metrics: &TextMetricsCache,
+) -> Result<CommandEffect, EngineErrorV1> {
+    let element_ids = selected_roots(document, element_ids)?;
+    if element_ids.len() < 2 {
+        return Ok(CommandEffect::unchanged());
+    }
+    let world_transforms = resolved_world_transforms(document, None)?;
+    let bounds = element_ids
+        .iter()
+        .map(|element_id| {
+            element_world_bounds(document, element_id, &world_transforms, text_metrics)
+                .ok_or(EngineErrorV1::InvalidTextMetrics)
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let target = match alignment {
+        AlignmentV1::Left => bounds
+            .iter()
+            .map(|value| value.min_x())
+            .fold(f64::INFINITY, f64::min),
+        AlignmentV1::Center => {
+            let min = bounds
+                .iter()
+                .map(|value| value.min_x())
+                .fold(f64::INFINITY, f64::min);
+            let max = bounds
+                .iter()
+                .map(|value| value.max_x())
+                .fold(f64::NEG_INFINITY, f64::max);
+            min + (max - min) / 2.0
+        }
+        AlignmentV1::Right => bounds
+            .iter()
+            .map(|value| value.max_x())
+            .fold(f64::NEG_INFINITY, f64::max),
+        AlignmentV1::Top => bounds
+            .iter()
+            .map(|value| value.min_y())
+            .fold(f64::INFINITY, f64::min),
+        AlignmentV1::Middle => {
+            let min = bounds
+                .iter()
+                .map(|value| value.min_y())
+                .fold(f64::INFINITY, f64::min);
+            let max = bounds
+                .iter()
+                .map(|value| value.max_y())
+                .fold(f64::NEG_INFINITY, f64::max);
+            min + (max - min) / 2.0
+        }
+        AlignmentV1::Bottom => bounds
+            .iter()
+            .map(|value| value.max_y())
+            .fold(f64::NEG_INFINITY, f64::max),
+    };
+    let hierarchy = document_hierarchy(document)?;
+    let mut updates = Vec::new();
+    for (element_id, bounds) in element_ids.iter().zip(bounds) {
+        let delta = match alignment {
+            AlignmentV1::Left => Point2D::new(target - bounds.min_x(), 0.0),
+            AlignmentV1::Center => Point2D::new(target - bounds.center_x(), 0.0),
+            AlignmentV1::Right => Point2D::new(target - bounds.max_x(), 0.0),
+            AlignmentV1::Top => Point2D::new(0.0, target - bounds.min_y()),
+            AlignmentV1::Middle => Point2D::new(0.0, target - bounds.center_y()),
+            AlignmentV1::Bottom => Point2D::new(0.0, target - bounds.max_y()),
+        };
+        if delta.x == 0.0 && delta.y == 0.0 {
+            continue;
+        }
+        let world = world_transforms[element_id];
+        let parent_world = hierarchy
+            .parent_of(element_id)
+            .flatten()
+            .and_then(|parent_id| world_transforms.get(parent_id).copied())
+            .unwrap_or_else(Affine2D::identity);
+        let translation = Affine2D::translation(delta).map_err(|_| EngineErrorV1::InvalidDelta)?;
+        let local = world
+            .compose(translation)
+            .and_then(|next| next.compose(parent_world.inverse()?))
+            .map_err(|_| EngineErrorV1::InvalidTransform {
+                element_id: element_id.clone(),
+            })?;
+        updates.push((element_id.clone(), local));
+    }
+    if updates.is_empty() {
+        return Ok(CommandEffect::unchanged());
+    }
+    for (element_id, transform) in updates {
+        document
+            .elements
+            .get_mut(&element_id)
+            .unwrap()
+            .set_transform(transform);
+    }
+    Ok(CommandEffect::changed(element_ids))
+}
+
+fn paste_clipboard(
+    document: &mut NodeInkDocumentV1,
+    payload: String,
+    id_prefix: String,
+    offset: Vec2,
+) -> Result<CommandEffect, EngineErrorV1> {
+    let decoded = clipboard::decode_clipboard(&payload)?;
+    let remapped =
+        clipboard::remap_clipboard(decoded, &id_prefix, Point2D::new(offset.x, offset.y))?;
+    if remapped
+        .elements
+        .keys()
+        .any(|element_id| document.elements.contains_key(element_id))
+    {
+        return Err(EngineErrorV1::InvalidClipboard);
+    }
+    let changed = remapped.elements.keys().cloned().collect::<Vec<_>>();
+    document.root_order.extend(remapped.root_element_ids);
+    document.elements.extend(remapped.elements);
+    Ok(CommandEffect::changed(changed))
+}
+
+fn delete_elements(
+    document: &mut NodeInkDocumentV1,
+    element_ids: Vec<ElementId>,
+) -> Result<CommandEffect, EngineErrorV1> {
+    let roots = selected_roots(document, element_ids)?;
+    if roots.is_empty() {
+        return Ok(CommandEffect::unchanged());
+    }
+    let hierarchy = document_hierarchy(document)?;
+    let mut removed = BTreeSet::new();
+    for root in roots {
+        collect_subtree(&hierarchy, &root, &mut removed);
+    }
+    loop {
+        for element in document.elements.values_mut() {
+            if let ElementRecordV1::Group(group) = element {
+                group.child_order.retain(|child| !removed.contains(child));
+            }
+        }
+        let empty_groups = document
+            .elements
+            .iter()
+            .filter_map(|(id, element)| match element {
+                ElementRecordV1::Group(group)
+                    if !removed.contains(id) && group.child_order.is_empty() =>
+                {
+                    Some(id.clone())
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        if empty_groups.is_empty() {
+            break;
+        }
+        removed.extend(empty_groups);
+    }
+    document.root_order.retain(|id| !removed.contains(id));
+    for element in document.elements.values_mut() {
+        if let ElementRecordV1::Group(group) = element {
+            group.child_order.retain(|id| !removed.contains(id));
+        }
+    }
+    for element_id in &removed {
+        document.elements.remove(element_id);
+    }
+    Ok(CommandEffect::changed(removed.into_iter().collect()))
+}
+
+fn collect_subtree(hierarchy: &Hierarchy, element_id: &str, output: &mut BTreeSet<ElementId>) {
+    if !output.insert(element_id.to_string()) {
+        return;
+    }
+    if let Some(children) = hierarchy.children_of(element_id) {
+        for child_id in children {
+            collect_subtree(hierarchy, child_id, output);
+        }
+    }
+}
+
+fn is_ancestor(hierarchy: &Hierarchy, ancestor_id: &str, element_id: &str) -> bool {
+    let mut current = hierarchy.parent_of(element_id).flatten();
+    while let Some(parent_id) = current {
+        if parent_id == ancestor_id {
+            return true;
+        }
+        current = hierarchy.parent_of(parent_id).flatten();
+    }
+    false
+}
+
+fn set_sibling_order(
+    document: &mut NodeInkDocumentV1,
+    parent_id: Option<&str>,
+    order: Vec<ElementId>,
+) -> Result<(), EngineErrorV1> {
+    match parent_id {
+        None => document.root_order = order,
+        Some(parent_id) => match document.elements.get_mut(parent_id) {
+            Some(ElementRecordV1::Group(group)) => group.child_order = order,
+            Some(_) => {
+                return Err(EngineErrorV1::InvalidHierarchy {
+                    reason: format!("parent {parent_id} is not a group"),
+                });
+            }
+            None => {
+                return Err(EngineErrorV1::ElementNotFound {
+                    element_id: parent_id.to_string(),
+                });
+            }
+        },
+    }
+    Ok(())
 }
 
 fn apply_element_style_patch(
@@ -1408,76 +2185,212 @@ fn validate_document(document: &NodeInkDocumentV1) -> Result<(), EngineErrorV1> 
     if !document.render_profile.validate() {
         return Err(EngineErrorV1::InvalidRenderProfile);
     }
-    if document.root_order.len() != document.elements.len() {
-        return Err(EngineErrorV1::InvalidDocument {
-            reason: "rootOrder and elements must contain the same ids".to_string(),
-        });
-    }
-    for element_id in &document.root_order {
-        let element =
-            document
-                .elements
-                .get(element_id)
-                .ok_or_else(|| EngineErrorV1::InvalidDocument {
-                    reason: format!("rootOrder references missing element {element_id}"),
-                })?;
+    let _hierarchy = document_hierarchy(document)?;
+    for (element_id, element) in &document.elements {
         if element.id() != element_id {
             return Err(EngineErrorV1::InvalidDocument {
                 reason: format!("element key {element_id} does not match its id"),
+            });
+        }
+        if !element.transform().is_valid() {
+            return Err(EngineErrorV1::InvalidTransform {
+                element_id: element_id.clone(),
             });
         }
         match element {
             ElementRecordV1::Rect(rectangle) => validate_rectangle(rectangle)?,
             ElementRecordV1::Stroke(stroke) => validate_stroke(stroke)?,
             ElementRecordV1::Text(text) => validate_text(text)?,
+            ElementRecordV1::Group(group) => {
+                if group.id.trim().is_empty() || group.child_order.is_empty() {
+                    return Err(EngineErrorV1::InvalidHierarchy {
+                        reason: format!("group {} must contain at least one child", group.id),
+                    });
+                }
+            }
         }
     }
     Ok(())
+}
+
+fn document_hierarchy(document: &NodeInkDocumentV1) -> Result<Hierarchy, EngineErrorV1> {
+    let child_orders = document
+        .elements
+        .values()
+        .filter_map(|element| match element {
+            ElementRecordV1::Group(group) => Some((group.id.clone(), group.child_order.clone())),
+            _ => None,
+        })
+        .collect();
+    Hierarchy::new(
+        document.elements.keys().cloned(),
+        document.root_order.clone(),
+        child_orders,
+    )
+    .map_err(|error| EngineErrorV1::InvalidHierarchy {
+        reason: format!("{error:?}"),
+    })
 }
 
 fn document_content_bounds(
     document: &NodeInkDocumentV1,
     text_metrics: &TextMetricsCache,
 ) -> Option<CameraContentBounds> {
+    let world_transforms = resolved_world_transforms(document, None).ok()?;
     document
         .root_order
         .iter()
-        .filter_map(|element_id| document.elements.get(element_id))
-        .filter_map(|element| element_content_bounds(element, text_metrics))
+        .filter_map(|element_id| {
+            element_world_bounds(document, element_id, &world_transforms, text_metrics).map(
+                |bounds| {
+                    CameraContentBounds::from_rect(bounds.x, bounds.y, bounds.width, bounds.height)
+                },
+            )
+        })
         .reduce(CameraContentBounds::union)
 }
 
-fn element_content_bounds(
+fn element_local_visual_bounds(
     element: &ElementRecordV1,
     text_metrics: &TextMetricsCache,
-) -> Option<CameraContentBounds> {
+) -> Option<VisualAabb> {
     match element {
-        ElementRecordV1::Rect(rectangle) => Some(CameraContentBounds::from_rect(
-            rectangle.x,
-            rectangle.y,
-            rectangle.width,
-            rectangle.height,
-        )),
+        ElementRecordV1::Rect(rectangle) => {
+            let half_width = rectangle.stroke_width / 2.0;
+            VisualAabb::new(
+                rectangle.x - half_width,
+                rectangle.y - half_width,
+                rectangle.width + rectangle.stroke_width,
+                rectangle.height + rectangle.stroke_width,
+            )
+            .ok()
+        }
         ElementRecordV1::Stroke(stroke) => {
             let mut points = stroke.points.iter().copied();
             let first = points.next()?;
-            Some(
-                points
-                    .fold(CameraContentBounds::from_point(first), |bounds, point| {
-                        bounds.include_point(point)
-                    })
-                    .expand(stroke.stroke_width / 2.0),
+            let (min_x, min_y, max_x, max_y) = points.fold(
+                (first.x, first.y, first.x, first.y),
+                |(min_x, min_y, max_x, max_y), point| {
+                    (
+                        min_x.min(point.x),
+                        min_y.min(point.y),
+                        max_x.max(point.x),
+                        max_y.max(point.y),
+                    )
+                },
+            );
+            let half_width = stroke.stroke_width / 2.0;
+            VisualAabb::new(
+                min_x - half_width,
+                min_y - half_width,
+                max_x - min_x + stroke.stroke_width,
+                max_y - min_y + stroke.stroke_width,
             )
+            .ok()
         }
         ElementRecordV1::Text(text) => text_metrics.metric_for(text).map(|metric| {
-            CameraContentBounds::from_rect(
+            VisualAabb::new(
                 aligned_text_x(text.x, metric.width, text.text_align),
                 text.y,
                 metric.width,
                 metric.height,
             )
+            .expect("validated text metrics create valid bounds")
         }),
+        ElementRecordV1::Group(_) => None,
     }
+}
+
+fn element_world_bounds(
+    document: &NodeInkDocumentV1,
+    element_id: &str,
+    world_transforms: &BTreeMap<ElementId, Affine2D>,
+    text_metrics: &TextMetricsCache,
+) -> Option<VisualAabb> {
+    let element = document.elements.get(element_id)?;
+    match element {
+        ElementRecordV1::Group(group) => group
+            .child_order
+            .iter()
+            .filter_map(|child_id| {
+                element_world_bounds(document, child_id, world_transforms, text_metrics)
+            })
+            .reduce(union_visual_bounds),
+        leaf => {
+            let local_bounds = element_local_visual_bounds(leaf, text_metrics)?;
+            let world_transform = *world_transforms.get(element_id)?;
+            selection_geometry::SelectionGeometry::resolve(local_bounds, world_transform, 0.0)
+                .ok()
+                .map(|geometry| geometry.visual_aabb)
+        }
+    }
+}
+
+fn union_visual_bounds(first: VisualAabb, second: VisualAabb) -> VisualAabb {
+    let min_x = first.min_x().min(second.min_x());
+    let min_y = first.min_y().min(second.min_y());
+    let max_x = first.max_x().max(second.max_x());
+    let max_y = first.max_y().max(second.max_y());
+    VisualAabb::new(min_x, min_y, max_x - min_x, max_y - min_y)
+        .expect("union of valid bounds remains valid")
+}
+
+fn resolved_world_transforms(
+    document: &NodeInkDocumentV1,
+    local_overrides: Option<&BTreeMap<ElementId, Affine2D>>,
+) -> Result<BTreeMap<ElementId, Affine2D>, EngineErrorV1> {
+    let hierarchy = document_hierarchy(document)?;
+    let mut world_transforms = BTreeMap::new();
+    for root_id in hierarchy.root_order() {
+        append_world_transforms(
+            document,
+            &hierarchy,
+            root_id,
+            Affine2D::identity(),
+            local_overrides,
+            &mut world_transforms,
+        )?;
+    }
+    Ok(world_transforms)
+}
+
+fn append_world_transforms(
+    document: &NodeInkDocumentV1,
+    hierarchy: &Hierarchy,
+    element_id: &str,
+    parent_world: Affine2D,
+    local_overrides: Option<&BTreeMap<ElementId, Affine2D>>,
+    world_transforms: &mut BTreeMap<ElementId, Affine2D>,
+) -> Result<(), EngineErrorV1> {
+    let element =
+        document
+            .elements
+            .get(element_id)
+            .ok_or_else(|| EngineErrorV1::ElementNotFound {
+                element_id: element_id.to_string(),
+            })?;
+    let local = local_overrides
+        .and_then(|overrides| overrides.get(element_id).copied())
+        .unwrap_or_else(|| element.transform());
+    let world = local
+        .compose(parent_world)
+        .map_err(|_| EngineErrorV1::InvalidTransform {
+            element_id: element_id.to_string(),
+        })?;
+    world_transforms.insert(element_id.to_string(), world);
+    if let Some(children) = hierarchy.children_of(element_id) {
+        for child_id in children {
+            append_world_transforms(
+                document,
+                hierarchy,
+                child_id,
+                world,
+                local_overrides,
+                world_transforms,
+            )?;
+        }
+    }
+    Ok(())
 }
 
 fn validate_rectangle(rectangle: &RectElementV1) -> Result<(), EngineErrorV1> {
@@ -1561,6 +2474,115 @@ fn validate_stroke_input(batch: &StrokeInputBatchV1) -> Result<(), EngineErrorV1
     Ok(())
 }
 
+fn hit_selection_handle(
+    selection: &SelectionStateV1,
+    point: Vec2,
+    camera_zoom: f64,
+) -> Option<SelectionHandleIdV1> {
+    if !camera_zoom.is_finite() || camera_zoom <= 0.0 {
+        return None;
+    }
+    let radius = 10.0 / camera_zoom;
+    selection.handles.iter().rev().find_map(|handle| {
+        let dx = handle.position.x - point.x;
+        let dy = handle.position.y - point.y;
+        (dx * dx + dy * dy <= radius * radius).then_some(handle.id)
+    })
+}
+
+fn preview_guides(
+    document: &NodeInkDocumentV1,
+    preview: &PointerTransformPreview,
+    text_metrics: &TextMetricsCache,
+) -> Vec<AlignmentGuideV1> {
+    if preview.kind != PointerTransformKind::Move || preview.disable_snap {
+        return Vec::new();
+    }
+    let Ok(selected) = selected_roots(document, preview.element_ids.clone()) else {
+        return Vec::new();
+    };
+    let Ok(hierarchy) = document_hierarchy(document) else {
+        return Vec::new();
+    };
+    let Ok(world_transforms) = resolved_world_transforms(document, None) else {
+        return Vec::new();
+    };
+    let selected_set = selected.iter().cloned().collect::<BTreeSet<_>>();
+    let Some(base_bounds) = selected
+        .iter()
+        .filter_map(|element_id| {
+            element_world_bounds(document, element_id, &world_transforms, text_metrics)
+        })
+        .reduce(union_visual_bounds)
+    else {
+        return Vec::new();
+    };
+    let Ok(geometry) =
+        selection_geometry::SelectionGeometry::resolve(base_bounds, preview.transform, 0.0)
+    else {
+        return Vec::new();
+    };
+    let target_bounds = document
+        .root_order
+        .iter()
+        .enumerate()
+        .filter(|(_, element_id)| {
+            !selected_set.contains(*element_id)
+                && !selected
+                    .iter()
+                    .any(|selected_id| is_ancestor(&hierarchy, element_id, selected_id))
+        })
+        .filter_map(|(draw_order, element_id)| {
+            element_world_bounds(document, element_id, &world_transforms, text_metrics).map(
+                |bounds| {
+                    (
+                        snapping::SnapTarget {
+                            element_id: element_id.clone(),
+                            draw_order,
+                            bounds,
+                            is_selected: false,
+                        },
+                        bounds,
+                    )
+                },
+            )
+        })
+        .collect::<Vec<_>>();
+    let targets = target_bounds
+        .iter()
+        .map(|(target, _)| target.clone())
+        .collect::<Vec<_>>();
+    let Ok(snap) = snapping::snap_bounds(geometry.visual_aabb, &targets, 1.0, 1e-7) else {
+        return Vec::new();
+    };
+    let mut guides = Vec::new();
+    if let Some(matched) = snap.x_match
+        && let Some((_, target)) = target_bounds
+            .iter()
+            .find(|(target, _)| target.element_id == matched.target_element_id)
+    {
+        guides.push(AlignmentGuideV1 {
+            axis: AlignmentGuideAxisV1::X,
+            position: matched.guide_position,
+            start: geometry.visual_aabb.min_y().min(target.min_y()),
+            end: geometry.visual_aabb.max_y().max(target.max_y()),
+        });
+    }
+    if let Some(matched) = snap.y_match
+        && let Some((_, target)) = target_bounds
+            .iter()
+            .find(|(target, _)| target.element_id == matched.target_element_id)
+    {
+        guides.push(AlignmentGuideV1 {
+            axis: AlignmentGuideAxisV1::Y,
+            position: matched.guide_position,
+            start: geometry.visual_aabb.min_x().min(target.min_x()),
+            end: geometry.visual_aabb.max_x().max(target.max_x()),
+        });
+    }
+    guides
+}
+
 fn resolve_scene(
     document: &NodeInkDocumentV1,
     scene_revision: u64,
@@ -1572,21 +2594,39 @@ fn resolve_scene(
     let mut root_node_ids =
         Vec::with_capacity(document.root_order.len() + usize::from(stroke_preview.is_some()));
     let mut nodes = BTreeMap::new();
+    let hierarchy = document_hierarchy(document).expect("validated Document has valid hierarchy");
+    let base_world = resolved_world_transforms(document, None)
+        .expect("validated Document has finite world transforms");
+    let preview_overrides = pointer_preview.and_then(|preview| {
+        let PointerPreview::Transform(preview) = preview else {
+            return None;
+        };
+        let mut overrides = BTreeMap::new();
+        for element_id in &preview.element_ids {
+            let world = *base_world.get(element_id)?;
+            let parent_world = hierarchy
+                .parent_of(element_id)
+                .flatten()
+                .and_then(|parent_id| base_world.get(parent_id).copied())
+                .unwrap_or_else(Affine2D::identity);
+            let preview_world = world.compose(preview.transform).ok()?;
+            let local = preview_world.compose(parent_world.inverse().ok()?).ok()?;
+            overrides.insert(element_id.clone(), local);
+        }
+        Some(overrides)
+    });
+    let world_transforms = resolved_world_transforms(document, preview_overrides.as_ref())
+        .expect("validated preview has finite world transforms");
 
-    for element_id in &document.root_order {
+    for element_id in hierarchy.stable_depth_first_order() {
         let Some(element) = document.elements.get(element_id) else {
             continue;
         };
+        let world_transform = *world_transforms
+            .get(element_id)
+            .expect("resolved hierarchy element has a world transform");
         match element {
             ElementRecordV1::Rect(rectangle) => {
-                let preview_delta = pointer_preview
-                    .filter(|candidate| candidate.element_id == rectangle.id)
-                    .map_or(Vec2 { x: 0.0, y: 0.0 }, |candidate| candidate.delta);
-                let resolved = RectElementV1 {
-                    x: rectangle.x + preview_delta.x,
-                    y: rectangle.y + preview_delta.y,
-                    ..rectangle.clone()
-                };
                 if matches!(profile, RenderProfileV1::Clean { .. }) {
                     let scene_node_id = format!("{}:shape", rectangle.id);
                     root_node_ids.push(scene_node_id.clone());
@@ -1595,24 +2635,32 @@ fn resolve_scene(
                         SceneNodeV1::Rect(SceneRectV1 {
                             id: scene_node_id,
                             source_element_id: rectangle.id.clone(),
-                            x: resolved.x,
-                            y: resolved.y,
-                            width: resolved.width,
-                            height: resolved.height,
-                            fill: resolved.fill.scene_paint().to_string(),
-                            stroke: resolved.stroke.clone(),
-                            stroke_width: resolved.stroke_width,
+                            transform: world_transform,
+                            x: rectangle.x,
+                            y: rectangle.y,
+                            width: rectangle.width,
+                            height: rectangle.height,
+                            fill: rectangle.fill.scene_paint().to_string(),
+                            stroke: rectangle.stroke.clone(),
+                            stroke_width: rectangle.stroke_width,
                         }),
                     );
                 } else {
-                    for path in sketch_rectangle(&resolved, profile) {
+                    for mut path in sketch_rectangle(rectangle, profile) {
+                        path.transform = world_transform;
                         root_node_ids.push(path.id.clone());
                         nodes.insert(path.id.clone(), SceneNodeV1::Path(path));
                     }
                 }
             }
             ElementRecordV1::Stroke(stroke) => {
-                insert_stroke_scene_node(&mut root_node_ids, &mut nodes, stroke, profile);
+                insert_stroke_scene_node(
+                    &mut root_node_ids,
+                    &mut nodes,
+                    stroke,
+                    world_transform,
+                    profile,
+                );
             }
             ElementRecordV1::Text(text) => {
                 if let Some(metric) = text_metrics.metric_for(text) {
@@ -1623,16 +2671,24 @@ fn resolve_scene(
                         SceneNodeV1::Text(SceneTextV1 {
                             id: scene_node_id,
                             source_element_id: text.id.clone(),
+                            transform: world_transform,
                             runs: scene_runs(text, metric),
                         }),
                     );
                 }
             }
+            ElementRecordV1::Group(_) => {}
         }
     }
 
     if let Some(preview) = stroke_preview {
-        insert_stroke_scene_node(&mut root_node_ids, &mut nodes, &preview.stroke, profile);
+        insert_stroke_scene_node(
+            &mut root_node_ids,
+            &mut nodes,
+            &preview.stroke,
+            preview.stroke.transform,
+            profile,
+        );
     }
 
     SceneSnapshotV1 {
@@ -1650,6 +2706,7 @@ fn insert_stroke_scene_node(
     root_node_ids: &mut Vec<SceneNodeId>,
     nodes: &mut BTreeMap<SceneNodeId, SceneNodeV1>,
     stroke: &StrokeElementV1,
+    world_transform: Affine2D,
     profile: &RenderProfileV1,
 ) {
     let path = if matches!(profile, RenderProfileV1::Clean { .. }) {
@@ -1657,13 +2714,16 @@ fn insert_stroke_scene_node(
         ScenePathV1 {
             id: scene_node_id,
             source_element_id: stroke.id.clone(),
+            transform: world_transform,
             path_data: stroke_path_data(&stroke.points),
             fill: "none".to_string(),
             stroke: stroke.stroke.clone(),
             stroke_width: stroke.stroke_width,
         }
     } else {
-        sketch_stroke(stroke, profile)
+        let mut path = sketch_stroke(stroke, profile);
+        path.transform = world_transform;
+        path
     };
     root_node_ids.push(path.id.clone());
     nodes.insert(path.id.clone(), SceneNodeV1::Path(path));
@@ -1739,6 +2799,7 @@ mod tests {
         let mut document = NodeInkDocumentV1::blank("doc-1");
         let rectangle = RectElementV1 {
             id: "rect-1".to_string(),
+            transform: Affine2D::identity(),
             x: 100.0,
             y: 50.0,
             width: 200.0,
@@ -1753,6 +2814,7 @@ mod tests {
             .insert(rectangle.id.clone(), ElementRecordV1::Rect(rectangle));
         let nested_rectangle = RectElementV1 {
             id: "rect-2".to_string(),
+            transform: Affine2D::identity(),
             x: 150.0,
             y: 75.0,
             width: 50.0,
@@ -1777,9 +2839,9 @@ mod tests {
         assert_eq!(
             fitted,
             CameraV1 {
-                x: 75.0,
-                y: 25.0,
-                zoom: 2.0,
+                x: 72.5,
+                y: 23.5,
+                zoom: 1.9607843137254901,
             }
         );
 
@@ -1812,6 +2874,7 @@ mod tests {
         let mut document = NodeInkDocumentV1::blank("stroke");
         let stroke = StrokeElementV1 {
             id: "stroke-1".to_string(),
+            transform: Affine2D::identity(),
             points: vec![Vec2 { x: 0.0, y: 0.0 }, Vec2 { x: 100.0, y: 0.0 }],
             stroke: DEFAULT_INK_COLOR.to_string(),
             stroke_width: 20.0,
@@ -1915,6 +2978,7 @@ mod tests {
     fn rectangle(id: &str, x: f64) -> RectElementV1 {
         RectElementV1 {
             id: id.to_string(),
+            transform: Affine2D::identity(),
             x,
             y: 40.0,
             width: 160.0,
@@ -2015,7 +3079,8 @@ mod tests {
         let ElementRecordV1::Rect(rectangle) = &engine.document().elements["rect-a"] else {
             panic!("operation result must contain the surviving rectangle");
         };
-        assert_eq!((rectangle.x, rectangle.y), (15.0, 47.0));
+        assert_eq!((rectangle.x, rectangle.y), (10.0, 40.0));
+        assert_eq!((rectangle.transform.e, rectangle.transform.f), (5.0, 7.0));
         assert_eq!((rectangle.width, rectangle.height), (240.0, 120.0));
         assert_eq!(result.scene_patch.added_nodes.len(), 1);
         assert!(engine.current_update().history.can_undo);
@@ -2087,6 +3152,7 @@ mod tests {
         let mut document = NodeInkDocumentV1::blank("doc-1");
         let stroke = StrokeElementV1 {
             id: "stroke-1".to_string(),
+            transform: Affine2D::identity(),
             points: vec![Vec2 { x: 0.0, y: 0.0 }, Vec2 { x: 1.0, y: 1.0 }],
             stroke: DEFAULT_INK_COLOR.to_string(),
             stroke_width: 2.0,
@@ -2196,7 +3262,11 @@ mod tests {
         let SceneNodeV1::Rect(moved_rectangle) = &moved.scene.nodes["rect-1:shape"] else {
             panic!("rectangle should resolve to a rectangle scene node");
         };
-        assert_eq!((moved_rectangle.x, moved_rectangle.y), (56.0, 48.0));
+        assert_eq!((moved_rectangle.x, moved_rectangle.y), (24.0, 40.0));
+        assert_eq!(
+            (moved_rectangle.transform.e, moved_rectangle.transform.f),
+            (32.0, 8.0)
+        );
 
         let undone = engine.undo().unwrap();
         let SceneNodeV1::Rect(undone_rectangle) = &undone.scene.nodes["rect-1:shape"] else {
@@ -2311,6 +3381,7 @@ mod tests {
         let node = SceneNodeV1::Text(SceneTextV1 {
             id: "text-1:run".to_string(),
             source_element_id: "text-1".to_string(),
+            transform: Affine2D::identity(),
             runs: vec![SceneTextRunV1 {
                 text: "NodeInk 画布".to_string(),
                 x: 24.0,
@@ -2470,10 +3541,10 @@ mod tests {
     #[test]
     fn opening_invalid_documents_reports_the_broken_invariant() {
         let mut unsupported_schema = NodeInkDocumentV1::blank("doc-1");
-        unsupported_schema.schema_version = 3;
+        unsupported_schema.schema_version = 4;
         assert_eq!(
             Engine::open(unsupported_schema).unwrap_err(),
-            EngineErrorV1::UnsupportedSchema { actual: 3 }
+            EngineErrorV1::UnsupportedSchema { actual: 4 }
         );
 
         assert_eq!(
@@ -2487,8 +3558,8 @@ mod tests {
         different_lengths.root_order.push("missing".to_string());
         assert_eq!(
             Engine::open(different_lengths).unwrap_err(),
-            EngineErrorV1::InvalidDocument {
-                reason: "rootOrder and elements must contain the same ids".to_string(),
+            EngineErrorV1::InvalidHierarchy {
+                reason: "UnknownElement { element_id: \"missing\" }".to_string(),
             }
         );
 
@@ -2500,8 +3571,8 @@ mod tests {
         );
         assert_eq!(
             Engine::open(missing_element).unwrap_err(),
-            EngineErrorV1::InvalidDocument {
-                reason: "rootOrder references missing element missing".to_string(),
+            EngineErrorV1::InvalidHierarchy {
+                reason: "UnknownElement { element_id: \"missing\" }".to_string(),
             }
         );
 
@@ -2545,7 +3616,7 @@ mod tests {
         assert_eq!(engine.current_update().active_tool, EditorToolV1::Select);
         assert_eq!(
             engine.serialize_document().unwrap(),
-            r#"{"schemaVersion":2,"documentId":"doc-1","revision":0,"renderProfile":{"kind":"clean","version":1},"rootOrder":[],"elements":{}}"#
+            r#"{"schemaVersion":3,"documentId":"doc-1","revision":0,"renderProfile":{"kind":"clean","version":1},"rootOrder":[],"elements":{}}"#
         );
     }
 
@@ -2627,7 +3698,8 @@ mod tests {
         else {
             panic!("rectangle should resolve to a rectangle scene node");
         };
-        assert_eq!(preview_rectangle.x, 56.0);
+        assert_eq!(preview_rectangle.x, 24.0);
+        assert_eq!(preview_rectangle.transform.e, 32.0);
 
         let switched = pointer_engine.set_active_tool(EditorToolV1::Freehand);
         let SceneNodeV1::Rect(restored_rectangle) = &switched.scene.nodes["rect-1:shape"] else {
@@ -2691,8 +3763,12 @@ mod tests {
         else {
             panic!("rectangle should resolve to a rectangle scene node");
         };
-        assert_eq!(preview_rectangle.x, 56.0);
-        assert_eq!(preview.update.selection.bounds.as_ref().unwrap().x, 55.0);
+        assert_eq!(preview_rectangle.x, 24.0);
+        assert_eq!(preview_rectangle.transform.e, 32.0);
+        assert_eq!(
+            preview.update.selection.visual_bounds.as_ref().unwrap().x,
+            55.0
+        );
         assert_eq!(preview.update.scene.document_revision, 0);
         let ElementRecordV1::Rect(document_rectangle) = &engine.document().elements["rect-1"]
         else {
@@ -2712,7 +3788,8 @@ mod tests {
         else {
             panic!("rectangle should resolve to a rectangle scene node");
         };
-        assert_eq!(committed_rectangle.x, 56.0);
+        assert_eq!(committed_rectangle.x, 24.0);
+        assert_eq!(committed_rectangle.transform.e, 32.0);
 
         let undone = engine.undo().unwrap();
         let SceneNodeV1::Rect(undone_rectangle) = &undone.scene.nodes["rect-1:shape"] else {
@@ -2746,7 +3823,8 @@ mod tests {
         let SceneNodeV1::Rect(preview_rectangle) = &batch.update.scene.nodes["rect-1:shape"] else {
             panic!("rectangle should resolve to a rectangle scene node");
         };
-        assert_eq!(preview_rectangle.x, 64.0);
+        assert_eq!(preview_rectangle.x, 24.0);
+        assert_eq!(preview_rectangle.transform.e, 40.0);
         assert_eq!(engine.document().revision, 0);
     }
 
@@ -2797,6 +3875,7 @@ mod tests {
         let mut document = document_with_rectangle();
         let top = RectElementV1 {
             id: "rect-top".to_string(),
+            transform: Affine2D::identity(),
             x: 20.0,
             y: 30.0,
             width: 120.0,
@@ -2825,7 +3904,7 @@ mod tests {
             Some("rect-top")
         );
         assert_eq!(
-            selected.update.selection.bounds,
+            selected.update.selection.visual_bounds,
             Some(SelectionBoundsV1 {
                 x: 19.0,
                 y: 29.0,
@@ -3090,6 +4169,7 @@ mod tests {
             CommandV1::CreateStroke {
                 stroke: StrokeElementV1 {
                     id: "stroke-1".to_string(),
+                    transform: Affine2D::identity(),
                     points: vec![Vec2 { x: 0.0, y: 0.0 }],
                     stroke: DEFAULT_INK_COLOR.to_string(),
                     stroke_width: 3.0,
@@ -3114,6 +4194,7 @@ mod tests {
             CommandV1::CreateStroke {
                 stroke: StrokeElementV1 {
                     id: "stroke-1".to_string(),
+                    transform: Affine2D::identity(),
                     points: vec![Vec2 { x: 1.0, y: 2.0 }, Vec2 { x: 3.0, y: 4.0 }],
                     stroke: DEFAULT_INK_COLOR.to_string(),
                     stroke_width: 2.0,
@@ -3133,7 +4214,8 @@ mod tests {
         let SceneNodeV1::Path(path) = &moved.scene.nodes["stroke-1:path"] else {
             panic!("stroke should resolve to a path");
         };
-        assert_eq!(path.path_data, "M 6 8 L 8 10");
+        assert_eq!(path.path_data, "M 1 2 L 3 4");
+        assert_eq!((path.transform.e, path.transform.f), (5.0, 6.0));
     }
 
     #[test]
@@ -3444,8 +4526,10 @@ mod tests {
         assert_eq!(text.runs[0].text_anchor, TextAnchorV1::Middle);
         assert_eq!(text.runs[0].x, 40.0);
 
-        let selected = engine.set_selection(Some("text-1".to_string())).unwrap();
-        assert_eq!(selected.selection.bounds.unwrap().x, 0.0);
+        let selected = engine
+            .set_selection(vec!["text-1".to_string()], Some("text-1".to_string()))
+            .unwrap();
+        assert_eq!(selected.selection.visual_bounds.unwrap().x, 0.0);
         assert_eq!(
             selected.selection.style,
             Some(SelectionStyleV1::Text {
@@ -3550,14 +4634,17 @@ mod tests {
         assert_eq!(
             created.selection,
             SelectionStateV1 {
+                selected_element_ids: vec!["text-1".to_string()],
+                primary_element_id: Some("text-1".to_string()),
                 selected_element_id: Some("text-1".to_string()),
-                bounds: None,
+                visual_bounds: None,
                 style: Some(SelectionStyleV1::Text {
                     color: DEFAULT_INK_COLOR.to_string(),
                     text_align: TextAlignV1::Start,
                     font_size: DEFAULT_TEXT_FONT_SIZE,
                     font_weight: DEFAULT_TEXT_FONT_WEIGHT,
                 }),
+                ..SelectionStateV1::default()
             }
         );
         let request = created
@@ -3585,24 +4672,30 @@ mod tests {
         assert!(resolved.history.can_undo);
         assert!(!resolved.history.can_redo);
         assert!(resolved.text_measure_request.is_none());
+        assert_eq!(resolved.selection.selected_element_ids, ["text-1"]);
         assert_eq!(
-            resolved.selection,
-            SelectionStateV1 {
-                selected_element_id: Some("text-1".to_string()),
-                bounds: Some(SelectionBoundsV1 {
-                    x: 40.0,
-                    y: 52.0,
-                    width: 112.0,
-                    height: 72.0,
-                }),
-                style: Some(SelectionStyleV1::Text {
-                    color: DEFAULT_INK_COLOR.to_string(),
-                    text_align: TextAlignV1::Start,
-                    font_size: DEFAULT_TEXT_FONT_SIZE,
-                    font_weight: DEFAULT_TEXT_FONT_WEIGHT,
-                }),
-            }
+            resolved.selection.primary_element_id.as_deref(),
+            Some("text-1")
         );
+        assert_eq!(
+            resolved.selection.visual_bounds,
+            Some(SelectionBoundsV1 {
+                x: 40.0,
+                y: 52.0,
+                width: 112.0,
+                height: 72.0,
+            })
+        );
+        assert_eq!(
+            resolved.selection.style,
+            Some(SelectionStyleV1::Text {
+                color: DEFAULT_INK_COLOR.to_string(),
+                text_align: TextAlignV1::Start,
+                font_size: DEFAULT_TEXT_FONT_SIZE,
+                font_weight: DEFAULT_TEXT_FONT_WEIGHT,
+            })
+        );
+        assert_eq!(resolved.selection.handles.len(), 7);
         let SceneNodeV1::Text(scene_text) = &resolved.scene.nodes["text-1:text"] else {
             panic!("resolved text must produce a SceneText node");
         };
@@ -3674,7 +4767,7 @@ mod tests {
             ))
             .unwrap();
         assert_eq!(moved.scene.document_revision, 2);
-        assert_eq!(moved.selection.bounds.unwrap().x, 52.0);
+        assert_eq!(moved.selection.visual_bounds.unwrap().x, 52.0);
 
         let changed = engine
             .execute_command(envelope(
@@ -3922,6 +5015,176 @@ mod tests {
         );
     }
 
+    #[test]
+    fn grouping_reordering_and_ungrouping_preserve_stable_sibling_order() {
+        let mut document = NodeInkDocumentV1::blank("doc-1");
+        for (id, x) in [("a", 0.0), ("b", 40.0), ("c", 80.0)] {
+            let rectangle = rectangle(id, x);
+            document.root_order.push(id.to_string());
+            document
+                .elements
+                .insert(id.to_string(), ElementRecordV1::Rect(rectangle));
+        }
+        let mut engine = Engine::open(document).unwrap();
+        let grouped = engine
+            .execute_command(envelope(
+                engine.document(),
+                "group",
+                CommandV1::GroupElements {
+                    group_id: "group-1".to_string(),
+                    element_ids: vec!["a".to_string(), "c".to_string()],
+                },
+            ))
+            .unwrap();
+        assert_eq!(engine.document().root_order, ["b", "group-1"]);
+        let ElementRecordV1::Group(group) = &engine.document().elements["group-1"] else {
+            panic!("group command creates a group")
+        };
+        assert_eq!(group.child_order, ["a", "c"]);
+        assert_eq!(grouped.selection.selected_element_ids, ["group-1"]);
+
+        let reordered = engine
+            .execute_command(envelope(
+                engine.document(),
+                "send-back",
+                CommandV1::ReorderElements {
+                    element_ids: vec!["group-1".to_string()],
+                    placement: ReorderPlacementV1::Back,
+                },
+            ))
+            .unwrap();
+        assert_eq!(engine.document().root_order, ["group-1", "b"]);
+        assert_eq!(reordered.scene.document_revision, 2);
+        let no_op = engine
+            .execute_command(envelope(
+                engine.document(),
+                "send-back-noop",
+                CommandV1::ReorderElements {
+                    element_ids: vec!["group-1".to_string()],
+                    placement: ReorderPlacementV1::Back,
+                },
+            ))
+            .unwrap();
+        assert_eq!(no_op.scene.document_revision, 2);
+
+        let ungrouped = engine
+            .execute_command(envelope(
+                engine.document(),
+                "ungroup",
+                CommandV1::UngroupElements {
+                    group_id: "group-1".to_string(),
+                },
+            ))
+            .unwrap();
+        assert_eq!(engine.document().root_order, ["a", "c", "b"]);
+        assert!(!engine.document().elements.contains_key("group-1"));
+        assert_eq!(ungrouped.selection.selected_element_ids, ["a", "c"]);
+    }
+
+    #[test]
+    fn align_and_affine_transform_are_atomic_and_noop_aware() {
+        let mut document = NodeInkDocumentV1::blank("doc-1");
+        for (id, x) in [("a", 10.0), ("b", 50.0)] {
+            let rectangle = rectangle(id, x);
+            document.root_order.push(id.to_string());
+            document
+                .elements
+                .insert(id.to_string(), ElementRecordV1::Rect(rectangle));
+        }
+        let mut engine = Engine::open(document).unwrap();
+        engine
+            .set_selection(
+                vec!["a".to_string(), "b".to_string()],
+                Some("b".to_string()),
+            )
+            .unwrap();
+        let aligned = engine
+            .execute_command(envelope(
+                engine.document(),
+                "align-left",
+                CommandV1::AlignElements {
+                    element_ids: vec!["a".to_string(), "b".to_string()],
+                    alignment: AlignmentV1::Left,
+                },
+            ))
+            .unwrap();
+        assert_eq!(aligned.scene.document_revision, 1);
+        assert_eq!(engine.document().elements["b"].transform().e, -40.0);
+        let no_op = engine
+            .execute_command(envelope(
+                engine.document(),
+                "align-left-noop",
+                CommandV1::AlignElements {
+                    element_ids: vec!["a".to_string(), "b".to_string()],
+                    alignment: AlignmentV1::Left,
+                },
+            ))
+            .unwrap();
+        assert_eq!(no_op.scene.document_revision, 1);
+
+        let rotated = engine
+            .execute_command(envelope(
+                engine.document(),
+                "rotate",
+                CommandV1::TransformElements {
+                    element_ids: vec!["a".to_string(), "b".to_string()],
+                    transform: Affine2D::rotation(std::f64::consts::FRAC_PI_2)
+                        .unwrap()
+                        .around(Point2D::new(10.0, 40.0))
+                        .unwrap(),
+                },
+            ))
+            .unwrap();
+        assert_eq!(rotated.scene.document_revision, 2);
+        assert_eq!(rotated.selection.selected_element_ids, ["a", "b"]);
+    }
+
+    #[test]
+    fn opaque_clipboard_copy_and_paste_remap_subtrees_in_one_revision() {
+        let mut document = NodeInkDocumentV1::blank("doc-1");
+        for (id, x) in [("a", 0.0), ("b", 40.0)] {
+            let rectangle = rectangle(id, x);
+            document.root_order.push(id.to_string());
+            document
+                .elements
+                .insert(id.to_string(), ElementRecordV1::Rect(rectangle));
+        }
+        let mut engine = Engine::open(document).unwrap();
+        engine
+            .execute_command(envelope(
+                engine.document(),
+                "group",
+                CommandV1::GroupElements {
+                    group_id: "group-1".to_string(),
+                    element_ids: vec!["a".to_string(), "b".to_string()],
+                },
+            ))
+            .unwrap();
+        let revision_before_copy = engine.document().revision;
+        let payload = engine.copy_selection().unwrap();
+        assert_eq!(engine.document().revision, revision_before_copy);
+
+        let pasted = engine
+            .execute_command(envelope(
+                engine.document(),
+                "paste",
+                CommandV1::PasteClipboard {
+                    payload: payload.data,
+                    id_prefix: "paste-1".to_string(),
+                    offset: Vec2 { x: 24.0, y: 24.0 },
+                },
+            ))
+            .unwrap();
+        assert_eq!(pasted.scene.document_revision, revision_before_copy + 1);
+        assert_eq!(pasted.selection.selected_element_ids, ["paste-1-0"]);
+        assert_eq!(engine.document().root_order, ["group-1", "paste-1-0"]);
+        let ElementRecordV1::Group(group) = &engine.document().elements["paste-1-0"] else {
+            panic!("pasted root remains grouped")
+        };
+        assert_eq!((group.transform.e, group.transform.f), (24.0, 24.0));
+        assert_eq!(group.child_order, ["paste-1-1", "paste-1-2"]);
+    }
+
     fn document_with_rectangle() -> NodeInkDocumentV1 {
         let mut document = NodeInkDocumentV1::blank("doc-1");
         let rectangle = rectangle("rect-1", 24.0);
@@ -3936,6 +5199,7 @@ mod tests {
         let mut document = document_with_rectangle();
         let stroke = StrokeElementV1 {
             id: "stroke-1".to_string(),
+            transform: Affine2D::identity(),
             points: vec![
                 Vec2 { x: 8.0, y: 12.0 },
                 Vec2 { x: 24.0, y: 28.0 },
@@ -4050,6 +5314,8 @@ mod tests {
             sequence,
             phase,
             point: Vec2 { x, y },
+            modifiers: PointerModifiersV1::default(),
+            screen_scale: 1.0,
         }
     }
 

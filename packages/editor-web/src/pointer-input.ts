@@ -1,8 +1,11 @@
 import type { NormalizedPointerEventV1, PointerPhaseV1 } from '@nodeink-internal/protocol';
 
+import { createSelectionInputNormalizer } from './selection-input';
+
 export type PointerBatchListener = (events: NormalizedPointerEventV1[]) => void;
 
 export interface PointerInputOptionsV1 {
+  screenScale?: () => number;
   shouldHandleEvent?: (event: PointerEvent) => boolean;
   onDoubleClick?: (point: { x: number; y: number }) => void;
 }
@@ -12,14 +15,17 @@ export function attachPointerInput(
   onPointerBatch: PointerBatchListener,
   options: PointerInputOptionsV1 = {},
 ): () => void {
-  const sequences = new Map<number, number>();
   const activePointers = new Set<number>();
-  const lastPoints = new Map<number, { x: number; y: number }>();
+  const lastEvents = new Map<number, NormalizedPointerEventV1>();
   const windowTarget = target.ownerDocument.defaultView;
+  const normalizer = createSelectionInputNormalizer({
+    screenScale: options.screenScale ?? (() => 1),
+    toCanvasPoint: (event) => createScreenToCanvasPoint(target)(event.clientX, event.clientY),
+  });
 
   const emitNormalized = (events: NormalizedPointerEventV1[]) => {
     for (const event of events) {
-      lastPoints.set(event.pointerId, event.point);
+      lastEvents.set(event.pointerId, event);
     }
     onPointerBatch(events);
   };
@@ -31,7 +37,7 @@ export function attachPointerInput(
     activePointers.add(event.pointerId);
     target.setPointerCapture?.(event.pointerId);
     event.preventDefault();
-    emitNormalized(normalizeEvents(target, [event], 'down', sequences));
+    emitNormalized(normalizeEvents([event], 'down', normalizer));
   };
   const handlePointerMove = (event: PointerEvent) => {
     if (!activePointers.has(event.pointerId) || options.shouldHandleEvent?.(event) === false) {
@@ -40,28 +46,28 @@ export function attachPointerInput(
     const coalescedEvents = event.getCoalescedEvents?.() ?? [];
     const events = coalescedEvents.length > 0 ? coalescedEvents : [event];
     event.preventDefault();
-    emitNormalized(normalizeEvents(target, events, 'move', sequences));
+    emitNormalized(normalizeEvents(events, 'move', normalizer));
   };
   const handlePointerUp = (event: PointerEvent) => {
     if (!activePointers.has(event.pointerId) || options.shouldHandleEvent?.(event) === false) {
       return;
     }
     event.preventDefault();
-    emitNormalized(normalizeEvents(target, [event], 'up', sequences));
+    emitNormalized(normalizeEvents([event], 'up', normalizer));
     activePointers.delete(event.pointerId);
-    lastPoints.delete(event.pointerId);
+    lastEvents.delete(event.pointerId);
     releasePointer(target, event.pointerId);
-    sequences.delete(event.pointerId);
+    normalizer.reset(event.pointerId);
   };
   const handlePointerCancel = (event: PointerEvent) => {
     if (options.shouldHandleEvent?.(event) === false) {
       return;
     }
-    emitNormalized(normalizeEvents(target, [event], 'cancel', sequences));
+    emitNormalized(normalizeEvents([event], 'cancel', normalizer));
     activePointers.delete(event.pointerId);
-    lastPoints.delete(event.pointerId);
+    lastEvents.delete(event.pointerId);
     releasePointer(target, event.pointerId);
-    sequences.delete(event.pointerId);
+    normalizer.reset(event.pointerId);
   };
   const handleDoubleClick = (event: MouseEvent) => {
     if (event.button !== 0 || options.shouldHandleEvent?.(event as PointerEvent) === false) {
@@ -74,12 +80,20 @@ export function attachPointerInput(
     if (!activePointers.has(pointerId)) {
       return;
     }
-    const sequence = (sequences.get(pointerId) ?? 0) + 1;
-    const point = lastPoints.get(pointerId) ?? { x: 0, y: 0 };
-    emitNormalized([{ pointerId, sequence, phase: 'cancel', point }]);
+    const lastEvent = lastEvents.get(pointerId);
+    emitNormalized([
+      {
+        pointerId,
+        sequence: (lastEvent?.sequence ?? 0) + 1,
+        phase: 'cancel',
+        point: lastEvent?.point ?? { x: 0, y: 0 },
+        modifiers: lastEvent?.modifiers ?? { shift: false, alt: false, metaOrCtrl: false },
+        screenScale: lastEvent?.screenScale ?? options.screenScale?.() ?? 1,
+      },
+    ]);
     activePointers.delete(pointerId);
-    lastPoints.delete(pointerId);
-    sequences.delete(pointerId);
+    lastEvents.delete(pointerId);
+    normalizer.reset(pointerId);
     releasePointer(target, pointerId);
   };
   const handleLostPointerCapture = (event: PointerEvent) => cancelActivePointer(event.pointerId);
@@ -109,26 +123,25 @@ export function attachPointerInput(
       releasePointer(target, pointerId);
     }
     activePointers.clear();
-    lastPoints.clear();
-    sequences.clear();
+    lastEvents.clear();
+    normalizer.reset();
   };
 }
 
 function normalizeEvents(
-  target: HTMLElement,
   events: PointerEvent[],
   phase: PointerPhaseV1,
-  sequences: Map<number, number>,
+  normalizer: ReturnType<typeof createSelectionInputNormalizer>,
 ): NormalizedPointerEventV1[] {
-  const toCanvasPoint = createScreenToCanvasPoint(target);
   return events.map((event) => {
-    const sequence = (sequences.get(event.pointerId) ?? 0) + 1;
-    sequences.set(event.pointerId, sequence);
+    const normalized = normalizer.normalize(event, phase);
     return {
-      pointerId: event.pointerId,
-      sequence,
-      phase,
-      point: toCanvasPoint(event.clientX, event.clientY),
+      pointerId: normalized.pointerId,
+      sequence: normalized.sequence,
+      phase: normalized.phase,
+      point: normalized.point,
+      modifiers: normalized.modifiers,
+      screenScale: normalized.screenScale,
     };
   });
 }

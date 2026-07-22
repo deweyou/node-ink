@@ -75,12 +75,24 @@ impl EngineHandle {
     }
 
     #[wasm_bindgen(js_name = setSelection)]
-    pub fn set_selection(&mut self, element_id: Option<String>) -> Result<String, JsValue> {
+    pub fn set_selection(
+        &mut self,
+        element_ids_json: &str,
+        primary_element_id: Option<String>,
+    ) -> Result<String, JsValue> {
+        let element_ids: Vec<String> = serde_json::from_str(element_ids_json)
+            .map_err(|error| js_error("schema_invalid", error))?;
         let update = self
             .engine
-            .set_selection(element_id)
+            .set_selection(element_ids, primary_element_id)
             .map_err(engine_error)?;
         serde_json::to_string(&update).map_err(|error| js_error("serialization_failed", error))
+    }
+
+    #[wasm_bindgen(js_name = copySelection)]
+    pub fn copy_selection(&self) -> Result<String, JsValue> {
+        let payload = self.engine.copy_selection().map_err(engine_error)?;
+        serde_json::to_string(&payload).map_err(|error| js_error("serialization_failed", error))
     }
 
     #[wasm_bindgen(js_name = beginTextEditAt)]

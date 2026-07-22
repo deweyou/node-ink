@@ -195,4 +195,12 @@ mod tests {
         assert!(!is_canonical_color("black"));
         assert!(!is_canonical_color("#gg172a"));
     }
+
+    #[test]
+    fn default_style_patch_is_an_empty_rectangle_patch() {
+        let patch = ElementStylePatchV1::default();
+
+        assert!(patch.is_empty());
+        assert!(matches!(patch, ElementStylePatchV1::Rect { .. }));
+    }
 }

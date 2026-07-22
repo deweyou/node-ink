@@ -1,6 +1,7 @@
 import {
-  parseDiagramOperationBatchResult,
   parseCamera,
+  parseClipboardPayload,
+  parseDiagramOperationBatchResult,
   parseEngineUpdate,
   parseMigrationAttempt,
   parseNodeInkDocument,
@@ -15,6 +16,7 @@ import {
   type CameraActionV1,
   type CameraV1,
   type CameraViewportV1,
+  type ClipboardPayloadV1,
   type DiagramOperationBatchResultV1,
   type DiagramOperationBatchV1,
   type EditorToolV1,
@@ -48,7 +50,8 @@ interface WasmEngineHandle {
   applyCameraAction(actionJson: string): string;
   executeCommand(commandJson: string): string;
   setActiveTool(tool: string): string;
-  setSelection(elementId: string | undefined): string;
+  setSelection(elementIdsJson: string, primaryElementId: string | undefined): string;
+  copySelection(): string;
   beginTextEditAt(pointJson: string): string;
   provideTextMetrics(snapshotJson: string): string;
   executeDiagramOperation(batchJson: string): string;
@@ -151,9 +154,25 @@ class WasmEnginePort implements EnginePortV1 {
     }
   }
 
-  async setSelection(elementId: string | null): Promise<EngineUpdateV1> {
+  async setSelection(
+    elementIds: string[],
+    primaryElementId: string | null,
+  ): Promise<EngineUpdateV1> {
     try {
-      return parseEngineUpdate(this.requireHandle().setSelection(elementId ?? undefined));
+      return parseEngineUpdate(
+        this.requireHandle().setSelection(
+          JSON.stringify(elementIds),
+          primaryElementId ?? undefined,
+        ),
+      );
+    } catch (error) {
+      throw normalizeEngineError(error);
+    }
+  }
+
+  async copySelection(): Promise<ClipboardPayloadV1> {
+    try {
+      return parseClipboardPayload(this.requireHandle().copySelection());
     } catch (error) {
       throw normalizeEngineError(error);
     }

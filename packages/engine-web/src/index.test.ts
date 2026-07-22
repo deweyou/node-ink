@@ -6,7 +6,12 @@ import type {
   TextElementV1,
   TextMetricsSnapshotV1,
 } from '@nodeink-internal/protocol';
-import { canvasFontFamily, createBlankDocument } from '@nodeink-internal/protocol';
+import {
+  canvasFontFamily,
+  createBlankDocument,
+  createIdentityAffine2D,
+  nodeInkClipboardMime,
+} from '@nodeink-internal/protocol';
 
 const fixtureFontFingerprint = 'noto-sans-sc-v40-fontsource-5.3.0';
 
@@ -20,6 +25,7 @@ const wasm = vi.hoisted(() => {
     executeCommand: vi.fn(),
     setActiveTool: vi.fn(),
     setSelection: vi.fn(),
+    copySelection: vi.fn(),
     beginTextEditAt: vi.fn(),
     provideTextMetrics: vi.fn(),
     executeDiagramOperation: vi.fn(),
@@ -63,6 +69,7 @@ describe('createWasmEngine', () => {
     wasm.handle.executeCommand.mockReturnValue(update);
     wasm.handle.setActiveTool.mockReturnValue(validUpdate('freehand'));
     wasm.handle.setSelection.mockReturnValue(update);
+    wasm.handle.copySelection.mockReturnValue(clipboardPayload());
     wasm.handle.beginTextEditAt.mockReturnValue(textEditTarget());
     wasm.handle.provideTextMetrics.mockReturnValue(validUpdate('text'));
     wasm.handle.executeDiagramOperation.mockReturnValue(diagramOperationResult());
@@ -178,8 +185,15 @@ describe('createWasmEngine', () => {
     await expect(engine.setActiveTool('freehand')).resolves.toMatchObject({
       activeTool: 'freehand',
     });
-    await expect(engine.setSelection('rect-1')).resolves.toMatchObject({
+    await expect(engine.setSelection(['rect-1', 'rect-2'], 'rect-2')).resolves.toMatchObject({
       selection: { selectedElementId: null },
+    });
+    await expect(engine.setSelection([], null)).resolves.toMatchObject({
+      selection: { selectedElementIds: [] },
+    });
+    await expect(engine.copySelection()).resolves.toEqual({
+      mime: nodeInkClipboardMime,
+      data: '{"version":1,"elements":[]}',
     });
     await expect(engine.beginTextEditAt({ x: 40, y: 48 })).resolves.toMatchObject({
       element: { id: 'text-1', text: '第一行\nSecond line' },
@@ -212,6 +226,8 @@ describe('createWasmEngine', () => {
         sequence: 1,
         phase: 'down' as const,
         point: { x: 1, y: 2 },
+        modifiers: { shift: true, alt: false, metaOrCtrl: true },
+        screenScale: 2,
       },
     ];
     await expect(engine.handlePointerEvents(pointerEvents, 'drag-1')).resolves.toMatchObject({
@@ -281,7 +297,12 @@ describe('createWasmEngine', () => {
     expect(wasm.handle.executeCommand).toHaveBeenCalledWith(JSON.stringify(updateStyleCommand));
     expect(wasm.handle.executeCommand).toHaveBeenCalledWith(JSON.stringify(renderProfileCommand));
     expect(wasm.handle.setActiveTool).toHaveBeenCalledWith('freehand');
-    expect(wasm.handle.setSelection).toHaveBeenCalledWith('rect-1');
+    expect(wasm.handle.setSelection).toHaveBeenCalledWith(
+      JSON.stringify(['rect-1', 'rect-2']),
+      'rect-2',
+    );
+    expect(wasm.handle.setSelection).toHaveBeenCalledWith('[]', undefined);
+    expect(wasm.handle.copySelection).toHaveBeenCalledOnce();
     expect(wasm.handle.beginTextEditAt).toHaveBeenCalledWith('{"x":40,"y":48}');
     expect(wasm.handle.provideTextMetrics).toHaveBeenCalledWith(JSON.stringify(textMetrics));
     expect(wasm.handle.setCamera).toHaveBeenCalledWith('{"x":24,"y":12,"zoom":1.5}');
@@ -365,6 +386,16 @@ describe('createWasmEngine', () => {
       throw new Error(JSON.stringify({ message: 'tool rejected' }));
     });
     await expect(engine.setActiveTool('freehand')).rejects.toThrow('tool rejected');
+
+    wasm.handle.setSelection.mockImplementation(() => {
+      throw new Error(JSON.stringify({ message: 'selection rejected' }));
+    });
+    await expect(engine.setSelection(['rect-1'], 'rect-1')).rejects.toThrow('selection rejected');
+
+    wasm.handle.copySelection.mockImplementation(() => {
+      throw new Error(JSON.stringify({ message: 'copy rejected' }));
+    });
+    await expect(engine.copySelection()).rejects.toThrow('copy rejected');
 
     wasm.handle.beginTextEditAt.mockImplementation(() => {
       throw new Error(JSON.stringify({ message: 'text target rejected' }));
@@ -513,7 +544,17 @@ function validUpdate(activeTool: 'select' | 'freehand' | 'text' = 'select'): str
       nodes: {},
     },
     history: { canUndo: false, canRedo: false },
-    selection: { selectedElementId: null, bounds: null, style: null },
+    selection: {
+      selectedElementIds: [],
+      primaryElementId: null,
+      selectedElementId: null,
+      visualBounds: null,
+      orientedBounds: null,
+      handles: [],
+      marquee: null,
+      guides: [],
+      style: null,
+    },
   });
 }
 
@@ -521,6 +562,7 @@ function textElement(): TextElementV1 {
   return {
     kind: 'text',
     id: 'text-1',
+    transform: createIdentityAffine2D(),
     x: 40,
     y: 48,
     text: '第一行\nSecond line',
@@ -540,8 +582,19 @@ function textEditTarget(): string {
     update: {
       ...JSON.parse(validUpdate('text')),
       selection: {
+        selectedElementIds: ['text-1'],
+        primaryElementId: 'text-1',
         selectedElementId: 'text-1',
-        bounds: { x: 40, y: 48, width: 240, height: 48 },
+        visualBounds: { x: 40, y: 48, width: 240, height: 48 },
+        orientedBounds: {
+          center: { x: 160, y: 72 },
+          width: 240,
+          height: 48,
+          rotation: 0,
+        },
+        handles: [],
+        marquee: null,
+        guides: [],
         style: {
           kind: 'text',
           color: '#0f172a',
@@ -618,7 +671,7 @@ function migrationAttempt(): string {
   return JSON.stringify({
     result: {
       sourceSchemaVersion: 0,
-      targetSchemaVersion: 2,
+      targetSchemaVersion: 3,
       migrated: true,
       document: createBlankDocument('doc-1'),
       canonicalPayload: JSON.stringify(createBlankDocument('doc-1')),
@@ -631,6 +684,7 @@ function rectangleElement() {
   return {
     kind: 'rect' as const,
     id: 'rect-1',
+    transform: createIdentityAffine2D(),
     x: 1,
     y: 2,
     width: 3,
@@ -639,4 +693,11 @@ function rectangleElement() {
     stroke: '#047857',
     strokeWidth: 2,
   };
+}
+
+function clipboardPayload(): string {
+  return JSON.stringify({
+    mime: nodeInkClipboardMime,
+    data: '{"version":1,"elements":[]}',
+  });
 }

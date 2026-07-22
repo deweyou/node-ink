@@ -38,7 +38,7 @@ rootElement.innerHTML = `
   <main class="nodeink-shell" data-nodeink-host="vanilla">
     <header class="nodeink-topbar">
       <div>
-        <span class="nodeink-kicker">NodeInk · Phase 1A</span>
+        <span class="nodeink-kicker">NodeInk · Phase 1B</span>
         <h1>Framework-neutral canvas</h1>
       </div>
       <div class="nodeink-topbar-actions">
@@ -61,6 +61,31 @@ rootElement.innerHTML = `
     </aside>
     <section class="nodeink-stage" aria-label="Infinite canvas proof">
       <div class="nodeink-canvas" data-canvas></div>
+      <nav class="nodeink-selection-actions" aria-label="Selection actions">
+        <div class="nodeink-selection-action-group" role="group" aria-label="Clipboard">
+          <button type="button" data-action="copy" data-selection-requires="one">Copy</button>
+          <button type="button" data-action="cut" data-selection-requires="one">Cut</button>
+          <button type="button" data-action="paste">Paste</button>
+        </div>
+        <div class="nodeink-selection-action-group" role="group" aria-label="Grouping">
+          <button type="button" data-action="group" data-selection-requires="multiple">Group</button>
+          <button type="button" data-action="ungroup" data-selection-requires="one">Ungroup</button>
+        </div>
+        <div class="nodeink-selection-action-group" role="group" aria-label="Stacking order">
+          <button type="button" data-action="reorder" data-placement="front" data-selection-requires="one" title="Bring to front">Front</button>
+          <button type="button" data-action="reorder" data-placement="forward" data-selection-requires="one" title="Bring forward">Forward</button>
+          <button type="button" data-action="reorder" data-placement="backward" data-selection-requires="one" title="Send backward">Backward</button>
+          <button type="button" data-action="reorder" data-placement="back" data-selection-requires="one" title="Send to back">Back</button>
+        </div>
+        <div class="nodeink-selection-action-group" role="group" aria-label="Alignment">
+          <button type="button" data-action="align" data-alignment="left" data-selection-requires="multiple">Left</button>
+          <button type="button" data-action="align" data-alignment="center" data-selection-requires="multiple">Center</button>
+          <button type="button" data-action="align" data-alignment="right" data-selection-requires="multiple">Right</button>
+          <button type="button" data-action="align" data-alignment="top" data-selection-requires="multiple">Top</button>
+          <button type="button" data-action="align" data-alignment="middle" data-selection-requires="multiple">Middle</button>
+          <button type="button" data-action="align" data-alignment="bottom" data-selection-requires="multiple">Bottom</button>
+        </div>
+      </nav>
       <aside class="nodeink-style-panel" aria-label="Selection style" data-style-panel hidden></aside>
       <nav class="nodeink-zoom-controls" aria-label="Canvas view controls">
         <button type="button" data-action="zoom_out" aria-label="Zoom out" title="缩小">−</button>
@@ -178,6 +203,36 @@ rootElement.addEventListener('click', (event) => {
     void controller.dispatch({ type: 'move_active', delta: { x: 32, y: 16 } });
   } else if (action === 'delete_selection') {
     void controller.dispatch({ type: 'delete_selection' });
+  } else if (
+    action === 'copy' ||
+    action === 'cut' ||
+    action === 'paste' ||
+    action === 'group' ||
+    action === 'ungroup'
+  ) {
+    void controller.dispatch({ type: action });
+  } else if (action === 'reorder') {
+    const placement = button.dataset.placement;
+    if (
+      placement === 'front' ||
+      placement === 'forward' ||
+      placement === 'backward' ||
+      placement === 'back'
+    ) {
+      void controller.dispatch({ type: 'reorder', placement });
+    }
+  } else if (action === 'align') {
+    const alignment = button.dataset.alignment;
+    if (
+      alignment === 'left' ||
+      alignment === 'center' ||
+      alignment === 'right' ||
+      alignment === 'top' ||
+      alignment === 'middle' ||
+      alignment === 'bottom'
+    ) {
+      void controller.dispatch({ type: 'align', alignment });
+    }
   } else if (action === 'undo') {
     void controller.dispatch({ type: 'undo' });
   } else if (action === 'redo') {
@@ -212,12 +267,13 @@ function renderSnapshot(
 ): void {
   const snapshot = editor.getSnapshot();
   const persistence = getEditorPersistencePresentation(snapshot);
+  const selectionCount = snapshot.selectedElementIds.length;
   statusElement.innerHTML = `
     <span data-save-status="${snapshot.saveStatus}">${persistence.statusLabel}</span>
     <span>${snapshot.status}</span>
     <span>document r${snapshot.documentRevision}</span>
     <span>${snapshot.elementCount} elements</span>
-    <span>${snapshot.activeElementId ? '1 selected' : 'No selection'}</span>
+    <span>${selectionCount === 0 ? 'No selection' : `${selectionCount} selected`}</span>
     <span>${snapshot.activeTool} tool</span>
   `;
   noticeElement.hidden = !persistence.notice;
@@ -258,8 +314,13 @@ function renderSnapshot(
   setPressed(root, 'freehand', snapshot.activeTool === 'freehand');
   setPressed(root, 'text', snapshot.activeTool === 'text');
   setDisabled(root, 'create_rectangle', !isEditable);
-  setDisabled(root, 'move_active', !isEditable || !snapshot.activeElementId);
-  setDisabled(root, 'delete_selection', !isEditable || !snapshot.activeElementId);
+  setDisabled(root, 'move_active', !isEditable || selectionCount === 0);
+  setDisabled(root, 'delete_selection', !isEditable || selectionCount === 0);
+  setDisabled(root, 'paste', !isEditable);
+  root.querySelectorAll<HTMLButtonElement>('[data-selection-requires]').forEach((button) => {
+    const minimum = button.dataset.selectionRequires === 'multiple' ? 2 : 1;
+    button.disabled = !isEditable || selectionCount < minimum;
+  });
   setDisabled(root, 'undo', !isEditable || !snapshot.canUndo);
   setDisabled(root, 'redo', !isEditable || !snapshot.canRedo);
   root.querySelectorAll<HTMLButtonElement>('[data-profile]').forEach((button) => {

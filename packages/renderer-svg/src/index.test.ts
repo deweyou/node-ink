@@ -87,6 +87,30 @@ describe('SvgRenderer', () => {
     expect(firstText?.querySelector('tspan')?.getAttribute('text-anchor')).toBe('middle');
   });
 
+  it('applies Scene affine transforms to rectangles, paths, and text', () => {
+    const target = document.createElement('div');
+    const renderer = new SvgRenderer();
+    renderer.mount(target);
+    const affine = { a: 0, b: 1, c: -1, d: 0, e: 120, f: 48 };
+
+    const rectangle = scene(1, 24);
+    rectangle.nodes['rect-1:shape']!.transform = affine;
+    renderer.applySnapshot(rectangle);
+    expect(
+      target.querySelector('[data-scene-node-id="rect-1:shape"]')?.getAttribute('transform'),
+    ).toBe('matrix(0 1 -1 0 120 48)');
+
+    const stroke = strokeScene(2, 'M 1 2 L 3 4');
+    stroke.nodes['stroke-1:path']!.transform = affine;
+    renderer.applySnapshot(stroke);
+    expect(target.querySelector('path')?.getAttribute('transform')).toBe('matrix(0 1 -1 0 120 48)');
+
+    const text = textScene(3, 'NodeInk');
+    text.nodes['text-1:run']!.transform = affine;
+    renderer.applySnapshot(text);
+    expect(target.querySelector('text')?.getAttribute('transform')).toBe('matrix(0 1 -1 0 120 48)');
+  });
+
   it('updates the viewport independently of scene revision', () => {
     const target = document.createElement('div');
     const renderer = new SvgRenderer();
@@ -106,7 +130,11 @@ describe('SvgRenderer', () => {
 
     renderer.setOverlay({
       selectionBounds: { x: 20, y: 32, width: 160, height: 96 },
+      selectionOrientedBounds: null,
+      selectionHandles: [],
       selectionPaddingWorld: 3,
+      marquee: null,
+      guides: [],
     });
 
     const svg = target.querySelector('svg');
@@ -124,8 +152,64 @@ describe('SvgRenderer', () => {
     expect(overlay?.getAttribute('pointer-events')).toBe('none');
     expect(svg?.lastElementChild).toBe(overlay);
 
-    renderer.setOverlay({ selectionBounds: null, selectionPaddingWorld: 3 });
+    renderer.setOverlay(emptyOverlay(3));
     expect(target.querySelector('[data-nodeink-selection-outline]')).toBeNull();
+  });
+
+  it('renders oriented selection handles, marquee, and restrained guides at stable screen sizes', () => {
+    const target = document.createElement('div');
+    const renderer = new SvgRenderer();
+    renderer.mount(target);
+    const overlay = {
+      selectionBounds: { x: 80, y: 70, width: 40, height: 20 },
+      selectionOrientedBounds: {
+        center: { x: 100, y: 80 },
+        width: 40,
+        height: 20,
+        rotation: Math.PI / 2,
+      },
+      selectionHandles: selectionHandles(),
+      selectionPaddingWorld: 3,
+      marquee: {
+        bounds: { x: 12, y: 18, width: 88, height: 64 },
+        mode: 'add' as const,
+      },
+      guides: [
+        { axis: 'x' as const, position: 64, start: 8, end: 180 },
+        { axis: 'y' as const, position: 96, start: 12, end: 220 },
+      ],
+    };
+
+    renderer.setOverlay(overlay);
+
+    const outline = target.querySelector('[data-nodeink-selection-outline]');
+    expect(outline?.getAttribute('x')).toBe('-23');
+    expect(outline?.getAttribute('y')).toBe('-13');
+    expect(outline?.getAttribute('transform')).toBe('translate(100 80) rotate(90)');
+    const handles = target.querySelectorAll('[data-nodeink-selection-handle]');
+    expect(handles).toHaveLength(9);
+    expect(
+      target.querySelector('[data-nodeink-selection-handle="north_west"]')?.getAttribute('width'),
+    ).toBe('4');
+    expect(
+      target.querySelector('[data-nodeink-selection-handle="rotate"]')?.getAttribute('r'),
+    ).toBe('2.5');
+    expect(target.querySelector('[data-nodeink-rotate-connector]')).not.toBeNull();
+    expect(
+      target.querySelector('[data-nodeink-selection-marquee="add"]')?.getAttribute('fill'),
+    ).toContain('rgba(37, 99, 235, 0.12)');
+    const verticalGuide = target.querySelector('[data-nodeink-alignment-guide="x"]');
+    expect(verticalGuide?.getAttribute('x1')).toBe('64');
+    expect(verticalGuide?.getAttribute('y2')).toBe('180');
+    expect(verticalGuide?.getAttribute('vector-effect')).toBe('non-scaling-stroke');
+
+    renderer.setOverlay({ ...overlay, selectionPaddingWorld: 6 });
+    expect(
+      target.querySelector('[data-nodeink-selection-handle="north_west"]')?.getAttribute('width'),
+    ).toBe('8');
+    expect(target.querySelector('[data-nodeink-overlay]')?.getAttribute('pointer-events')).toBe(
+      'none',
+    );
   });
 
   it.each([Number.NaN, Number.POSITIVE_INFINITY, -1])(
@@ -134,7 +218,7 @@ describe('SvgRenderer', () => {
       const renderer = new SvgRenderer();
       renderer.mount(document.createElement('div'));
 
-      expect(() => renderer.setOverlay({ selectionBounds: null, selectionPaddingWorld })).toThrow(
+      expect(() => renderer.setOverlay(emptyOverlay(selectionPaddingWorld))).toThrow(
         'finite non-negative',
       );
     },
@@ -273,6 +357,7 @@ function scene(sceneRevision: number, x: number): SceneSnapshotV1 {
         kind: 'rect',
         id: 'rect-1:shape',
         sourceElementId: 'rect-1',
+        transform: identity(),
         x,
         y: 40,
         width: 160,
@@ -298,6 +383,7 @@ function strokeScene(sceneRevision: number, pathData: string): SceneSnapshotV1 {
         kind: 'path',
         id: 'stroke-1:path',
         sourceElementId: 'stroke-1',
+        transform: identity(),
         pathData,
         fill: 'none',
         stroke: '#0f172a',
@@ -337,6 +423,7 @@ function textScene(
         kind: 'text',
         id: 'text-1:run',
         sourceElementId: 'text-1',
+        transform: identity(),
         runs: [
           {
             text: value,
@@ -352,4 +439,33 @@ function textScene(
       },
     },
   };
+}
+
+function identity() {
+  return { a: 1, b: 0, c: 0, d: 1, e: 0, f: 0 };
+}
+
+function emptyOverlay(selectionPaddingWorld: number) {
+  return {
+    selectionBounds: null,
+    selectionOrientedBounds: null,
+    selectionHandles: [],
+    selectionPaddingWorld,
+    marquee: null,
+    guides: [],
+  };
+}
+
+function selectionHandles() {
+  return [
+    { id: 'north_west' as const, kind: 'resize' as const, position: { x: 110, y: 60 } },
+    { id: 'north' as const, kind: 'resize' as const, position: { x: 110, y: 80 } },
+    { id: 'north_east' as const, kind: 'resize' as const, position: { x: 110, y: 100 } },
+    { id: 'east' as const, kind: 'resize' as const, position: { x: 100, y: 100 } },
+    { id: 'south_east' as const, kind: 'resize' as const, position: { x: 90, y: 100 } },
+    { id: 'south' as const, kind: 'resize' as const, position: { x: 90, y: 80 } },
+    { id: 'south_west' as const, kind: 'resize' as const, position: { x: 90, y: 60 } },
+    { id: 'west' as const, kind: 'resize' as const, position: { x: 100, y: 60 } },
+    { id: 'rotate' as const, kind: 'rotate' as const, position: { x: 132, y: 80 } },
+  ];
 }

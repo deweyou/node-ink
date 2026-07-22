@@ -153,31 +153,6 @@ impl CameraContentBounds {
         }
     }
 
-    pub(crate) fn from_point(point: Vec2) -> Self {
-        Self {
-            min_x: point.x,
-            min_y: point.y,
-            max_x: point.x,
-            max_y: point.y,
-        }
-    }
-
-    pub(crate) fn include_point(mut self, point: Vec2) -> Self {
-        self.min_x = self.min_x.min(point.x);
-        self.min_y = self.min_y.min(point.y);
-        self.max_x = self.max_x.max(point.x);
-        self.max_y = self.max_y.max(point.y);
-        self
-    }
-
-    pub(crate) fn expand(mut self, amount: f64) -> Self {
-        self.min_x -= amount;
-        self.min_y -= amount;
-        self.max_x += amount;
-        self.max_y += amount;
-        self
-    }
-
     pub(crate) fn union(self, other: Self) -> Self {
         Self {
             min_x: self.min_x.min(other.min_x),

@@ -12,6 +12,10 @@ import type {
 } from '@nodeink-internal/protocol';
 
 const svgNamespace = 'http://www.w3.org/2000/svg';
+const selectionColor = 'var(--nodeink-selection-color, #2563eb)';
+const selectionGapPx = 6;
+const resizeHandleSizePx = 8;
+const rotateHandleRadiusPx = 5;
 
 export class SvgRenderer implements RendererV1 {
   #svg: SVGSVGElement | null = null;
@@ -38,20 +42,43 @@ export class SvgRenderer implements RendererV1 {
   }
 
   setOverlay(overlay: EditorOverlayV1): void {
-    if (!Number.isFinite(overlay.selectionPaddingWorld) || overlay.selectionPaddingWorld < 0) {
-      throw new Error('Selection overlay padding must be a finite non-negative number');
-    }
+    validateOverlay(overlay);
     const group = this.requireOverlay();
     group.replaceChildren();
-    if (overlay.selectionBounds) {
-      const outline = createSelectionRectangle(
-        overlay.selectionBounds,
-        overlay.selectionPaddingWorld,
-      );
+    for (const guide of overlay.guides) {
+      group.append(createAlignmentGuide(guide));
+    }
+    if (overlay.marquee) {
+      group.append(createMarquee(overlay.marquee));
+    }
+    const outline = overlay.selectionOrientedBounds
+      ? createOrientedSelectionRectangle(
+          overlay.selectionOrientedBounds,
+          overlay.selectionPaddingWorld,
+        )
+      : overlay.selectionBounds
+        ? createSelectionRectangle(overlay.selectionBounds, overlay.selectionPaddingWorld)
+        : null;
+    if (outline) {
       outline.dataset.nodeinkSelectionOutline = 'true';
-      outline.setAttribute('stroke', 'var(--nodeink-selection-color, #0b74de)');
+      outline.setAttribute('stroke', selectionColor);
       outline.setAttribute('stroke-width', '2');
       group.append(outline);
+    }
+    const worldPerScreenPixel =
+      overlay.selectionPaddingWorld > 0 ? overlay.selectionPaddingWorld / selectionGapPx : 1;
+    const rotateHandle = overlay.selectionHandles.find((handle) => handle.kind === 'rotate');
+    if (rotateHandle) {
+      group.append(
+        createRotateConnector(
+          overlay.selectionOrientedBounds,
+          rotateHandle.position,
+          overlay.selectionPaddingWorld,
+        ),
+      );
+    }
+    for (const handle of overlay.selectionHandles) {
+      group.append(createSelectionHandle(handle, worldPerScreenPixel));
     }
     this.requireSvg().append(group);
   }
@@ -193,6 +220,7 @@ export class SvgRenderer implements RendererV1 {
     rectangle.setAttribute('fill', node.fill);
     rectangle.setAttribute('stroke', node.stroke);
     rectangle.setAttribute('stroke-width', String(node.strokeWidth));
+    setTransform(rectangle, node.transform);
     this.#nodeElements.set(node.id, rectangle);
     return rectangle;
   }
@@ -211,6 +239,7 @@ export class SvgRenderer implements RendererV1 {
     path.setAttribute('stroke-width', String(node.strokeWidth));
     path.setAttribute('stroke-linecap', 'round');
     path.setAttribute('stroke-linejoin', 'round');
+    setTransform(path, node.transform);
     this.#nodeElements.set(node.id, path);
     return path;
   }
@@ -223,6 +252,7 @@ export class SvgRenderer implements RendererV1 {
         : document.createElementNS(svgNamespace, 'text');
     text.dataset.sceneNodeId = node.id;
     text.dataset.sourceElementId = node.sourceElementId;
+    setTransform(text, node.transform);
     text.replaceChildren(
       ...node.runs.map((run) => {
         const span = document.createElementNS(svgNamespace, 'tspan');
@@ -268,4 +298,174 @@ function createSelectionRectangle(
   rectangle.setAttribute('fill', 'none');
   rectangle.setAttribute('vector-effect', 'non-scaling-stroke');
   return rectangle;
+}
+
+function createOrientedSelectionRectangle(
+  bounds: NonNullable<EditorOverlayV1['selectionOrientedBounds']>,
+  padding: number,
+): SVGRectElement {
+  const rectangle = document.createElementNS(svgNamespace, 'rect');
+  rectangle.setAttribute('x', String(-(bounds.width / 2 + padding)));
+  rectangle.setAttribute('y', String(-(bounds.height / 2 + padding)));
+  rectangle.setAttribute('width', String(bounds.width + padding * 2));
+  rectangle.setAttribute('height', String(bounds.height + padding * 2));
+  rectangle.setAttribute('fill', 'none');
+  rectangle.setAttribute('vector-effect', 'non-scaling-stroke');
+  rectangle.setAttribute(
+    'transform',
+    `translate(${bounds.center.x} ${bounds.center.y}) rotate(${radiansToDegrees(bounds.rotation)})`,
+  );
+  return rectangle;
+}
+
+function createSelectionHandle(
+  handle: EditorOverlayV1['selectionHandles'][number],
+  worldPerScreenPixel: number,
+): SVGElement {
+  if (handle.kind === 'rotate') {
+    const circle = document.createElementNS(svgNamespace, 'circle');
+    circle.setAttribute('cx', String(handle.position.x));
+    circle.setAttribute('cy', String(handle.position.y));
+    circle.setAttribute('r', String(rotateHandleRadiusPx * worldPerScreenPixel));
+    applyHandlePaint(circle, handle.id);
+    return circle;
+  }
+  const rectangle = document.createElementNS(svgNamespace, 'rect');
+  const size = resizeHandleSizePx * worldPerScreenPixel;
+  rectangle.setAttribute('x', String(handle.position.x - size / 2));
+  rectangle.setAttribute('y', String(handle.position.y - size / 2));
+  rectangle.setAttribute('width', String(size));
+  rectangle.setAttribute('height', String(size));
+  applyHandlePaint(rectangle, handle.id);
+  return rectangle;
+}
+
+function applyHandlePaint(element: SVGElement, handleId: string): void {
+  element.dataset.nodeinkSelectionHandle = handleId;
+  element.setAttribute('fill', 'var(--nodeink-selection-handle-fill, #ffffff)');
+  element.setAttribute('stroke', selectionColor);
+  element.setAttribute('stroke-width', '1.5');
+  element.setAttribute('vector-effect', 'non-scaling-stroke');
+}
+
+function createRotateConnector(
+  bounds: EditorOverlayV1['selectionOrientedBounds'],
+  rotatePosition: { x: number; y: number },
+  padding: number,
+): SVGLineElement {
+  const line = document.createElementNS(svgNamespace, 'line');
+  const start = bounds
+    ? rotatePoint(
+        { x: bounds.center.x, y: bounds.center.y - bounds.height / 2 - padding },
+        bounds.center,
+        bounds.rotation,
+      )
+    : rotatePosition;
+  line.dataset.nodeinkRotateConnector = 'true';
+  line.setAttribute('x1', String(start.x));
+  line.setAttribute('y1', String(start.y));
+  line.setAttribute('x2', String(rotatePosition.x));
+  line.setAttribute('y2', String(rotatePosition.y));
+  line.setAttribute('stroke', selectionColor);
+  line.setAttribute('stroke-width', '1.5');
+  line.setAttribute('vector-effect', 'non-scaling-stroke');
+  return line;
+}
+
+function createMarquee(marquee: NonNullable<EditorOverlayV1['marquee']>): SVGRectElement {
+  const rectangle = document.createElementNS(svgNamespace, 'rect');
+  rectangle.dataset.nodeinkSelectionMarquee = marquee.mode;
+  rectangle.setAttribute('x', String(marquee.bounds.x));
+  rectangle.setAttribute('y', String(marquee.bounds.y));
+  rectangle.setAttribute('width', String(marquee.bounds.width));
+  rectangle.setAttribute('height', String(marquee.bounds.height));
+  rectangle.setAttribute('fill', 'var(--nodeink-selection-marquee-fill, rgba(37, 99, 235, 0.12))');
+  rectangle.setAttribute('stroke', selectionColor);
+  rectangle.setAttribute('stroke-width', '1');
+  rectangle.setAttribute('stroke-dasharray', '4 3');
+  rectangle.setAttribute('vector-effect', 'non-scaling-stroke');
+  return rectangle;
+}
+
+function createAlignmentGuide(guide: EditorOverlayV1['guides'][number]): SVGLineElement {
+  const line = document.createElementNS(svgNamespace, 'line');
+  line.dataset.nodeinkAlignmentGuide = guide.axis;
+  if (guide.axis === 'x') {
+    line.setAttribute('x1', String(guide.position));
+    line.setAttribute('x2', String(guide.position));
+    line.setAttribute('y1', String(guide.start));
+    line.setAttribute('y2', String(guide.end));
+  } else {
+    line.setAttribute('x1', String(guide.start));
+    line.setAttribute('x2', String(guide.end));
+    line.setAttribute('y1', String(guide.position));
+    line.setAttribute('y2', String(guide.position));
+  }
+  line.setAttribute('stroke', 'var(--nodeink-guide-color, #2563eb)');
+  line.setAttribute('stroke-width', '1');
+  line.setAttribute('stroke-dasharray', '4 4');
+  line.setAttribute('vector-effect', 'non-scaling-stroke');
+  return line;
+}
+
+function setTransform(element: SVGElement, transform: SceneRectV1['transform']): void {
+  element.setAttribute(
+    'transform',
+    `matrix(${transform.a} ${transform.b} ${transform.c} ${transform.d} ${transform.e} ${transform.f})`,
+  );
+}
+
+function validateOverlay(overlay: EditorOverlayV1): void {
+  if (!Number.isFinite(overlay.selectionPaddingWorld) || overlay.selectionPaddingWorld < 0) {
+    throw new Error('Selection overlay padding must be a finite non-negative number');
+  }
+  const finite = (values: number[]) => values.every(Number.isFinite);
+  if (
+    overlay.selectionOrientedBounds &&
+    (!finite([
+      overlay.selectionOrientedBounds.center.x,
+      overlay.selectionOrientedBounds.center.y,
+      overlay.selectionOrientedBounds.width,
+      overlay.selectionOrientedBounds.height,
+      overlay.selectionOrientedBounds.rotation,
+    ]) ||
+      overlay.selectionOrientedBounds.width < 0 ||
+      overlay.selectionOrientedBounds.height < 0)
+  ) {
+    throw new Error('Selection overlay contains invalid oriented bounds');
+  }
+  if (
+    overlay.selectionHandles.some((handle) => !finite([handle.position.x, handle.position.y])) ||
+    overlay.guides.some((guide) => !finite([guide.position, guide.start, guide.end])) ||
+    (overlay.marquee &&
+      (!finite([
+        overlay.marquee.bounds.x,
+        overlay.marquee.bounds.y,
+        overlay.marquee.bounds.width,
+        overlay.marquee.bounds.height,
+      ]) ||
+        overlay.marquee.bounds.width < 0 ||
+        overlay.marquee.bounds.height < 0))
+  ) {
+    throw new Error('Selection overlay contains non-finite geometry');
+  }
+}
+
+function radiansToDegrees(radians: number): number {
+  return (radians * 180) / Math.PI;
+}
+
+function rotatePoint(
+  point: { x: number; y: number },
+  center: { x: number; y: number },
+  rotation: number,
+): { x: number; y: number } {
+  const cosine = Math.cos(rotation);
+  const sine = Math.sin(rotation);
+  const x = point.x - center.x;
+  const y = point.y - center.y;
+  return {
+    x: center.x + x * cosine - y * sine,
+    y: center.y + x * sine + y * cosine,
+  };
 }

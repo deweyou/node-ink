@@ -88,6 +88,7 @@ export const NodeInkEditor = defineComponent({
       const currentSnapshot = snapshot.value;
       const isReady = currentSnapshot.status === 'ready';
       const isEditable = isReady && currentSnapshot.documentAccess === 'writer';
+      const selectionCount = currentSnapshot.selectedElementIds.length;
       const cameraPresentation = getEditorCameraPresentation(currentSnapshot);
       const persistence = getEditorPersistencePresentation(currentSnapshot);
       const visibleError =
@@ -104,7 +105,7 @@ export const NodeInkEditor = defineComponent({
       return h('main', { class: 'nodeink-shell', 'data-nodeink-host': 'vue' }, [
         h('header', { class: 'nodeink-topbar' }, [
           h('div', [
-            h('span', { class: 'nodeink-kicker' }, 'NodeInk · Phase 1A'),
+            h('span', { class: 'nodeink-kicker' }, 'NodeInk · Phase 1B'),
             h('h1', 'Framework-neutral canvas'),
           ]),
           h('div', { class: 'nodeink-topbar-actions' }, [
@@ -177,7 +178,7 @@ export const NodeInkEditor = defineComponent({
             'button',
             {
               type: 'button',
-              disabled: !isEditable || !currentSnapshot.activeElementId,
+              disabled: !isEditable || selectionCount === 0,
               onClick: () => dispatch({ type: 'move_active', delta: { x: 32, y: 16 } }),
             },
             'Move',
@@ -187,7 +188,7 @@ export const NodeInkEditor = defineComponent({
             {
               type: 'button',
               'data-danger': 'true',
-              disabled: !isEditable || !currentSnapshot.activeElementId,
+              disabled: !isEditable || selectionCount === 0,
               onClick: () => dispatch({ type: 'delete_selection' }),
             },
             'Delete',
@@ -213,6 +214,7 @@ export const NodeInkEditor = defineComponent({
         ]),
         h('section', { class: 'nodeink-stage', 'aria-label': 'Infinite canvas proof' }, [
           h('div', { ref: canvas, class: 'nodeink-canvas' }),
+          renderSelectionActionControls(selectionCount, isEditable, dispatch),
           isEditable && currentSnapshot.selectionStyle
             ? renderSelectionStylePanel(currentSnapshot.selectionStyle, (patch) =>
                 dispatch({ type: 'update_selection_style', patch }),
@@ -259,7 +261,7 @@ export const NodeInkEditor = defineComponent({
             h('span', currentSnapshot.status),
             h('span', `document r${currentSnapshot.documentRevision}`),
             h('span', `${currentSnapshot.elementCount} elements`),
-            h('span', currentSnapshot.activeElementId ? '1 selected' : 'No selection'),
+            h('span', selectionCount === 0 ? 'No selection' : `${selectionCount} selected`),
             h('span', `${currentSnapshot.activeTool} tool`),
           ]),
           persistence.notice
@@ -289,6 +291,79 @@ export const NodeInkEditor = defineComponent({
     };
   },
 });
+
+function renderSelectionActionControls(
+  selectionCount: number,
+  isEditable: boolean,
+  dispatch: (action: EditorActionV1) => void,
+) {
+  const selectionDisabled = !isEditable || selectionCount === 0;
+  const multipleDisabled = !isEditable || selectionCount < 2;
+  const button = (label: string, action: EditorActionV1, disabled: boolean, title?: string) =>
+    h(
+      'button',
+      {
+        type: 'button',
+        title,
+        disabled,
+        onClick: () => dispatch(action),
+      },
+      label,
+    );
+
+  return h('nav', { class: 'nodeink-selection-actions', 'aria-label': 'Selection actions' }, [
+    h(
+      'div',
+      { class: 'nodeink-selection-action-group', role: 'group', 'aria-label': 'Clipboard' },
+      [
+        button('Copy', { type: 'copy' }, selectionDisabled),
+        button('Cut', { type: 'cut' }, selectionDisabled),
+        button('Paste', { type: 'paste' }, !isEditable),
+      ],
+    ),
+    h('div', { class: 'nodeink-selection-action-group', role: 'group', 'aria-label': 'Grouping' }, [
+      button('Group', { type: 'group' }, multipleDisabled),
+      button('Ungroup', { type: 'ungroup' }, selectionDisabled),
+    ]),
+    h(
+      'div',
+      { class: 'nodeink-selection-action-group', role: 'group', 'aria-label': 'Stacking order' },
+      [
+        button(
+          'Front',
+          { type: 'reorder', placement: 'front' },
+          selectionDisabled,
+          'Bring to front',
+        ),
+        button(
+          'Forward',
+          { type: 'reorder', placement: 'forward' },
+          selectionDisabled,
+          'Bring forward',
+        ),
+        button(
+          'Backward',
+          { type: 'reorder', placement: 'backward' },
+          selectionDisabled,
+          'Send backward',
+        ),
+        button('Back', { type: 'reorder', placement: 'back' }, selectionDisabled, 'Send to back'),
+      ],
+    ),
+    h(
+      'div',
+      { class: 'nodeink-selection-action-group', role: 'group', 'aria-label': 'Alignment' },
+      [
+        button('Left', { type: 'align', alignment: 'left' }, multipleDisabled),
+        button('Center', { type: 'align', alignment: 'center' }, multipleDisabled),
+        button('Right', { type: 'align', alignment: 'right' }, multipleDisabled),
+        button('Top', { type: 'align', alignment: 'top' }, multipleDisabled),
+        button('Middle', { type: 'align', alignment: 'middle' }, multipleDisabled),
+        button('Bottom', { type: 'align', alignment: 'bottom' }, multipleDisabled),
+      ],
+    ),
+  ]);
+}
 
 function renderSelectionStylePanel(
   style: SelectionStyleV1,

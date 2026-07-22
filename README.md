@@ -4,7 +4,7 @@ Ink freely. Connect ideas.
 
 自由落笔，连接想法。
 
-NodeInk 已完成 Phase 0 技术验证，当前进入 Phase 1A 最小产品闭环。第一条纵向切片已经贯通 Rust
+NodeInk 已完成 Phase 0 技术验证与 Phase 1A 最小产品闭环，当前进入 Phase 1B 基础编辑器完整性。第一条纵向切片已经贯通 Rust
 Document/Command/Undo/Scene、真实 WASM bridge、框架无关的 Web Controller 与
 SVG Renderer，并由 Vanilla TypeScript、React 和 Vue 三个独立宿主复用。三个入口现在还
 共享单文档 IndexedDB 启动、750ms 自动保存、verified snapshot 恢复与多标签页单写者规则。
@@ -21,6 +21,11 @@ Transaction。浏览器字体测量通过两阶段协议回填 Scene，不建立
 矩形、自由笔和文本的有限样式预设也已接入同一条 Rust Command/Transaction 路径：选择时显示
 共享的上下文 Style 面板，Clean/Sketch 是持久的文档级 Render Profile；相同预设是 no-op，
 实际变化可 Undo/Redo 并随本地文档恢复，三种宿主不各自保存样式副本。
+Phase 1B 的第一条编辑器基础切片进一步加入框选/多选、八向缩放与旋转、嵌套 Group、同层级
+顺序、内部剪贴板、六向对齐，以及带实际 Guide 的移动吸附。Document 已迁移到 Schema V3：
+每个元素持有 Affine transform，层级与持久变换仍只由 Rust Command/Transaction 修改；选择框、
+手柄、框选范围和吸附 Guide 都是非持久 Editor State。React、Vue、Vanilla 继续复用同一
+Controller、协议和 SVG Renderer。
 
 ## 本地运行
 
@@ -68,4 +73,5 @@ cargo install cargo-llvm-cov --version 0.8.7 --locked
 - [Phase 1A 自由笔工具切片](docs/planning/phase1a-freehand-tool.md)
 - [Phase 1A 产品文本切片](docs/planning/phase1a-product-text.md)
 - [Phase 1A 样式与 Render Profile](docs/planning/phase1a-style-profile.md)
+- [Phase 1B 编辑器基础](docs/planning/phase1b-editor-foundation.md)
 - [待确认决策](docs/decisions/open-questions.md)

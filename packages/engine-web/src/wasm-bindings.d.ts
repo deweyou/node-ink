@@ -7,7 +7,8 @@ declare module '*nodeink_engine.js' {
     applyCameraAction(actionJson: string): string;
     executeCommand(commandJson: string): string;
     setActiveTool(tool: string): string;
-    setSelection(elementId: string | undefined): string;
+    setSelection(elementIdsJson: string, primaryElementId: string | undefined): string;
+    copySelection(): string;
     beginTextEditAt(pointJson: string): string;
     provideTextMetrics(snapshotJson: string): string;
     executeDiagramOperation(batchJson: string): string;

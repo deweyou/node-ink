@@ -1,5 +1,7 @@
 import {
   protocolVersion,
+  type AlignmentGuideV1,
+  type AlignmentV1,
   type CameraActionV1,
   type CameraV1,
   type CommandEnvelopeV1,
@@ -8,12 +10,16 @@ import {
   type ElementStylePatchV1,
   type EngineUpdateV1,
   type NormalizedPointerEventV1,
+  type OrientedSelectionBoundsV1,
   type PointerUpdateV1,
   type RectElementV1,
   type RenderProfileV1,
   type RendererV1,
   type RenderApplyResultV1,
+  type ReorderPlacementV1,
   type SelectionBoundsV1,
+  type SelectionHandleV1,
+  type SelectionMarqueeV1,
   type SelectionStyleV1,
   type StrokeInputBatchV1,
   type StrokeTransportV1,
@@ -25,7 +31,12 @@ import {
 } from '@nodeink-internal/protocol';
 
 import { attachPointerInput } from './pointer-input';
-import { attachEditorShortcuts } from './keyboard-input';
+import { attachEditorShortcutsV2, type EditorShortcutActionV2 } from './keyboard-input';
+import {
+  defaultClipboardPort,
+  type ClipboardPayloadV1 as BrowserClipboardPayloadV1,
+  type ClipboardPortV1,
+} from './clipboard-port';
 import { attachCameraInput, type CameraInputBindingV1 } from './camera-input';
 import { FreehandInputAdapterV1 } from './freehand-input';
 import { CanvasTextMetricsAdapter } from './text-metrics';
@@ -45,6 +56,7 @@ import {
 const CAMERA_ZOOM_STEP = 1.5;
 const CAMERA_FIT_PADDING = 64;
 const SELECTION_GAP_PX = 6;
+const PASTE_CASCADE_PX = 24;
 
 export type EditorActionV1 =
   | {
@@ -54,6 +66,14 @@ export type EditorActionV1 =
     }
   | { type: 'move_active'; delta: { x: number; y: number } }
   | { type: 'delete_selection' }
+  | { type: 'select_all' }
+  | { type: 'copy' }
+  | { type: 'cut' }
+  | { type: 'paste' }
+  | { type: 'group' }
+  | { type: 'ungroup' }
+  | { type: 'reorder'; placement: ReorderPlacementV1 }
+  | { type: 'align'; alignment: AlignmentV1 }
   | { type: 'clear_selection' }
   | { type: 'escape' }
   | { type: 'set_tool'; tool: EditorToolV1 }
@@ -123,8 +143,14 @@ export interface EditorUiSnapshotV1 {
   sceneRevision: number;
   elementCount: number;
   activeElementId: string | null;
+  selectedElementIds: string[];
+  primaryElementId: string | null;
   activeTool: EditorToolV1;
   selectionBounds: SelectionBoundsV1 | null;
+  selectionOrientedBounds: OrientedSelectionBoundsV1 | null;
+  selectionHandles: SelectionHandleV1[];
+  selectionMarquee: SelectionMarqueeV1 | null;
+  alignmentGuides: AlignmentGuideV1[];
   selectionStyle: SelectionStyleV1 | null;
   renderProfile: RenderProfileV1;
   canUndo: boolean;
@@ -171,6 +197,7 @@ export interface EditorWebControllerOptions {
   persistence?: EditorPersistencePortV1;
   cameraPersistence?: EditorCameraPersistencePortV1;
   textMetrics?: EditorTextMetricsPortV1;
+  clipboard?: ClipboardPortV1;
   documentAccess?: EditorDocumentAccessV1;
   readonlyReason?: EditorReadonlyReasonV1 | null;
   recovery?: EditorRecoveryV1;
@@ -184,6 +211,7 @@ export class EditorWebController implements EditorWebControllerV1 {
   readonly #persistence: EditorPersistencePortV1 | null;
   readonly #cameraPersistence: EditorCameraPersistencePortV1 | null;
   readonly #textMetrics: EditorTextMetricsPortV1;
+  readonly #clipboard: ClipboardPortV1;
   readonly #onDispose: (() => void | Promise<void>) | null;
   readonly #listeners = new Set<() => void>();
   #snapshot: EditorUiSnapshotV1;
@@ -196,6 +224,8 @@ export class EditorWebController implements EditorWebControllerV1 {
   #detachResize: (() => void) | null = null;
   #cameraTarget: HTMLElement | null = null;
   #fitZoom = 1;
+  #rootElementIds: string[] = [];
+  #pasteCascade = 0;
   #pendingCamera: CameraV1 | null = null;
   #cameraSaveTimer: ReturnType<typeof setTimeout> | null = null;
   #cameraSavePromise: Promise<void> | null = null;
@@ -212,6 +242,7 @@ export class EditorWebController implements EditorWebControllerV1 {
     this.#persistence = options.persistence ?? null;
     this.#cameraPersistence = options.cameraPersistence ?? null;
     this.#textMetrics = options.textMetrics ?? new CanvasTextMetricsAdapter();
+    this.#clipboard = options.clipboard ?? defaultClipboardPort;
     this.#onDispose = options.onDispose ?? null;
     const documentAccess = options.documentAccess ?? 'writer';
     const persistenceSnapshot = this.#persistence?.getSnapshot() ?? null;
@@ -221,8 +252,14 @@ export class EditorWebController implements EditorWebControllerV1 {
       sceneRevision: 0,
       elementCount: 0,
       activeElementId: null,
+      selectedElementIds: [],
+      primaryElementId: null,
       activeTool: 'select',
       selectionBounds: null,
+      selectionOrientedBounds: null,
+      selectionHandles: [],
+      selectionMarquee: null,
+      alignmentGuides: [],
       selectionStyle: null,
       renderProfile: NODEINK_CLEAN_PROFILE,
       canUndo: false,
@@ -271,6 +308,7 @@ export class EditorWebController implements EditorWebControllerV1 {
               void this.dispatch({ type: 'pointer_events', events });
             },
             {
+              screenScale: () => this.#snapshot.camera.zoom,
               shouldHandleEvent: (event) =>
                 this.#cameraInput?.shouldHandleDocumentPointer(event) ?? true,
               onDoubleClick: (point) => {
@@ -284,27 +322,12 @@ export class EditorWebController implements EditorWebControllerV1 {
     this.#detachEditorShortcuts?.();
     this.#detachEditorShortcuts =
       this.#snapshot.documentAccess === 'writer'
-        ? attachEditorShortcuts(target.ownerDocument, (action) => {
-            const isAvailable =
-              action === 'undo'
-                ? this.#snapshot.canUndo
-                : action === 'redo'
-                  ? this.#snapshot.canRedo
-                  : action === 'delete_selection'
-                    ? this.#snapshot.activeElementId !== null
-                    : true;
+        ? attachEditorShortcutsV2(target.ownerDocument, (action) => {
+            const isAvailable = this.isShortcutAvailable(action);
             if (this.#snapshot.status !== 'ready' || !isAvailable) {
               return false;
             }
-            const editorAction: EditorActionV1 =
-              action === 'select_tool'
-                ? { type: 'set_tool', tool: 'select' }
-                : action === 'freehand_tool'
-                  ? { type: 'set_tool', tool: 'freehand' }
-                  : action === 'text_tool'
-                    ? { type: 'set_tool', tool: 'text' }
-                    : { type: action };
-            void this.dispatch(editorAction);
+            void this.dispatch(shortcutToEditorAction(action));
             return true;
           })
         : null;
@@ -633,7 +656,17 @@ export class EditorWebController implements EditorWebControllerV1 {
       return { update: await this.#engine.redo() };
     }
     if (action.type === 'clear_selection') {
-      return { update: await this.#engine.setSelection(null) };
+      return { update: await this.#engine.setSelection([], null) };
+    }
+    if (action.type === 'select_all') {
+      const primaryElementId = this.#rootElementIds.at(-1) ?? null;
+      return {
+        update: await this.#engine.setSelection([...this.#rootElementIds], primaryElementId),
+      };
+    }
+    if (action.type === 'copy') {
+      await this.copySelection();
+      return { update: await this.#engine.currentUpdate() };
     }
     if (action.type === 'set_tool') {
       this.#freehandInput.reset();
@@ -650,7 +683,7 @@ export class EditorWebController implements EditorWebControllerV1 {
         update:
           this.#snapshot.activeTool !== 'select'
             ? await this.#engine.setActiveTool('select')
-            : await this.#engine.setSelection(null),
+            : await this.#engine.setSelection([], null),
       };
     }
     if (!this.#documentId) {
@@ -659,7 +692,7 @@ export class EditorWebController implements EditorWebControllerV1 {
 
     if (action.type === 'begin_text_edit') {
       const target = await this.#engine.beginTextEditAt(action.point);
-      this.openTextEditor(target.element, action.point, target.update.selection.bounds);
+      this.openTextEditor(target.element, action.point, target.update.selection.visualBounds);
       return { update: target.update };
     }
     if (action.type === 'commit_text_edit') {
@@ -687,7 +720,7 @@ export class EditorWebController implements EditorWebControllerV1 {
         const down = action.events.find((event) => event.phase === 'down');
         if (down && !this.#textEditor) {
           const target = await this.#engine.beginTextEditAt(down.point);
-          this.openTextEditor(target.element, down.point, target.update.selection.bounds);
+          this.openTextEditor(target.element, down.point, target.update.selection.visualBounds);
           return { update: target.update };
         }
         return { update: await this.#engine.currentUpdate() };
@@ -717,54 +750,85 @@ export class EditorWebController implements EditorWebControllerV1 {
         },
       };
     }
-    if (
-      action.type !== 'create_rectangle' &&
-      action.type !== 'move_active' &&
-      action.type !== 'delete_selection' &&
-      action.type !== 'update_selection_style' &&
-      action.type !== 'set_render_profile'
-    ) {
-      throw new Error(`Unsupported editor action: ${action.type}`);
+    if (action.type === 'cut') {
+      await this.copySelection();
     }
+    const pastePayload = action.type === 'paste' ? await this.#clipboard.read() : null;
+    if (action.type === 'paste' && pastePayload === null) {
+      return { update: await this.#engine.currentUpdate() };
+    }
+    const nextPasteCascade = this.#pasteCascade + 1;
+    const command: CommandEnvelopeV1['command'] =
+      action.type === 'create_rectangle'
+        ? {
+            type: 'create_rectangle',
+            rectangle: createRectangle(action.elementId ?? this.#createId(), action.position),
+          }
+        : action.type === 'move_active'
+          ? { type: 'move_elements', elementIds: this.requireSelection(), delta: action.delta }
+          : action.type === 'update_selection_style'
+            ? {
+                type: 'update_element_style',
+                elementId: this.requireActiveElement(),
+                patch: action.patch,
+              }
+            : action.type === 'set_render_profile'
+              ? {
+                  type: 'set_render_profile',
+                  renderProfile:
+                    action.profile === 'clean' ? NODEINK_CLEAN_PROFILE : NODEINK_SKETCH_PROFILE,
+                }
+              : action.type === 'group'
+                ? {
+                    type: 'group_elements',
+                    groupId: this.#createId(),
+                    elementIds: this.requireSelection(2),
+                  }
+                : action.type === 'ungroup'
+                  ? { type: 'ungroup_elements', groupId: this.requireActiveElement() }
+                  : action.type === 'reorder'
+                    ? {
+                        type: 'reorder_elements',
+                        elementIds: this.requireSelection(),
+                        placement: action.placement,
+                      }
+                    : action.type === 'align'
+                      ? {
+                          type: 'align_elements',
+                          elementIds: this.requireSelection(2),
+                          alignment: action.alignment,
+                        }
+                      : action.type === 'paste'
+                        ? {
+                            type: 'paste_clipboard',
+                            payload: clipboardPayloadToString(pastePayload),
+                            idPrefix: `${commandId}-paste`,
+                            offset: {
+                              x: (PASTE_CASCADE_PX * nextPasteCascade) / this.#snapshot.camera.zoom,
+                              y: (PASTE_CASCADE_PX * nextPasteCascade) / this.#snapshot.camera.zoom,
+                            },
+                          }
+                        : action.type === 'delete_selection' || action.type === 'cut'
+                          ? { type: 'delete_elements', elementIds: this.requireSelection() }
+                          : (() => {
+                              throw new Error(`Unsupported editor action: ${action.type}`);
+                            })();
     const envelope: CommandEnvelopeV1 = {
       protocolVersion,
       commandId,
       documentId: this.#documentId,
       expectedRevision: this.#snapshot.documentRevision,
-      command:
-        action.type === 'create_rectangle'
-          ? {
-              type: 'create_rectangle',
-              rectangle: createRectangle(action.elementId ?? this.#createId(), action.position),
-            }
-          : action.type === 'move_active'
-            ? {
-                type: 'move_elements',
-                elementIds: [this.requireActiveElement()],
-                delta: action.delta,
-              }
-            : action.type === 'update_selection_style'
-              ? {
-                  type: 'update_element_style',
-                  elementId: this.requireActiveElement(),
-                  patch: action.patch,
-                }
-              : action.type === 'set_render_profile'
-                ? {
-                    type: 'set_render_profile',
-                    renderProfile:
-                      action.profile === 'clean' ? NODEINK_CLEAN_PROFILE : NODEINK_SKETCH_PROFILE,
-                  }
-                : {
-                    type: 'delete_elements',
-                    elementIds: [this.requireActiveElement()],
-                  },
+      command,
     };
     if (action.type === 'create_rectangle' && this.#snapshot.activeTool !== 'select') {
       this.#freehandInput.reset();
       await this.#engine.setActiveTool('select');
     }
-    return { update: await this.#engine.executeCommand(envelope) };
+    const update = await this.#engine.executeCommand(envelope);
+    if (action.type === 'paste') {
+      this.#pasteCascade = nextPasteCascade;
+    }
+    return { update };
   }
 
   private openTextEditor(
@@ -852,6 +916,7 @@ export class EditorWebController implements EditorWebControllerV1 {
             fontFingerprint: this.#textMetrics.fingerprint(),
             color: NODEINK_DEFAULT_TEXT_STYLE.color,
             textAlign: NODEINK_DEFAULT_TEXT_STYLE.textAlign,
+            transform: identityTransform(),
           },
         };
     return this.#engine.executeCommand({
@@ -884,15 +949,36 @@ export class EditorWebController implements EditorWebControllerV1 {
       throw new Error(`Renderer rejected scene: ${renderResult.reason}`);
     }
     this.#documentId = update.scene.documentId;
+    const serializedDocument = this.#engine.serializeDocument().document;
+    const semanticElementIds = Object.keys(serializedDocument.elements);
+    const sceneSourceElementIds = [
+      ...new Set(
+        update.scene.rootNodeIds.flatMap((nodeId) => {
+          const sourceElementId = update.scene.nodes[nodeId]?.sourceElementId;
+          return sourceElementId ? [sourceElementId] : [];
+        }),
+      ),
+    ];
+    this.#rootElementIds =
+      serializedDocument.rootOrder.length > 0
+        ? [...serializedDocument.rootOrder]
+        : sceneSourceElementIds;
     this.#snapshot = {
       ...this.#snapshot,
       status: 'ready',
       documentRevision: update.scene.documentRevision,
       sceneRevision: update.scene.sceneRevision,
-      elementCount: update.scene.rootNodeIds.length,
-      activeElementId: update.selection.selectedElementId,
+      elementCount:
+        semanticElementIds.length > 0 ? semanticElementIds.length : sceneSourceElementIds.length,
+      activeElementId: update.selection.primaryElementId,
+      selectedElementIds: [...update.selection.selectedElementIds],
+      primaryElementId: update.selection.primaryElementId,
       activeTool: update.activeTool,
-      selectionBounds: update.selection.bounds,
+      selectionBounds: update.selection.visualBounds,
+      selectionOrientedBounds: update.selection.orientedBounds,
+      selectionHandles: [...update.selection.handles],
+      selectionMarquee: update.selection.marquee,
+      alignmentGuides: [...update.selection.guides],
       selectionStyle: update.selection.style,
       renderProfile: update.scene.renderProfile,
       canUndo: update.history.canUndo,
@@ -925,10 +1011,63 @@ export class EditorWebController implements EditorWebControllerV1 {
     return this.#snapshot.activeElementId;
   }
 
+  private requireSelection(minimum = 1): string[] {
+    if (this.#snapshot.selectedElementIds.length < minimum) {
+      throw new Error(
+        minimum === 1
+          ? 'Select an element before editing it'
+          : `Select at least ${minimum} elements`,
+      );
+    }
+    return [...this.#snapshot.selectedElementIds];
+  }
+
+  private async copySelection(): Promise<void> {
+    this.requireSelection();
+    const payload = await this.#engine.copySelection();
+    await this.#clipboard.write(payload.data);
+    this.#pasteCascade = 0;
+  }
+
+  private isShortcutAvailable(action: EditorShortcutActionV2): boolean {
+    if (action === 'undo') {
+      return this.#snapshot.canUndo;
+    }
+    if (action === 'redo') {
+      return this.#snapshot.canRedo;
+    }
+    if (action === 'select_all') {
+      return this.#rootElementIds.length > 0;
+    }
+    if (action === 'paste') {
+      return true;
+    }
+    if (action === 'group_selection') {
+      return this.#snapshot.selectedElementIds.length >= 2;
+    }
+    if (
+      action === 'delete_selection' ||
+      action === 'copy_selection' ||
+      action === 'cut_selection' ||
+      action === 'ungroup_selection' ||
+      action === 'bring_forward' ||
+      action === 'send_backward' ||
+      action === 'bring_to_front' ||
+      action === 'send_to_back'
+    ) {
+      return this.#snapshot.selectedElementIds.length > 0;
+    }
+    return true;
+  }
+
   private applySelectionOverlay(): void {
     this.#renderer.setOverlay({
       selectionBounds: this.#snapshot.selectionBounds,
+      selectionOrientedBounds: this.#snapshot.selectionOrientedBounds,
+      selectionHandles: this.#snapshot.selectionHandles,
       selectionPaddingWorld: SELECTION_GAP_PX / this.#snapshot.camera.zoom,
+      marquee: this.#snapshot.selectionMarquee,
+      guides: this.#snapshot.alignmentGuides,
     });
   }
 
@@ -1042,6 +1181,8 @@ export { attachImeComposition } from './ime-input';
 export type { ImeCompositionBindingV1, ImeCompositionStateV1 } from './ime-input';
 export { CanvasTextMetricsAdapter } from './text-metrics';
 export type { CanvasTextMetricsAdapterOptions, TextMeasureBatchResultV1 } from './text-metrics';
+export { defaultClipboardPort, MemoryClipboardPortV1 } from './clipboard-port';
+export type { ClipboardPayloadV1, ClipboardPortV1 } from './clipboard-port';
 export type { ElementStylePatchV1, SelectionStyleV1 } from '@nodeink-internal/protocol';
 
 function createRectangle(
@@ -1058,11 +1199,52 @@ function createRectangle(
     fill: NODEINK_DEFAULT_RECT_STYLE.fill,
     stroke: NODEINK_DEFAULT_RECT_STYLE.stroke,
     strokeWidth: NODEINK_DEFAULT_RECT_STYLE.strokeWidth,
+    transform: identityTransform(),
   };
+}
+
+function identityTransform() {
+  return { a: 1, b: 0, c: 0, d: 1, e: 0, f: 0 } as const;
 }
 
 function defaultId(): string {
   return globalThis.crypto.randomUUID();
+}
+
+function shortcutToEditorAction(action: EditorShortcutActionV2): EditorActionV1 {
+  switch (action) {
+    case 'select_tool':
+      return { type: 'set_tool', tool: 'select' };
+    case 'freehand_tool':
+      return { type: 'set_tool', tool: 'freehand' };
+    case 'text_tool':
+      return { type: 'set_tool', tool: 'text' };
+    case 'copy_selection':
+      return { type: 'copy' };
+    case 'cut_selection':
+      return { type: 'cut' };
+    case 'group_selection':
+      return { type: 'group' };
+    case 'ungroup_selection':
+      return { type: 'ungroup' };
+    case 'bring_forward':
+      return { type: 'reorder', placement: 'forward' };
+    case 'send_backward':
+      return { type: 'reorder', placement: 'backward' };
+    case 'bring_to_front':
+      return { type: 'reorder', placement: 'front' };
+    case 'send_to_back':
+      return { type: 'reorder', placement: 'back' };
+    default:
+      return { type: action };
+  }
+}
+
+function clipboardPayloadToString(payload: BrowserClipboardPayloadV1 | null): string {
+  if (payload === null) {
+    throw new Error('Clipboard is empty');
+  }
+  return typeof payload === 'string' ? payload : new TextDecoder().decode(payload);
 }
 
 function isCameraAction(action: EditorActionV1): boolean {

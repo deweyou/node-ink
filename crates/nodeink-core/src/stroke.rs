@@ -218,6 +218,7 @@ fn stroke_element(id: ElementId, points: &[Vec2]) -> StrokeElementV1 {
     }
     StrokeElementV1 {
         id,
+        transform: crate::Affine2D::identity(),
         points: normalized_points,
         stroke: DEFAULT_INK_COLOR.to_string(),
         stroke_width: DEFAULT_STROKE_WIDTH,

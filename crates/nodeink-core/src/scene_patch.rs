@@ -67,6 +67,7 @@ pub fn benchmark_scene_snapshot(
             SceneNodeV1::Rect(SceneRectV1 {
                 id: node_id,
                 source_element_id: element_id,
+                transform: crate::Affine2D::identity(),
                 x: column as f64 * 14.0 + if moved { 32.0 } else { 0.0 },
                 y: row as f64 * 14.0 + if moved { 16.0 } else { 0.0 },
                 width: 10.0,
@@ -125,6 +126,7 @@ mod tests {
             SceneNodeV1::Rect(SceneRectV1 {
                 id: "rect-00000:shape".to_string(),
                 source_element_id: "rect-00000".to_string(),
+                transform: crate::Affine2D::identity(),
                 x: 32.0,
                 y: 16.0,
                 width: 10.0,
@@ -145,6 +147,7 @@ mod tests {
         let added = SceneNodeV1::Rect(SceneRectV1 {
             id: "rect-added:shape".to_string(),
             source_element_id: "rect-added".to_string(),
+            transform: crate::Affine2D::identity(),
             x: 4.0,
             y: 8.0,
             width: 12.0,

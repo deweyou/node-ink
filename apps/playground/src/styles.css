@@ -258,6 +258,43 @@ button[data-tool][aria-pressed='true'] {
   box-shadow: 0 12px 30px color-mix(in srgb, var(--ui-color-text) 10%, transparent);
 }
 
+.nodeink-selection-actions {
+  position: absolute;
+  z-index: 3;
+  top: 16px;
+  left: 50%;
+  display: flex;
+  max-width: calc(100% - 304px);
+  padding: 4px;
+  overflow-x: auto;
+  border: 1px solid var(--ui-color-border);
+  border-radius: calc(var(--ui-radius-auto) + 2px);
+  background: color-mix(in srgb, var(--ui-color-surface) 97%, transparent);
+  box-shadow: 0 8px 24px color-mix(in srgb, var(--ui-color-text) 8%, transparent);
+  transform: translateX(-50%);
+}
+
+.nodeink-selection-action-group {
+  display: flex;
+  flex: none;
+  gap: 2px;
+}
+
+.nodeink-selection-action-group + .nodeink-selection-action-group {
+  padding-left: 4px;
+  margin-left: 4px;
+  border-left: 1px solid var(--ui-color-border);
+}
+
+.nodeink-selection-actions button {
+  min-height: 30px;
+  padding-inline: 8px;
+  border-color: transparent;
+  background: transparent;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
 .nodeink-style-panel[hidden] {
   display: none;
 }

@@ -479,7 +479,7 @@ export async function runPlaygroundSketchBenchmark(): Promise<PlaygroundSketchBe
 
 export async function runPlaygroundTextBenchmark(): Promise<PlaygroundTextBenchmarkReport> {
   const engine = await createWasmEngine({
-    schemaVersion: 2,
+    schemaVersion: 3,
     documentId: 'text-fixture',
     revision: 0,
     renderProfile: { kind: 'clean', version: 1 },
@@ -591,7 +591,7 @@ export async function runPlaygroundTextBenchmark(): Promise<PlaygroundTextBenchm
 
 export async function runPlaygroundScenePatchBenchmark(): Promise<PlaygroundScenePatchBenchmarkReport> {
   const engine = await createWasmEngine({
-    schemaVersion: 2,
+    schemaVersion: 3,
     documentId: 'scene-patch-benchmark',
     revision: 0,
     renderProfile: { kind: 'clean', version: 1 },
@@ -792,7 +792,7 @@ export async function runPlaygroundPersistenceBenchmark(): Promise<PlaygroundPer
 
 export async function runPlaygroundMigrationBenchmark(): Promise<PlaygroundMigrationBenchmarkReport> {
   const engine = await createWasmEngine({
-    schemaVersion: 2,
+    schemaVersion: 3,
     documentId: 'migration-runner',
     revision: 0,
     renderProfile: { kind: 'clean', version: 1 },
@@ -1088,7 +1088,7 @@ export async function runPlaygroundOperationBenchmark(): Promise<PlaygroundOpera
 
 function operationDocument(documentId: string): NodeInkDocumentV1 {
   return {
-    schemaVersion: 2,
+    schemaVersion: 3,
     documentId,
     revision: 0,
     renderProfile: { kind: 'clean', version: 1 },
@@ -1119,6 +1119,7 @@ function operationBatch(mode: 'apply' | 'dry_run'): DiagramOperationBatchV1 {
           fill: { kind: 'solid', color: '#d1fae5' },
           stroke: '#047857',
           strokeWidth: 2,
+          transform: identityTransform(),
         },
       },
       {
@@ -1134,6 +1135,7 @@ function operationBatch(mode: 'apply' | 'dry_run'): DiagramOperationBatchV1 {
           fill: { kind: 'solid', color: '#d1fae5' },
           stroke: '#047857',
           strokeWidth: 2,
+          transform: identityTransform(),
         },
       },
       {
@@ -1175,6 +1177,7 @@ function atomicFailureBatch(): DiagramOperationBatchV1 {
           fill: { kind: 'solid', color: '#d1fae5' },
           stroke: '#047857',
           strokeWidth: 2,
+          transform: identityTransform(),
         },
       },
       {
@@ -1661,6 +1664,7 @@ function svgScaleScene(
         kind: 'text',
         id,
         sourceElementId,
+        transform: identityTransform(),
         runs: [
           {
             text: `N${index}`,
@@ -1684,6 +1688,7 @@ function svgScaleScene(
         kind: 'path',
         id,
         sourceElementId,
+        transform: identityTransform(),
         pathData: `M ${x} ${y + pathIndex} L ${x + 12} ${y + 12 + pathIndex}`,
         fill: 'none',
         stroke: pathIndex === 2 ? '#64748b' : '#0f172a',
@@ -1858,7 +1863,7 @@ function benchmarkEnvironment() {
 
 function sketchFixtureDocument(): NodeInkDocumentV1 {
   return {
-    schemaVersion: 2,
+    schemaVersion: 3,
     documentId: 'sketch-fixture',
     revision: 0,
     renderProfile: { kind: 'clean', version: 1 },
@@ -1874,6 +1879,7 @@ function sketchFixtureDocument(): NodeInkDocumentV1 {
         fill: { kind: 'solid', color: '#d1fae5' },
         stroke: '#047857',
         strokeWidth: 2,
+        transform: identityTransform(),
       },
       'stroke-1': {
         kind: 'stroke',
@@ -1885,9 +1891,14 @@ function sketchFixtureDocument(): NodeInkDocumentV1 {
         ],
         strokeWidth: 3,
         stroke: '#0f172a',
+        transform: identityTransform(),
       },
     },
   };
+}
+
+function identityTransform() {
+  return { a: 1, b: 0, c: 0, d: 1, e: 0, f: 0 };
 }
 
 function sketchProfile(seed: number, roughness: number): RenderProfileV1 {
