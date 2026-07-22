@@ -1,0 +1,140 @@
+{
+  "commit": "c65a244",
+  "build": "release-wasm-dev-host",
+  "engineAlgorithmVersion": "phase0-s5",
+  "browser": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36",
+  "os": "MacIntel",
+  "hardware": {
+    "logicalProcessors": 18,
+    "deviceMemoryGb": 32,
+    "display": "2056x1329@2x"
+  },
+  "sample": {
+    "iterationsPerScenario": 20,
+    "frameBudgetMs": 16.7
+  },
+  "scenarios": [
+    {
+      "elementCount": 100,
+      "movedCount": 1,
+      "snapshot": {
+        "payloadBytes": 19142,
+        "wasmSerializeAndTransferMs": { "p50": 0.1, "p95": 0.1, "p99": 0.1 },
+        "parseMs": { "p50": 0.1, "p95": 0.1, "p99": 0.1 },
+        "svgApplyMs": { "p50": 0.1, "p95": 0.2, "p99": 0.2 },
+        "pipelineMs": { "p50": 0.3, "p95": 0.4, "p99": 0.4 }
+      },
+      "patch": {
+        "payloadBytes": 325,
+        "wasmSerializeAndTransferMs": { "p50": 0.1, "p95": 0.2, "p99": 0.6 },
+        "parseMs": { "p50": 0, "p95": 0.1, "p99": 0.1 },
+        "svgApplyMs": { "p50": 0, "p95": 0.1, "p99": 0.1 },
+        "pipelineMs": { "p50": 0.1, "p95": 0.2, "p99": 0.7 }
+      },
+      "ratios": { "payload": 0.017, "pipelineP95": 0.5 }
+    },
+    {
+      "elementCount": 100,
+      "movedCount": 100,
+      "snapshot": {
+        "payloadBytes": 19246,
+        "wasmSerializeAndTransferMs": { "p50": 0.1, "p95": 0.1, "p99": 0.1 },
+        "parseMs": { "p50": 0.1, "p95": 0.1, "p99": 0.3 },
+        "svgApplyMs": { "p50": 0.1, "p95": 0.2, "p99": 0.2 },
+        "pipelineMs": { "p50": 0.2, "p95": 0.4, "p99": 0.5 }
+      },
+      "patch": {
+        "payloadBytes": 17379,
+        "wasmSerializeAndTransferMs": { "p50": 0.1, "p95": 0.2, "p99": 0.2 },
+        "parseMs": { "p50": 0, "p95": 0.1, "p99": 0.1 },
+        "svgApplyMs": { "p50": 0.1, "p95": 0.2, "p99": 0.2 },
+        "pipelineMs": { "p50": 0.2, "p95": 0.3, "p99": 0.4 }
+      },
+      "ratios": { "payload": 0.903, "pipelineP95": 0.75 }
+    },
+    {
+      "elementCount": 1000,
+      "movedCount": 1,
+      "snapshot": {
+        "payloadBytes": 191413,
+        "wasmSerializeAndTransferMs": { "p50": 0.5, "p95": 0.6, "p99": 0.6 },
+        "parseMs": { "p50": 0.8, "p95": 0.9, "p99": 1.2 },
+        "svgApplyMs": { "p50": 1.3, "p95": 2, "p99": 2.8 },
+        "pipelineMs": { "p50": 2.6, "p95": 3.3, "p99": 4.1 }
+      },
+      "patch": {
+        "payloadBytes": 325,
+        "wasmSerializeAndTransferMs": { "p50": 0.6, "p95": 0.7, "p99": 0.7 },
+        "parseMs": { "p50": 0, "p95": 0.1, "p99": 0.1 },
+        "svgApplyMs": { "p50": 0, "p95": 0.1, "p99": 0.1 },
+        "pipelineMs": { "p50": 0.6, "p95": 0.8, "p99": 0.8 }
+      },
+      "ratios": { "payload": 0.002, "pipelineP95": 0.242 }
+    },
+    {
+      "elementCount": 1000,
+      "movedCount": 100,
+      "snapshot": {
+        "payloadBytes": 191517,
+        "wasmSerializeAndTransferMs": { "p50": 0.5, "p95": 0.6, "p99": 0.6 },
+        "parseMs": { "p50": 0.8, "p95": 1, "p99": 2 },
+        "svgApplyMs": { "p50": 1.3, "p95": 1.5, "p99": 1.5 },
+        "pipelineMs": { "p50": 2.7, "p95": 2.9, "p99": 3.8 }
+      },
+      "patch": {
+        "payloadBytes": 17379,
+        "wasmSerializeAndTransferMs": { "p50": 0.6, "p95": 0.7, "p99": 0.8 },
+        "parseMs": { "p50": 0, "p95": 0.1, "p99": 0.1 },
+        "svgApplyMs": { "p50": 0.2, "p95": 0.3, "p99": 0.3 },
+        "pipelineMs": { "p50": 0.9, "p95": 1, "p99": 1 }
+      },
+      "ratios": { "payload": 0.091, "pipelineP95": 0.345 }
+    },
+    {
+      "elementCount": 10000,
+      "movedCount": 1,
+      "snapshot": {
+        "payloadBytes": 1923923,
+        "wasmSerializeAndTransferMs": { "p50": 5.3, "p95": 5.4, "p99": 5.5 },
+        "parseMs": { "p50": 8.3, "p95": 10.9, "p99": 11.4 },
+        "svgApplyMs": { "p50": 14.3, "p95": 17.5, "p99": 23.7 },
+        "pipelineMs": { "p50": 27.7, "p95": 31.4, "p99": 37.3 }
+      },
+      "patch": {
+        "payloadBytes": 325,
+        "wasmSerializeAndTransferMs": { "p50": 6.7, "p95": 6.9, "p99": 6.9 },
+        "parseMs": { "p50": 0, "p95": 0, "p99": 0.1 },
+        "svgApplyMs": { "p50": 1, "p95": 1.1, "p99": 1.2 },
+        "pipelineMs": { "p50": 7.7, "p95": 7.9, "p99": 8 }
+      },
+      "ratios": { "payload": 0, "pipelineP95": 0.252 }
+    },
+    {
+      "elementCount": 10000,
+      "movedCount": 100,
+      "snapshot": {
+        "payloadBytes": 1924027,
+        "wasmSerializeAndTransferMs": { "p50": 5.2, "p95": 5.3, "p99": 5.4 },
+        "parseMs": { "p50": 8.2, "p95": 8.5, "p99": 13.4 },
+        "svgApplyMs": { "p50": 14.1, "p95": 15.8, "p99": 29.7 },
+        "pipelineMs": { "p50": 27.6, "p95": 32.1, "p99": 43.1 }
+      },
+      "patch": {
+        "payloadBytes": 17379,
+        "wasmSerializeAndTransferMs": { "p50": 6.6, "p95": 6.8, "p99": 6.8 },
+        "parseMs": { "p50": 0, "p95": 0.1, "p99": 0.1 },
+        "svgApplyMs": { "p50": 1.8, "p95": 1.9, "p99": 2 },
+        "pipelineMs": { "p50": 8.5, "p95": 8.7, "p99": 8.7 }
+      },
+      "ratios": { "payload": 0.009, "pipelineP95": 0.271 }
+    }
+  ],
+  "recovery": { "stalePatchResult": "snapshot_required" },
+  "decision": {
+    "outOfOrderPatchAlwaysRequiresSnapshot": true,
+    "oneThousandMoveOneP95WithinFrameBudget": true,
+    "patchPayloadSmallerInEveryScenario": true,
+    "minimumGranularity": "stable-node-id maps",
+    "fullSnapshotFallback": "required on baseSceneRevision mismatch"
+  }
+}

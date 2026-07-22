@@ -87,7 +87,7 @@
 - 自由笔通过 `Float64Array` 传输坐标，实时路径使用 batch-2；Rust 仍持有 preview、顺序过滤与 PointerUp 单次 commit。
 - batch-2 对 120Hz 输入最多引入 8.33ms 聚合等待，release-WASM 基准的首点估算 P95 为 13.03ms。
 - batch-8/32 只保留为吞吐 benchmark，不用于实时绘制，因为其聚合等待超过一帧。
-- 当前返回全量 SceneSnapshot；约 128KB 的 S2 P95 payload 是 S5 引入 ScenePatch 的直接证据，不构成长期协议决定。
+- S2 的全量 SceneSnapshot 只作为过渡；S5 已验证按稳定 SceneNode ID 增量传输，revision 失配时强制完整 Snapshot 恢复。
 
 ### D-15 确定性 Sketch 所有权
 
@@ -102,6 +102,13 @@
 - 缓存键包含 fingerprint 与完整 run 参数；字体 epoch/status 变化会整体失效，不能复用旧 bounds。
 - IME composition buffer 只存在于浏览器 textarea overlay；compositionend 后才形成一次 Rust Command。
 - S4 的 Arial 仅为可复现实验输入，不代表 P-02 已确认；Phase 1A 字体包与许可仍需产品决定。
+
+### D-17 ScenePatch 粒度与恢复
+
+- Patch 使用稳定 SceneNode ID 映射表达 added/updated，removed 使用 ID 列表；未改变 root order 时不重复传输完整顺序。
+- Renderer 仅接受 `baseSceneRevision === currentSceneRevision` 的 Patch；任何错序或重复 Patch 都返回 `snapshot_required` 且不修改 DOM。
+- S5 中 1,000 节点移动 1 个的 payload 为 325B、全链路 P95 为 0.8ms；10,000 节点移动 1 个为 7.9ms，均在 16.7ms 内。
+- 当前 Spike 通过对前后 Scene 做 O(N) diff 构造 Patch；Phase 1A 应从 Transaction changed IDs 直接生成，避免把 fixture diff 当成正式更新路径。
 
 ## 22. 需要产品负责人决策的问题
 

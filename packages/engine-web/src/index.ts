@@ -1,7 +1,9 @@
 import {
   parseEngineUpdate,
   parsePointerUpdate,
+  parseScenePatch,
   parseSceneResolution,
+  parseSceneSnapshot,
   parseStrokeUpdate,
   parseTextFixtureResolution,
   type CommandEnvelopeV1,
@@ -12,6 +14,9 @@ import {
   type PointerUpdateV1,
   type RenderProfileV1,
   type SceneResolutionV1,
+  type SceneBenchmarkPayloadV1,
+  type ScenePatchV1,
+  type SceneSnapshotV1,
   type StrokeInputBatchV1,
   type StrokeTransportV1,
   type StrokeUpdateV1,
@@ -40,6 +45,8 @@ interface WasmEngineHandle {
     runsJson: string,
     metricsJson: string | undefined,
   ): string;
+  benchmarkSceneSnapshot(elementCount: number, movedCount: number, afterMove: boolean): string;
+  benchmarkScenePatch(elementCount: number, movedCount: number): string;
   undo(): string;
   redo(): string;
   free(): void;
@@ -144,6 +151,27 @@ class WasmEnginePort implements EnginePortV1 {
     }
   }
 
+  async benchmarkSceneSnapshot(
+    elementCount: number,
+    movedCount: number,
+    afterMove: boolean,
+  ): Promise<SceneBenchmarkPayloadV1<SceneSnapshotV1>> {
+    return this.benchmarkPayload(
+      () => this.requireHandle().benchmarkSceneSnapshot(elementCount, movedCount, afterMove),
+      parseSceneSnapshot,
+    );
+  }
+
+  async benchmarkScenePatch(
+    elementCount: number,
+    movedCount: number,
+  ): Promise<SceneBenchmarkPayloadV1<ScenePatchV1>> {
+    return this.benchmarkPayload(
+      () => this.requireHandle().benchmarkScenePatch(elementCount, movedCount),
+      parseScenePatch,
+    );
+  }
+
   async undo(): Promise<EngineUpdateV1> {
     try {
       return parseEngineUpdate(this.requireHandle().undo());
@@ -170,6 +198,28 @@ class WasmEnginePort implements EnginePortV1 {
       throw new Error('NodeInk engine has been disposed');
     }
     return this.#handle;
+  }
+
+  private benchmarkPayload<T>(
+    serialize: () => string,
+    parse: (value: string) => T,
+  ): SceneBenchmarkPayloadV1<T> {
+    try {
+      const transferStartedAt = performance.now();
+      const serialized = serialize();
+      const wasmSerializeAndTransferMs = performance.now() - transferStartedAt;
+      const parseStartedAt = performance.now();
+      const value = parse(serialized);
+      const parseMs = performance.now() - parseStartedAt;
+      return {
+        value,
+        payloadBytes: new TextEncoder().encode(serialized).byteLength,
+        wasmSerializeAndTransferMs,
+        parseMs,
+      };
+    } catch (error) {
+      throw normalizeEngineError(error);
+    }
   }
 }
 

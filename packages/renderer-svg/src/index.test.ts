@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import type { SceneSnapshotV1 } from '@nodeink-internal/protocol';
+import type { ScenePatchV1, SceneSnapshotV1 } from '@nodeink-internal/protocol';
 
 import { SvgRenderer } from './index';
 
@@ -77,6 +77,86 @@ describe('SvgRenderer', () => {
 
     expect(() => renderer.applySnapshot(scene(1, 24))).toThrow('must be mounted');
   });
+
+  it('applies an in-order move patch while reusing the SVG node', () => {
+    const target = document.createElement('div');
+    const renderer = new SvgRenderer();
+    renderer.mount(target);
+    renderer.applySnapshot(scene(1, 24));
+    const firstRectangle = target.querySelector('rect');
+
+    const result = renderer.applyPatch(movePatch(1, 2, 88));
+
+    expect(result).toMatchObject({ ok: true, sceneRevision: 2, changedNodeCount: 1 });
+    expect(target.querySelector('rect')).toBe(firstRectangle);
+    expect(firstRectangle?.getAttribute('x')).toBe('88');
+    expect(target.querySelector('svg')?.dataset.sceneRevision).toBe('2');
+  });
+
+  it('rejects an out-of-order patch without mutating the DOM', () => {
+    const target = document.createElement('div');
+    const renderer = new SvgRenderer();
+    renderer.mount(target);
+    renderer.applySnapshot(scene(3, 24));
+
+    expect(renderer.applyPatch(movePatch(1, 2, 88))).toEqual({
+      ok: false,
+      reason: 'snapshot_required',
+    });
+    expect(target.querySelector('rect')?.getAttribute('x')).toBe('24');
+    expect(target.querySelector('svg')?.dataset.sceneRevision).toBe('3');
+  });
+
+  it('applies additions, removals, and explicit root order changes', () => {
+    const target = document.createElement('div');
+    const renderer = new SvgRenderer();
+    renderer.mount(target);
+    renderer.applySnapshot(scene(1, 24));
+    const added = {
+      ...scene(2, 40).nodes['rect-1:shape']!,
+      id: 'rect-2:shape',
+      sourceElementId: 'rect-2',
+    };
+
+    const result = renderer.applyPatch({
+      protocolVersion: 1,
+      documentRevision: 2,
+      baseSceneRevision: 1,
+      sceneRevision: 2,
+      addedNodes: { 'rect-2:shape': added },
+      updatedNodes: {},
+      removedNodeIds: ['rect-1:shape'],
+      rootNodeIds: ['rect-2:shape'],
+    });
+
+    expect(result).toMatchObject({ ok: true, changedNodeCount: 2 });
+    expect(target.querySelector('[data-scene-node-id="rect-1:shape"]')).toBeNull();
+    expect(target.querySelector('[data-scene-node-id="rect-2:shape"]')).not.toBeNull();
+  });
+
+  it('rejects a patch whose root order references a missing node', () => {
+    const target = document.createElement('div');
+    const renderer = new SvgRenderer();
+    renderer.mount(target);
+    renderer.applySnapshot(scene(1, 24));
+
+    expect(
+      renderer.applyPatch({
+        protocolVersion: 1,
+        documentRevision: 2,
+        baseSceneRevision: 1,
+        sceneRevision: 2,
+        addedNodes: {},
+        updatedNodes: {},
+        removedNodeIds: [],
+        rootNodeIds: ['missing'],
+      }),
+    ).toEqual({ ok: false, reason: 'unsupported_scene' });
+  });
+
+  it('requires a mounted SVG before applying a patch', () => {
+    expect(() => new SvgRenderer().applyPatch(movePatch(1, 2, 88))).toThrow('must be mounted');
+  });
 });
 
 function scene(sceneRevision: number, x: number): SceneSnapshotV1 {
@@ -120,5 +200,18 @@ function strokeScene(sceneRevision: number, pathData: string): SceneSnapshotV1 {
         strokeWidth: 3,
       },
     },
+  };
+}
+
+function movePatch(baseSceneRevision: number, sceneRevision: number, x: number): ScenePatchV1 {
+  return {
+    protocolVersion: 1,
+    documentRevision: sceneRevision,
+    baseSceneRevision,
+    sceneRevision,
+    addedNodes: {},
+    updatedNodes: { 'rect-1:shape': scene(sceneRevision, x).nodes['rect-1:shape']! },
+    removedNodeIds: [],
+    rootNodeIds: null,
   };
 }

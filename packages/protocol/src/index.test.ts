@@ -4,7 +4,9 @@ import {
   createBlankDocument,
   parseEngineUpdate,
   parsePointerUpdate,
+  parseScenePatch,
   parseSceneResolution,
+  parseSceneSnapshot,
   parseStrokeUpdate,
   parseTextFixtureResolution,
 } from './index';
@@ -53,6 +55,33 @@ describe('protocol V1', () => {
     };
 
     expect(parseEngineUpdate(JSON.stringify(update))).toEqual(update);
+  });
+
+  it('parses a standalone scene snapshot', () => {
+    const scene = updateFixture().scene;
+
+    expect(parseSceneSnapshot(JSON.stringify(scene))).toEqual(scene);
+  });
+
+  it('parses a versioned incremental scene patch', () => {
+    const patch = patchFixture();
+
+    expect(parseScenePatch(JSON.stringify(patch))).toEqual(patch);
+  });
+
+  it.each([
+    null,
+    {},
+    { protocolVersion: 2 },
+    patchFixture({ documentRevision: '2' }),
+    patchFixture({ baseSceneRevision: '1' }),
+    patchFixture({ sceneRevision: '2' }),
+    patchFixture({ addedNodes: [] }),
+    patchFixture({ updatedNodes: [] }),
+    patchFixture({ removedNodeIds: {} }),
+    patchFixture({ rootNodeIds: {} }),
+  ])('rejects invalid scene patch payloads', (value) => {
+    expect(() => parseScenePatch(JSON.stringify(value))).toThrow('protocol V1');
   });
 
   it.each([null, {}, { scene: null, history: {} }, { scene: {}, history: null }])(
@@ -194,5 +223,19 @@ function updateFixture(
       ...sceneOverride,
     },
     history: { canUndo: false, canRedo: false, ...historyOverride },
+  };
+}
+
+function patchFixture(override: Record<string, unknown> = {}) {
+  return {
+    protocolVersion: 1,
+    documentRevision: 2,
+    baseSceneRevision: 1,
+    sceneRevision: 2,
+    addedNodes: {},
+    updatedNodes: {},
+    removedNodeIds: [],
+    rootNodeIds: null,
+    ...override,
   };
 }

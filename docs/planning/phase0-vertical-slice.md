@@ -12,7 +12,7 @@ flowchart LR
 
 > 日期：2026-07-21
 > 状态：已实现并验证
-> 覆盖 Spike：S0、S1、S2、S3、S4、S10 的最小事务边界、S11、S12
+> 覆盖 Spike：S0、S1、S2、S3、S4、S5、S10 的最小事务边界、S11、S12
 
 ## 结论
 
@@ -48,9 +48,10 @@ Rust nodeink-core
 - 自由笔 Stroke：Rust 累积点并解析 SVG path，支持 JSON point 与 Float64Array batch，PointerUp 只提交一个 Undo entry。
 - 确定性 Sketch：Rust 使用显式 profile、seed 与算法版本生成矩形轮廓、hachure fill 和自由笔 path。
 - 文本与 IME：Rust 发出缺失 metrics request；TypeScript 测量固定 fixture 字体并按 fingerprint 缓存；composition buffer 不进入 Command。
+- ScenePatch：Rust 生成带 base revision 的稳定节点增量，Renderer 原地更新 DOM，revision 失配时要求完整 Snapshot。
 
-这不是日常可用的编辑器，也不包含持久化、Camera、选择框、文本/IME、自由笔、
-Mermaid 导入或公共 SDK。
+这不是日常可用的编辑器，也不包含持久化、Camera、选择框、产品级文本编辑、
+Mermaid 导入或公共 SDK；自由笔与 IME 仅覆盖 Spike fixture。
 
 ## 验证证据
 
@@ -69,6 +70,7 @@ Mermaid 导入或公共 SDK。
 | S2 release WASM browser benchmark | JSON point 与 TypedArray batch-2/8/32 均 0 ignored、1 commit、0 long task；batch-2 首点估算 P95 13.03ms |
 | S3 Native/WASM canonical hash | 4 组 hash 逐项一致；同输入 WASM 连续解析 1,000 次只有 1 个 hash |
 | S4 text/IME browser benchmark | 3 个 run 首次测量、缓存后 3/3 命中；1,000 次 hash 稳定；font/IME 失效与提交边界正确 |
+| S5 ScenePatch browser benchmark | 100/1,000/10,000 节点 × move 1/100；1,000 move-1 Patch P95 0.8ms；错序 Patch 返回 `snapshot_required` |
 | `git diff --check` | 通过 |
 
 真实浏览器中分别验证了 React 和 Vanilla 两个入口：
@@ -130,6 +132,18 @@ Canvas metrics adapter 通过 fingerprint 交换数据，不让 Rust 读取 DOM 
 - 中文 composition 期间不提交，也拒绝外部 snapshot 覆盖 buffer；compositionend 只提交一次。
 - S4 证明两阶段协议可行，但 Arial 只是本机 Spike fixture，不是产品字体决定。P-02 仍需产品确认是否随应用捆绑固定画布字体。
 
+## S5 ScenePatch 决策
+
+真实浏览器证据见 [`phase0-s5-scene-patch.json`](../benchmarks/phase0-s5-scene-patch.json)，测试源代码
+锚定提交 `c65a244`。每组运行 20 次，分别记录 release WASM 的 Scene 构造/序列化/传输、
+JSON parse、SVG apply 和端到端 P50/P95/P99。
+
+- 最小粒度采用稳定 SceneNode ID map；移动 1 个节点时 payload 固定为 325B，移动 100 个时约 17KB。
+- 1,000 节点移动 1 个的全量 Snapshot/Patch P95 分别为 3.3/0.8ms，Patch payload 约为全量的 0.2%。
+- 10,000 节点全量 Snapshot P95 为 31.4ms，已超过帧预算；单节点 Patch 为 7.9ms，仍在预算内。
+- 重复或错序 Patch 100% 返回 `snapshot_required` 且保持 DOM/revision 不变；Host 必须请求完整 Snapshot，不能猜测合并。
+- Spike 的 Patch 构造仍通过 O(N) Scene diff；Phase 1A 从 Transaction changed IDs 直接构造，Renderer 不感知 Command 来源。
+
 ## 工具链说明
 
 - Node：`24.15.0`
@@ -147,11 +161,11 @@ macOS 在仓库内 Cargo `target/` 上触发过扩展属性相关的 `Operation 
 
 按风险顺序继续 Phase 0，而不是直接铺开完整 UI：
 
-1. S5/S6 ScenePatch、SVG 更新与裁剪预算。
+1. S6 SVG 节点类型、更新与裁剪预算。
 2. S7/S8 持久化、原子恢复与 migration fixture。
 3. S9 多标签页写入权与只读降级。
 4. 补齐 S10/S11/S12 的完整退出证据。
 5. Phase 1A 文本实现前确认 P-02 固定画布字体产品决策。
 
 ---
-*Last updated: 2026-07-22 | Reason: record S4 two-phase text measurement and IME evidence*
+*Last updated: 2026-07-22 | Reason: record S5 ScenePatch scale and recovery evidence*

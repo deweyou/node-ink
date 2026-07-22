@@ -4,12 +4,14 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 mod pointer;
+mod scene_patch;
 mod sketch;
 mod stroke;
 mod text;
 
 pub use pointer::{NormalizedPointerEventV1, PointerPhaseV1};
 use pointer::{PointerMachine, PointerPreview, PointerTransition};
+pub use scene_patch::{ScenePatchV1, benchmark_scene_patch, benchmark_scene_snapshot, diff_scene};
 pub use sketch::{ENGINE_ALGORITHM_VERSION, RenderProfileV1, SketchFillStyleV1};
 use sketch::{sketch_rectangle, sketch_stroke};
 pub use stroke::{StrokeInputBatchV1, StrokePhaseV1};
@@ -256,6 +258,8 @@ pub enum EngineErrorV1 {
     InvalidTextFixture,
     #[error("text metrics fingerprint does not match the request")]
     TextFingerprintMismatch,
+    #[error("invalid benchmark fixture")]
+    InvalidBenchmarkFixture,
     #[error("undo history is empty")]
     UndoUnavailable,
     #[error("redo history is empty")]

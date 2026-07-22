@@ -8,6 +8,8 @@ import type {
   PointerUpdateV1,
   RendererV1,
   RenderProfileV1,
+  SceneBenchmarkPayloadV1,
+  ScenePatchV1,
   SceneResolutionV1,
   SceneSnapshotV1,
   StrokeInputBatchV1,
@@ -272,6 +274,33 @@ class StubEngine implements EnginePortV1 {
     };
   }
 
+  async benchmarkSceneSnapshot(): Promise<SceneBenchmarkPayloadV1<SceneSnapshotV1>> {
+    return {
+      value: this.update().scene,
+      payloadBytes: 0,
+      wasmSerializeAndTransferMs: 0,
+      parseMs: 0,
+    };
+  }
+
+  async benchmarkScenePatch(): Promise<SceneBenchmarkPayloadV1<ScenePatchV1>> {
+    return {
+      value: {
+        protocolVersion: 1,
+        documentRevision: this.#revision,
+        baseSceneRevision: this.#revision,
+        sceneRevision: this.#revision + 1,
+        addedNodes: {},
+        updatedNodes: {},
+        removedNodeIds: [],
+        rootNodeIds: null,
+      },
+      payloadBytes: 0,
+      wasmSerializeAndTransferMs: 0,
+      parseMs: 0,
+    };
+  }
+
   async undo(): Promise<EngineUpdateV1> {
     this.undoCalls += 1;
     return this.update();
@@ -317,6 +346,10 @@ class StubRenderer implements RendererV1 {
     }
     this.snapshots.push(snapshot);
     return { ok: true as const, sceneRevision: snapshot.sceneRevision };
+  }
+
+  applyPatch(patch: ScenePatchV1) {
+    return { ok: true as const, sceneRevision: patch.sceneRevision };
   }
 
   unmount(): void {

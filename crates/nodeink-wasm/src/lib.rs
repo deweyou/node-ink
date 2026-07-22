@@ -1,6 +1,7 @@
 use nodeink_core::{
     CommandEnvelopeV1, Engine, EngineErrorV1, NodeInkDocumentV1, NormalizedPointerEventV1,
     RenderProfileV1, StrokeInputBatchV1, StrokePhaseV1, TextMetricsSnapshotV1, TextRunV1, Vec2,
+    benchmark_scene_patch, benchmark_scene_snapshot,
 };
 use wasm_bindgen::prelude::*;
 
@@ -143,6 +144,30 @@ impl EngineHandle {
             .resolve_text_fixture(request_id, font_fingerprint, runs, metrics)
             .map_err(engine_error)?;
         serde_json::to_string(&resolution).map_err(|error| js_error("serialization_failed", error))
+    }
+
+    #[wasm_bindgen(js_name = benchmarkSceneSnapshot)]
+    pub fn benchmark_scene_snapshot(
+        &self,
+        element_count: u32,
+        moved_count: u32,
+        after_move: bool,
+    ) -> Result<String, JsValue> {
+        let snapshot =
+            benchmark_scene_snapshot(element_count as usize, moved_count as usize, after_move)
+                .map_err(engine_error)?;
+        serde_json::to_string(&snapshot).map_err(|error| js_error("serialization_failed", error))
+    }
+
+    #[wasm_bindgen(js_name = benchmarkScenePatch)]
+    pub fn benchmark_scene_patch(
+        &self,
+        element_count: u32,
+        moved_count: u32,
+    ) -> Result<String, JsValue> {
+        let patch = benchmark_scene_patch(element_count as usize, moved_count as usize)
+            .map_err(engine_error)?;
+        serde_json::to_string(&patch).map_err(|error| js_error("serialization_failed", error))
     }
 
     #[wasm_bindgen(js_name = serializeDocument)]

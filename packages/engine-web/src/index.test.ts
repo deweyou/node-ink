@@ -12,6 +12,8 @@ const wasm = vi.hoisted(() => {
     handleStrokePoints: vi.fn(),
     resolveSceneProfile: vi.fn(),
     resolveTextFixture: vi.fn(),
+    benchmarkSceneSnapshot: vi.fn(),
+    benchmarkScenePatch: vi.fn(),
     undo: vi.fn(),
     redo: vi.fn(),
     free: vi.fn(),
@@ -41,6 +43,8 @@ describe('createWasmEngine', () => {
     wasm.handle.handleStrokePoints.mockReturnValue(strokeUpdate());
     wasm.handle.resolveSceneProfile.mockReturnValue(sceneResolution());
     wasm.handle.resolveTextFixture.mockReturnValue(textResolution());
+    wasm.handle.benchmarkSceneSnapshot.mockReturnValue(sceneSnapshot());
+    wasm.handle.benchmarkScenePatch.mockReturnValue(scenePatch());
     wasm.handle.undo.mockReturnValue(update);
     wasm.handle.redo.mockReturnValue(update);
   });
@@ -111,6 +115,16 @@ describe('createWasmEngine', () => {
     await expect(
       engine.handleStrokeBatch(strokeBatch, 'stroke-typed', 'typed_array'),
     ).resolves.toMatchObject({ processedPointCount: 2, didCommit: false });
+    await expect(engine.benchmarkSceneSnapshot(1_000, 1, true)).resolves.toMatchObject({
+      value: { sceneRevision: 2 },
+      payloadBytes: expect.any(Number),
+      wasmSerializeAndTransferMs: expect.any(Number),
+      parseMs: expect.any(Number),
+    });
+    await expect(engine.benchmarkScenePatch(1_000, 1)).resolves.toMatchObject({
+      value: { baseSceneRevision: 1, sceneRevision: 2 },
+      payloadBytes: expect.any(Number),
+    });
     await expect(engine.undo()).resolves.toBeDefined();
     await expect(engine.redo()).resolves.toBeDefined();
 
@@ -142,6 +156,8 @@ describe('createWasmEngine', () => {
       JSON.stringify(textRuns),
       undefined,
     );
+    expect(wasm.handle.benchmarkSceneSnapshot).toHaveBeenCalledWith(1_000, 1, true);
+    expect(wasm.handle.benchmarkScenePatch).toHaveBeenCalledWith(1_000, 1);
   });
 
   it('normalizes structured and plain engine failures', async () => {
@@ -198,6 +214,11 @@ describe('createWasmEngine', () => {
     await expect(engine.resolveTextFixture('measure', 'font-v1', [], null)).rejects.toThrow(
       'metrics rejected',
     );
+
+    wasm.handle.benchmarkScenePatch.mockImplementation(() => {
+      throw new Error(JSON.stringify({ message: 'fixture rejected' }));
+    });
+    await expect(engine.benchmarkScenePatch(0, 0)).rejects.toThrow('fixture rejected');
   });
 
   it('frees the handle once and rejects use after disposal', async () => {
@@ -268,5 +289,26 @@ function textResolution(): string {
     request: { requestId: 'measure-1', fontFingerprint: 'font-v1', runs: [] },
     scene: null,
     canonicalHash: null,
+  });
+}
+
+function sceneSnapshot(): string {
+  return JSON.stringify({
+    ...JSON.parse(validUpdate()).scene,
+    documentRevision: 2,
+    sceneRevision: 2,
+  });
+}
+
+function scenePatch(): string {
+  return JSON.stringify({
+    protocolVersion: 1,
+    documentRevision: 2,
+    baseSceneRevision: 1,
+    sceneRevision: 2,
+    addedNodes: {},
+    updatedNodes: {},
+    removedNodeIds: [],
+    rootNodeIds: null,
   });
 }

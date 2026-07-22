@@ -11,9 +11,13 @@ import { createWasmEngine } from '@nodeink-internal/engine-web';
 import type {
   NodeInkDocumentV1,
   RenderProfileV1,
+  SceneBenchmarkPayloadV1,
+  ScenePatchV1,
   SceneResolutionV1,
+  SceneSnapshotV1,
   TextRunV1,
 } from '@nodeink-internal/protocol';
+import { SvgRenderer } from '@nodeink-internal/renderer-svg';
 
 export interface PlaygroundPointerBenchmarkReport {
   build: 'release-wasm-dev-host';
@@ -89,6 +93,44 @@ export interface PlaygroundTextBenchmarkReport {
   };
 }
 
+export interface PlaygroundScenePatchBenchmarkReport {
+  build: 'release-wasm-dev-host';
+  engineAlgorithmVersion: 'phase0-s5';
+  browser: string;
+  os: string;
+  hardware: PlaygroundBenchmarkHardware;
+  sample: { iterationsPerScenario: 20; frameBudgetMs: 16.7 };
+  scenarios: ScenePatchScenarioReport[];
+  recovery: { stalePatchResult: 'snapshot_required' };
+  decision: {
+    outOfOrderPatchAlwaysRequiresSnapshot: boolean;
+    oneThousandMoveOneP95WithinFrameBudget: boolean;
+    patchPayloadSmallerInEveryScenario: boolean;
+  };
+}
+
+interface ScenePatchScenarioReport {
+  elementCount: 100 | 1_000 | 10_000;
+  movedCount: 1 | 100;
+  snapshot: ScenePipelineMetrics;
+  patch: ScenePipelineMetrics;
+  ratios: { payload: number; pipelineP95: number };
+}
+
+interface ScenePipelineMetrics {
+  payloadBytes: number;
+  wasmSerializeAndTransferMs: Percentiles;
+  parseMs: Percentiles;
+  svgApplyMs: Percentiles;
+  pipelineMs: Percentiles;
+}
+
+interface Percentiles {
+  p50: number;
+  p95: number;
+  p99: number;
+}
+
 interface PlaygroundBenchmarkHardware {
   logicalProcessors: number;
   deviceMemoryGb: number | null;
@@ -101,6 +143,7 @@ declare global {
     nodeInkRunStrokeBenchmark?: () => Promise<PlaygroundStrokeBenchmarkReport>;
     nodeInkRunSketchBenchmark?: () => Promise<PlaygroundSketchBenchmarkReport>;
     nodeInkRunTextBenchmark?: () => Promise<PlaygroundTextBenchmarkReport>;
+    nodeInkRunScenePatchBenchmark?: () => Promise<PlaygroundScenePatchBenchmarkReport>;
   }
 }
 
@@ -109,6 +152,7 @@ export function exposePointerBenchmark(controller: EditorWebControllerV1): void 
   window.nodeInkRunStrokeBenchmark = () => runPlaygroundStrokeBenchmark(controller);
   window.nodeInkRunSketchBenchmark = () => runPlaygroundSketchBenchmark();
   window.nodeInkRunTextBenchmark = () => runPlaygroundTextBenchmark();
+  window.nodeInkRunScenePatchBenchmark = () => runPlaygroundScenePatchBenchmark();
 }
 
 export async function runPlaygroundPointerBenchmark(
@@ -311,6 +355,156 @@ export async function runPlaygroundTextBenchmark(): Promise<PlaygroundTextBenchm
   } finally {
     engine.dispose();
   }
+}
+
+export async function runPlaygroundScenePatchBenchmark(): Promise<PlaygroundScenePatchBenchmarkReport> {
+  const engine = await createWasmEngine({
+    schemaVersion: 1,
+    documentId: 'scene-patch-benchmark',
+    revision: 0,
+    rootOrder: [],
+    elements: {},
+  });
+  const fixturePairs = [
+    [100, 1],
+    [100, 100],
+    [1_000, 1],
+    [1_000, 100],
+    [10_000, 1],
+    [10_000, 100],
+  ] as const;
+  try {
+    const scenarios: ScenePatchScenarioReport[] = [];
+    for (const [elementCount, movedCount] of fixturePairs) {
+      const before = await engine.benchmarkSceneSnapshot(elementCount, movedCount, false);
+      const snapshotSamples: PipelineSample[] = [];
+      const patchSamples: PipelineSample[] = [];
+      for (let iteration = 0; iteration < 20; iteration += 1) {
+        const after = await engine.benchmarkSceneSnapshot(elementCount, movedCount, true);
+        const patch = await engine.benchmarkScenePatch(elementCount, movedCount);
+        snapshotSamples.push(measureSnapshotPipeline(before.value, after));
+        patchSamples.push(measurePatchPipeline(before.value, patch));
+      }
+      const snapshot = summarizePipeline(snapshotSamples);
+      const patch = summarizePipeline(patchSamples);
+      scenarios.push({
+        elementCount,
+        movedCount,
+        snapshot,
+        patch,
+        ratios: {
+          payload: round(patch.payloadBytes / snapshot.payloadBytes),
+          pipelineP95: round(patch.pipelineMs.p95 / snapshot.pipelineMs.p95),
+        },
+      });
+    }
+
+    const recoveryRenderer = new SvgRenderer();
+    const recoveryTarget = document.createElement('div');
+    recoveryRenderer.mount(recoveryTarget);
+    const recoveryBefore = await engine.benchmarkSceneSnapshot(100, 1, false);
+    const recoveryPatch = await engine.benchmarkScenePatch(100, 1);
+    recoveryRenderer.applySnapshot(recoveryBefore.value);
+    const firstPatch = recoveryRenderer.applyPatch(recoveryPatch.value);
+    if (!firstPatch.ok) throw new Error('ordered recovery fixture patch was rejected');
+    const stalePatch = recoveryRenderer.applyPatch(recoveryPatch.value);
+    recoveryRenderer.unmount();
+    const stalePatchResult = stalePatch.ok ? 'unexpected_success' : stalePatch.reason;
+    if (stalePatchResult !== 'snapshot_required') {
+      throw new Error(`stale patch did not require snapshot: ${stalePatchResult}`);
+    }
+
+    const oneThousandMoveOne = scenarios.find(
+      (scenario) => scenario.elementCount === 1_000 && scenario.movedCount === 1,
+    );
+    return {
+      build: 'release-wasm-dev-host',
+      engineAlgorithmVersion: 'phase0-s5',
+      ...benchmarkEnvironment(),
+      sample: { iterationsPerScenario: 20, frameBudgetMs: 16.7 },
+      scenarios,
+      recovery: { stalePatchResult },
+      decision: {
+        outOfOrderPatchAlwaysRequiresSnapshot: stalePatchResult === 'snapshot_required',
+        oneThousandMoveOneP95WithinFrameBudget:
+          (oneThousandMoveOne?.patch.pipelineMs.p95 ?? Number.POSITIVE_INFINITY) <= 16.7,
+        patchPayloadSmallerInEveryScenario: scenarios.every(
+          (scenario) => scenario.patch.payloadBytes < scenario.snapshot.payloadBytes,
+        ),
+      },
+    };
+  } finally {
+    engine.dispose();
+  }
+}
+
+interface PipelineSample {
+  payloadBytes: number;
+  wasmSerializeAndTransferMs: number;
+  parseMs: number;
+  svgApplyMs: number;
+  pipelineMs: number;
+}
+
+function measureSnapshotPipeline(
+  before: SceneSnapshotV1,
+  after: SceneBenchmarkPayloadV1<SceneSnapshotV1>,
+): PipelineSample {
+  const renderer = new SvgRenderer();
+  renderer.mount(document.createElement('div'));
+  renderer.applySnapshot(before);
+  const result = renderer.applySnapshot(after.value);
+  renderer.unmount();
+  if (!result.ok) throw new Error(`snapshot renderer rejected fixture: ${result.reason}`);
+  const svgApplyMs = result.durationMs ?? 0;
+  return pipelineSample(after, svgApplyMs);
+}
+
+function measurePatchPipeline(
+  before: SceneSnapshotV1,
+  patch: SceneBenchmarkPayloadV1<ScenePatchV1>,
+): PipelineSample {
+  const renderer = new SvgRenderer();
+  renderer.mount(document.createElement('div'));
+  renderer.applySnapshot(before);
+  const result = renderer.applyPatch(patch.value);
+  renderer.unmount();
+  if (!result.ok) throw new Error(`patch renderer rejected fixture: ${result.reason}`);
+  const svgApplyMs = result.durationMs ?? 0;
+  return pipelineSample(patch, svgApplyMs);
+}
+
+function pipelineSample(
+  payload: { payloadBytes: number; wasmSerializeAndTransferMs: number; parseMs: number },
+  svgApplyMs: number,
+): PipelineSample {
+  return {
+    ...payload,
+    svgApplyMs,
+    pipelineMs: payload.wasmSerializeAndTransferMs + payload.parseMs + svgApplyMs,
+  };
+}
+
+function summarizePipeline(samples: PipelineSample[]): ScenePipelineMetrics {
+  return {
+    payloadBytes: samples[0]?.payloadBytes ?? 0,
+    wasmSerializeAndTransferMs: percentiles(
+      samples.map((sample) => sample.wasmSerializeAndTransferMs),
+    ),
+    parseMs: percentiles(samples.map((sample) => sample.parseMs)),
+    svgApplyMs: percentiles(samples.map((sample) => sample.svgApplyMs)),
+    pipelineMs: percentiles(samples.map((sample) => sample.pipelineMs)),
+  };
+}
+
+function percentiles(values: number[]): Percentiles {
+  const sorted = [...values].sort((left, right) => left - right);
+  const at = (quantile: number) => sorted[Math.ceil(sorted.length * quantile) - 1] ?? 0;
+  return { p50: round(at(0.5)), p95: round(at(0.95)), p99: round(at(0.99)) };
+}
+
+function round(value: number): number {
+  return Number(value.toFixed(3));
 }
 
 function benchmarkEnvironment() {

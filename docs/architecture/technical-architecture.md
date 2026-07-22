@@ -610,10 +610,10 @@ interface ScenePatchV1 {
   documentRevision: number;
   baseSceneRevision: number;
   sceneRevision: number;
-  added: SceneNodeV1[];
-  updated: SceneNodeV1[];
-  removed: SceneNodeId[];
-  rootNodeIds?: SceneNodeId[];
+  addedNodes: Record<SceneNodeId, SceneNodeV1>;
+  updatedNodes: Record<SceneNodeId, SceneNodeV1>;
+  removedNodeIds: SceneNodeId[];
+  rootNodeIds: SceneNodeId[] | null;
 }
 ```
 

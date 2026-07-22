@@ -19,6 +19,8 @@ declare module '*nodeink_engine.js' {
       runsJson: string,
       metricsJson: string | undefined,
     ): string;
+    benchmarkSceneSnapshot(elementCount: number, movedCount: number, afterMove: boolean): string;
+    benchmarkScenePatch(elementCount: number, movedCount: number): string;
     undo(): string;
     redo(): string;
     serializeDocument(): string;

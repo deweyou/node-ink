@@ -73,6 +73,24 @@ export interface SceneSnapshotV1 {
   nodes: Record<string, SceneNodeV1>;
 }
 
+export interface ScenePatchV1 {
+  protocolVersion: 1;
+  documentRevision: number;
+  baseSceneRevision: number;
+  sceneRevision: number;
+  addedNodes: Record<string, SceneNodeV1>;
+  updatedNodes: Record<string, SceneNodeV1>;
+  removedNodeIds: string[];
+  rootNodeIds: string[] | null;
+}
+
+export interface SceneBenchmarkPayloadV1<T> {
+  value: T;
+  payloadBytes: number;
+  wasmSerializeAndTransferMs: number;
+  parseMs: number;
+}
+
 export type RenderProfileV1 =
   | { kind: 'clean'; version: 1 }
   | {
@@ -173,6 +191,15 @@ export interface EnginePortV1 {
     runs: TextRunV1[],
     metrics: TextMetricsSnapshotV1 | null,
   ): Promise<TextFixtureResolutionV1>;
+  benchmarkSceneSnapshot(
+    elementCount: number,
+    movedCount: number,
+    afterMove: boolean,
+  ): Promise<SceneBenchmarkPayloadV1<SceneSnapshotV1>>;
+  benchmarkScenePatch(
+    elementCount: number,
+    movedCount: number,
+  ): Promise<SceneBenchmarkPayloadV1<ScenePatchV1>>;
   undo(): Promise<EngineUpdateV1>;
   redo(): Promise<EngineUpdateV1>;
   dispose(): void;
@@ -216,6 +243,7 @@ export interface StrokeUpdateV1 {
 export interface RendererV1 {
   mount(target: HTMLElement): void;
   applySnapshot(snapshot: SceneSnapshotV1): RenderApplyResultV1;
+  applyPatch(patch: ScenePatchV1): RenderApplyResultV1;
   unmount(): void;
 }
 
@@ -226,7 +254,7 @@ export type RenderApplyResultV1 =
       durationMs?: number;
       changedNodeCount?: number;
     }
-  | { ok: false; reason: 'unsupported_scene' };
+  | { ok: false; reason: 'unsupported_scene' | 'snapshot_required' };
 
 export function createBlankDocument(documentId: string): NodeInkDocumentV1 {
   return {
@@ -255,6 +283,35 @@ export function parseEngineUpdate(value: string): EngineUpdateV1 {
     throw new Error('Engine update does not satisfy protocol V1');
   }
   return parsed as unknown as EngineUpdateV1;
+}
+
+export function parseSceneSnapshot(value: string): SceneSnapshotV1 {
+  const parsed: unknown = JSON.parse(value);
+  return parseEngineUpdate(
+    JSON.stringify({
+      operation: null,
+      scene: parsed,
+      history: { canUndo: false, canRedo: false },
+    }),
+  ).scene;
+}
+
+export function parseScenePatch(value: string): ScenePatchV1 {
+  const parsed: unknown = JSON.parse(value);
+  if (
+    !isRecord(parsed) ||
+    parsed.protocolVersion !== protocolVersion ||
+    typeof parsed.documentRevision !== 'number' ||
+    typeof parsed.baseSceneRevision !== 'number' ||
+    typeof parsed.sceneRevision !== 'number' ||
+    !isRecord(parsed.addedNodes) ||
+    !isRecord(parsed.updatedNodes) ||
+    !Array.isArray(parsed.removedNodeIds) ||
+    (parsed.rootNodeIds !== null && !Array.isArray(parsed.rootNodeIds))
+  ) {
+    throw new Error('Engine patch does not satisfy protocol V1');
+  }
+  return parsed as unknown as ScenePatchV1;
 }
 
 export function parsePointerUpdate(value: string): PointerUpdateV1 {
