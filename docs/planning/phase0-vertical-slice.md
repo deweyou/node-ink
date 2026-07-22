@@ -12,7 +12,7 @@ flowchart LR
 
 > 日期：2026-07-21
 > 状态：已实现并验证
-> 覆盖 Spike：S0、S1、S2、S3、S4、S5、S10 的最小事务边界、S11、S12
+> 覆盖 Spike：S0、S1、S2、S3、S4、S5、S6、S10 的最小事务边界、S11、S12
 
 ## 结论
 
@@ -49,6 +49,7 @@ Rust nodeink-core
 - 确定性 Sketch：Rust 使用显式 profile、seed 与算法版本生成矩形轮廓、hachure fill 和自由笔 path。
 - 文本与 IME：Rust 发出缺失 metrics request；TypeScript 测量固定 fixture 字体并按 fingerprint 缓存；composition buffer 不进入 Command。
 - ScenePatch：Rust 生成带 base revision 的稳定节点增量，Renderer 原地更新 DOM，revision 失配时要求完整 Snapshot。
+- SVG scale：Renderer 支持 TextRun 与独立 viewport；可见集合由 Scene/Host 裁剪后再传入 Renderer。
 
 这不是日常可用的编辑器，也不包含持久化、Camera、选择框、产品级文本编辑、
 Mermaid 导入或公共 SDK；自由笔与 IME 仅覆盖 Spike fixture。
@@ -71,6 +72,7 @@ Mermaid 导入或公共 SDK；自由笔与 IME 仅覆盖 Spike fixture。
 | S3 Native/WASM canonical hash | 4 组 hash 逐项一致；同输入 WASM 连续解析 1,000 次只有 1 个 hash |
 | S4 text/IME browser benchmark | 3 个 run 首次测量、缓存后 3/3 命中；1,000 次 hash 稳定；font/IME 失效与提交边界正确 |
 | S5 ScenePatch browser benchmark | 100/1,000/10,000 节点 × move 1/100；1,000 move-1 Patch P95 0.8ms；错序 Patch 返回 `snapshot_required` |
+| S6 SVG scale browser benchmark | simple path/TextRun/Sketch multi-path × 1,000/5,000/10,000；裁剪到 1,000 源元素后首挂 P95 1.3–4.5ms |
 | `git diff --check` | 通过 |
 
 真实浏览器中分别验证了 React 和 Vanilla 两个入口：
@@ -144,6 +146,18 @@ JSON parse、SVG apply 和端到端 P50/P95/P99。
 - 重复或错序 Patch 100% 返回 `snapshot_required` 且保持 DOM/revision 不变；Host 必须请求完整 Snapshot，不能猜测合并。
 - Spike 的 Patch 构造仍通过 O(N) Scene diff；Phase 1A 从 Transaction changed IDs 直接构造，Renderer 不感知 Command 来源。
 
+## S6 SVG 与裁剪决策
+
+真实浏览器证据见 [`phase0-s6-svg-scale.json`](../benchmarks/phase0-s6-svg-scale.json)，测试源代码
+锚定提交 `65c56e7`。fixture 覆盖 simple path、单 TextRun 与每元素三 path Sketch；首挂各 10 次，
+camera pan 与单节点 Patch 各 20 次。
+
+- simple path 在 10,000 个可见 DOM 节点时首挂 P95 15.5ms，仍处在 16.7ms 帧预算内。
+- TextRun 在 5,000 元素/10,000 DOM 节点时首挂 P95 25ms；Sketch 在 5,000 元素/15,000 DOM 节点时为 54.8ms，均需裁剪。
+- 三类 10,000 源元素在可见集合裁到 1,000 元素后，首挂 P95 分别为 1.3/1.9/4.5ms；camera pan P95 不超过 0.1ms。
+- Phase 1A 采用保守的 2,000 可见 SVG DOM 节点软门：超过时先减少可见 cap，并评估 Canvas；不按源文档总元素数自动切换 Renderer。
+- 这些结论来自单台桌面 Chrome 150 与合成 Scene；低端设备和真实字体/复杂 path 必须重新校准。
+
 ## 工具链说明
 
 - Node：`24.15.0`
@@ -161,11 +175,10 @@ macOS 在仓库内 Cargo `target/` 上触发过扩展属性相关的 `Operation 
 
 按风险顺序继续 Phase 0，而不是直接铺开完整 UI：
 
-1. S6 SVG 节点类型、更新与裁剪预算。
-2. S7/S8 持久化、原子恢复与 migration fixture。
-3. S9 多标签页写入权与只读降级。
-4. 补齐 S10/S11/S12 的完整退出证据。
-5. Phase 1A 文本实现前确认 P-02 固定画布字体产品决策。
+1. S7/S8 持久化、原子恢复与 migration fixture。
+2. S9 多标签页写入权与只读降级。
+3. 补齐 S10/S11/S12 的完整退出证据。
+4. Phase 1A 文本实现前确认 P-02 固定画布字体产品决策。
 
 ---
-*Last updated: 2026-07-22 | Reason: record S5 ScenePatch scale and recovery evidence*
+*Last updated: 2026-07-22 | Reason: record S6 SVG scale and culling evidence*

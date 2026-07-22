@@ -110,6 +110,14 @@
 - S5 中 1,000 节点移动 1 个的 payload 为 325B、全链路 P95 为 0.8ms；10,000 节点移动 1 个为 7.9ms，均在 16.7ms 内。
 - 当前 Spike 通过对前后 Scene 做 O(N) diff 构造 Patch；Phase 1A 应从 Transaction changed IDs 直接生成，避免把 fixture diff 当成正式更新路径。
 
+### D-18 SVG 可见节点预算与裁剪所有权
+
+- Camera pan 只更新 SVG viewport，不增加 Document/Scene revision；ScenePatch 与 camera state 保持两个独立通道。
+- 视口裁剪由 Rust Scene Resolution/Host 基于空间索引完成，Renderer 只挂载已经解析的可见 Scene，不自行解释 Document 或重做 Sketch/Text 布局。
+- 本机 Chrome 150 的保守无裁剪预算：simple path 10,000 源元素；单 TextRun 与三 path Sketch 各 1,000 源元素。
+- 源文档可超过上述数量，但可见集合暂限 1,000 源元素；10,000 源元素裁剪后首挂 P95 为 1.3–4.5ms。
+- 可见 SVG DOM 超过 2,000 个节点时进入“降低可见 cap 或评估 Canvas”区间；这是单机 Spike 的保守门，不是自动切换 Renderer 的产品规则。
+
 ## 22. 需要产品负责人决策的问题
 
 以下问题不阻碍继续评审文档，但会阻碍对应功能进入实现。

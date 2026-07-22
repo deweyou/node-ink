@@ -12,6 +12,7 @@ import type {
   NodeInkDocumentV1,
   RenderProfileV1,
   SceneBenchmarkPayloadV1,
+  SceneNodeV1,
   ScenePatchV1,
   SceneResolutionV1,
   SceneSnapshotV1,
@@ -109,6 +110,43 @@ export interface PlaygroundScenePatchBenchmarkReport {
   };
 }
 
+export interface PlaygroundSvgScaleBenchmarkReport {
+  build: 'release-wasm-dev-host';
+  engineAlgorithmVersion: 'phase0-s6';
+  browser: string;
+  os: string;
+  hardware: PlaygroundBenchmarkHardware;
+  sample: {
+    mountIterations: 10;
+    interactionIterations: 20;
+    frameBudgetMs: 16.7;
+    visibleElementCap: 1_000;
+  };
+  scenarios: SvgScaleScenarioReport[];
+  decision: {
+    unculledSourceElementBudget: Record<SvgFixtureKind, number>;
+    cullingRequiredAboveSourceElements: Record<SvgFixtureKind, number>;
+    canvasEvaluationAboveVisibleDomNodes: number;
+    tenThousandSourceElementsRemainInteractiveWhenCulled: boolean;
+    cullingOwner: 'scene-resolution-host';
+  };
+}
+
+type SvgFixtureKind = 'simple_path' | 'text_run' | 'sketch_multi_path';
+
+interface SvgScaleScenarioReport {
+  kind: SvgFixtureKind;
+  sourceElementCount: 1_000 | 5_000 | 10_000;
+  fullSceneNodeCount: number;
+  fullSvgDomNodeCount: number;
+  culledSceneNodeCount: number;
+  culledSvgDomNodeCount: number;
+  fullMountMs: Percentiles;
+  culledMountMs: Percentiles;
+  cameraPanMs: Percentiles;
+  singleNodePatchMs: Percentiles;
+}
+
 interface ScenePatchScenarioReport {
   elementCount: 100 | 1_000 | 10_000;
   movedCount: 1 | 100;
@@ -144,6 +182,7 @@ declare global {
     nodeInkRunSketchBenchmark?: () => Promise<PlaygroundSketchBenchmarkReport>;
     nodeInkRunTextBenchmark?: () => Promise<PlaygroundTextBenchmarkReport>;
     nodeInkRunScenePatchBenchmark?: () => Promise<PlaygroundScenePatchBenchmarkReport>;
+    nodeInkRunSvgScaleBenchmark?: () => Promise<PlaygroundSvgScaleBenchmarkReport>;
   }
 }
 
@@ -153,6 +192,7 @@ export function exposePointerBenchmark(controller: EditorWebControllerV1): void 
   window.nodeInkRunSketchBenchmark = () => runPlaygroundSketchBenchmark();
   window.nodeInkRunTextBenchmark = () => runPlaygroundTextBenchmark();
   window.nodeInkRunScenePatchBenchmark = () => runPlaygroundScenePatchBenchmark();
+  window.nodeInkRunSvgScaleBenchmark = () => runPlaygroundSvgScaleBenchmark();
 }
 
 export async function runPlaygroundPointerBenchmark(
@@ -436,6 +476,212 @@ export async function runPlaygroundScenePatchBenchmark(): Promise<PlaygroundScen
   } finally {
     engine.dispose();
   }
+}
+
+export async function runPlaygroundSvgScaleBenchmark(): Promise<PlaygroundSvgScaleBenchmarkReport> {
+  const kinds: SvgFixtureKind[] = ['simple_path', 'text_run', 'sketch_multi_path'];
+  const sourceCounts = [1_000, 5_000, 10_000] as const;
+  const scenarios: SvgScaleScenarioReport[] = [];
+  for (const kind of kinds) {
+    for (const sourceElementCount of sourceCounts) {
+      const full = svgScaleScene(kind, sourceElementCount, sourceElementCount, 1);
+      const culled = svgScaleScene(kind, sourceElementCount, 1_000, 1);
+      const fullMount = measureSvgMount(full, 10);
+      const culledMount = measureSvgMount(culled, 10);
+      const interactions = measureSvgInteractions(full, 20);
+      scenarios.push({
+        kind,
+        sourceElementCount,
+        fullSceneNodeCount: full.rootNodeIds.length,
+        fullSvgDomNodeCount: fullMount.domNodeCount,
+        culledSceneNodeCount: culled.rootNodeIds.length,
+        culledSvgDomNodeCount: culledMount.domNodeCount,
+        fullMountMs: percentiles(fullMount.durations),
+        culledMountMs: percentiles(culledMount.durations),
+        cameraPanMs: percentiles(interactions.cameraPanDurations),
+        singleNodePatchMs: percentiles(interactions.patchDurations),
+      });
+      await yieldToBrowser();
+    }
+  }
+
+  const unculledSourceElementBudget = Object.fromEntries(
+    kinds.map((kind) => {
+      const withinBudget = scenarios.filter(
+        (scenario) =>
+          scenario.kind === kind &&
+          scenario.fullMountMs.p95 <= 16.7 &&
+          scenario.cameraPanMs.p95 <= 16.7 &&
+          scenario.singleNodePatchMs.p95 <= 16.7,
+      );
+      return [kind, Math.max(0, ...withinBudget.map((scenario) => scenario.sourceElementCount))];
+    }),
+  ) as Record<SvgFixtureKind, number>;
+  const visibleDomBudgets = kinds.map((kind) =>
+    Math.max(
+      0,
+      ...scenarios
+        .filter((scenario) => scenario.kind === kind && scenario.fullMountMs.p95 <= 16.7)
+        .map((scenario) => scenario.fullSvgDomNodeCount),
+    ),
+  );
+  return {
+    build: 'release-wasm-dev-host',
+    engineAlgorithmVersion: 'phase0-s6',
+    ...benchmarkEnvironment(),
+    sample: {
+      mountIterations: 10,
+      interactionIterations: 20,
+      frameBudgetMs: 16.7,
+      visibleElementCap: 1_000,
+    },
+    scenarios,
+    decision: {
+      unculledSourceElementBudget,
+      cullingRequiredAboveSourceElements: { ...unculledSourceElementBudget },
+      canvasEvaluationAboveVisibleDomNodes: Math.min(...visibleDomBudgets) + 1,
+      tenThousandSourceElementsRemainInteractiveWhenCulled: scenarios
+        .filter((scenario) => scenario.sourceElementCount === 10_000)
+        .every(
+          (scenario) =>
+            scenario.culledMountMs.p95 <= 16.7 &&
+            scenario.cameraPanMs.p95 <= 16.7 &&
+            scenario.singleNodePatchMs.p95 <= 16.7,
+        ),
+      cullingOwner: 'scene-resolution-host',
+    },
+  };
+}
+
+function svgScaleScene(
+  kind: SvgFixtureKind,
+  sourceElementCount: number,
+  visibleElementCount: number,
+  sceneRevision: number,
+): SceneSnapshotV1 {
+  const rootNodeIds: string[] = [];
+  const nodes: Record<string, SceneNodeV1> = {};
+  const count = Math.min(sourceElementCount, visibleElementCount);
+  for (let index = 0; index < count; index += 1) {
+    const sourceElementId = `scale-${index.toString().padStart(5, '0')}`;
+    const x = (index % 100) * 18;
+    const y = Math.floor(index / 100) * 18;
+    if (kind === 'text_run') {
+      const id = `${sourceElementId}:text`;
+      rootNodeIds.push(id);
+      nodes[id] = {
+        kind: 'text',
+        id,
+        sourceElementId,
+        runs: [
+          {
+            text: `N${index}`,
+            x,
+            y: y + 14,
+            fontFamily: 'Arial',
+            fontSize: 12,
+            fontWeight: 400,
+            fill: '#0f172a',
+          },
+        ],
+      };
+      continue;
+    }
+    const pathCount = kind === 'sketch_multi_path' ? 3 : 1;
+    for (let pathIndex = 0; pathIndex < pathCount; pathIndex += 1) {
+      const id = `${sourceElementId}:path-${pathIndex}`;
+      rootNodeIds.push(id);
+      nodes[id] = {
+        kind: 'path',
+        id,
+        sourceElementId,
+        pathData: `M ${x} ${y + pathIndex} L ${x + 12} ${y + 12 + pathIndex}`,
+        fill: 'none',
+        stroke: pathIndex === 2 ? '#64748b' : '#0f172a',
+        strokeWidth: pathIndex === 2 ? 1 : 2,
+      };
+    }
+  }
+  return {
+    protocolVersion: 1,
+    documentId: `svg-scale-${kind}-${sourceElementCount}`,
+    documentRevision: sceneRevision,
+    sceneRevision,
+    rootNodeIds,
+    nodes,
+  };
+}
+
+function measureSvgMount(
+  scene: SceneSnapshotV1,
+  iterations: number,
+): { durations: number[]; domNodeCount: number } {
+  const durations: number[] = [];
+  let domNodeCount = 0;
+  for (let iteration = 0; iteration < iterations; iteration += 1) {
+    const target = document.createElement('div');
+    const renderer = new SvgRenderer();
+    renderer.mount(target);
+    const result = renderer.applySnapshot(scene);
+    if (!result.ok) throw new Error(`SVG scale snapshot rejected: ${result.reason}`);
+    durations.push(result.durationMs ?? 0);
+    domNodeCount = target.querySelectorAll('svg *').length;
+    renderer.unmount();
+  }
+  return { durations, domNodeCount };
+}
+
+function measureSvgInteractions(
+  scene: SceneSnapshotV1,
+  iterations: number,
+): { cameraPanDurations: number[]; patchDurations: number[] } {
+  const renderer = new SvgRenderer();
+  renderer.mount(document.createElement('div'));
+  const mounted = renderer.applySnapshot(scene);
+  if (!mounted.ok) throw new Error(`SVG interaction fixture rejected: ${mounted.reason}`);
+  const cameraPanDurations: number[] = [];
+  const patchDurations: number[] = [];
+  const firstNodeId = scene.rootNodeIds[0];
+  const firstNode = firstNodeId ? scene.nodes[firstNodeId] : undefined;
+  if (!firstNodeId || !firstNode) throw new Error('SVG interaction fixture is empty');
+  for (let iteration = 0; iteration < iterations; iteration += 1) {
+    cameraPanDurations.push(
+      renderer.setViewport({ x: iteration * 8, y: iteration * 4, width: 960, height: 640 })
+        .durationMs,
+    );
+    const baseSceneRevision = scene.sceneRevision + iteration;
+    const patch = renderer.applyPatch({
+      protocolVersion: 1,
+      documentRevision: baseSceneRevision + 1,
+      baseSceneRevision,
+      sceneRevision: baseSceneRevision + 1,
+      addedNodes: {},
+      updatedNodes: { [firstNodeId]: mutateScaleNode(firstNode, iteration) },
+      removedNodeIds: [],
+      rootNodeIds: null,
+    });
+    if (!patch.ok) throw new Error(`SVG interaction patch rejected: ${patch.reason}`);
+    patchDurations.push(patch.durationMs ?? 0);
+  }
+  renderer.unmount();
+  return { cameraPanDurations, patchDurations };
+}
+
+function mutateScaleNode(node: SceneNodeV1, iteration: number): SceneNodeV1 {
+  if (node.kind === 'text') {
+    return {
+      ...node,
+      runs: node.runs.map((run) => ({ ...run, text: `${run.text}-${iteration}` })),
+    };
+  }
+  if (node.kind === 'path') {
+    return { ...node, pathData: `${node.pathData} M ${iteration} ${iteration}` };
+  }
+  return { ...node, x: node.x + iteration };
+}
+
+async function yieldToBrowser(): Promise<void> {
+  await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
 }
 
 interface PipelineSample {

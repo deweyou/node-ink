@@ -148,7 +148,7 @@ export interface TextFixtureResolutionV1 {
   canonicalHash: string | null;
 }
 
-export type SceneNodeV1 = SceneRectV1 | ScenePathV1;
+export type SceneNodeV1 = SceneRectV1 | ScenePathV1 | SceneTextV1;
 
 export interface SceneRectV1 {
   kind: 'rect';
@@ -170,6 +170,34 @@ export interface ScenePathV1 {
   fill: string;
   stroke: string;
   strokeWidth: number;
+}
+
+export interface SceneTextV1 {
+  kind: 'text';
+  id: string;
+  sourceElementId: string;
+  runs: SceneTextRunV1[];
+}
+
+export interface SceneTextRunV1 {
+  text: string;
+  x: number;
+  y: number;
+  fontFamily: string;
+  fontSize: number;
+  fontWeight: 400 | 500;
+  fill: string;
+}
+
+export interface ViewportV1 {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export interface RenderViewportResultV1 {
+  durationMs: number;
 }
 
 export interface EnginePortV1 {
@@ -242,6 +270,7 @@ export interface StrokeUpdateV1 {
 
 export interface RendererV1 {
   mount(target: HTMLElement): void;
+  setViewport(viewport: ViewportV1): RenderViewportResultV1;
   applySnapshot(snapshot: SceneSnapshotV1): RenderApplyResultV1;
   applyPatch(patch: ScenePatchV1): RenderApplyResultV1;
   unmount(): void;

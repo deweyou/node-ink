@@ -59,6 +59,55 @@ describe('SvgRenderer', () => {
     }
   });
 
+  it('renders text runs and updates them through a patch', () => {
+    const target = document.createElement('div');
+    const renderer = new SvgRenderer();
+    renderer.mount(target);
+    renderer.applySnapshot(textScene(1, 'NodeInk'));
+    const firstText = target.querySelector('text');
+
+    const result = renderer.applyPatch({
+      protocolVersion: 1,
+      documentRevision: 2,
+      baseSceneRevision: 1,
+      sceneRevision: 2,
+      addedNodes: {},
+      updatedNodes: textScene(2, '画布').nodes,
+      removedNodeIds: [],
+      rootNodeIds: null,
+    });
+
+    expect(result).toMatchObject({ ok: true, changedNodeCount: 1 });
+    expect(target.querySelector('text')).toBe(firstText);
+    expect(firstText?.querySelector('tspan')?.textContent).toBe('画布');
+    expect(firstText?.querySelector('tspan')?.getAttribute('font-family')).toBe('Arial');
+  });
+
+  it('updates the viewport independently of scene revision', () => {
+    const target = document.createElement('div');
+    const renderer = new SvgRenderer();
+    renderer.mount(target);
+
+    const result = renderer.setViewport({ x: 120, y: 80, width: 640, height: 480 });
+
+    expect(result.durationMs).toBeGreaterThanOrEqual(0);
+    expect(target.querySelector('svg')?.getAttribute('viewBox')).toBe('120 80 640 480');
+  });
+
+  it.each([
+    { x: Number.NaN, y: 0, width: 1, height: 1 },
+    { x: 0, y: Number.POSITIVE_INFINITY, width: 1, height: 1 },
+    { x: 0, y: 0, width: 0, height: 1 },
+    { x: 0, y: 0, width: 1, height: -1 },
+  ])('rejects invalid viewports without updating the SVG', (viewport) => {
+    const target = document.createElement('div');
+    const renderer = new SvgRenderer();
+    renderer.mount(target);
+
+    expect(() => renderer.setViewport(viewport)).toThrow('positive dimensions');
+    expect(target.querySelector('svg')?.getAttribute('viewBox')).toBe('0 0 960 640');
+  });
+
   it('rejects unsupported or missing scene nodes', () => {
     const target = document.createElement('div');
     const renderer = new SvgRenderer();
@@ -157,6 +206,12 @@ describe('SvgRenderer', () => {
   it('requires a mounted SVG before applying a patch', () => {
     expect(() => new SvgRenderer().applyPatch(movePatch(1, 2, 88))).toThrow('must be mounted');
   });
+
+  it('requires a mounted SVG before updating the viewport', () => {
+    expect(() => new SvgRenderer().setViewport({ x: 0, y: 0, width: 960, height: 640 })).toThrow(
+      'must be mounted',
+    );
+  });
 });
 
 function scene(sceneRevision: number, x: number): SceneSnapshotV1 {
@@ -213,5 +268,33 @@ function movePatch(baseSceneRevision: number, sceneRevision: number, x: number):
     updatedNodes: { 'rect-1:shape': scene(sceneRevision, x).nodes['rect-1:shape']! },
     removedNodeIds: [],
     rootNodeIds: null,
+  };
+}
+
+function textScene(sceneRevision: number, value: string): SceneSnapshotV1 {
+  return {
+    protocolVersion: 1,
+    documentId: 'text-fixture',
+    documentRevision: sceneRevision,
+    sceneRevision,
+    rootNodeIds: ['text-1:run'],
+    nodes: {
+      'text-1:run': {
+        kind: 'text',
+        id: 'text-1:run',
+        sourceElementId: 'text-1',
+        runs: [
+          {
+            text: value,
+            x: 24,
+            y: 48,
+            fontFamily: 'Arial',
+            fontSize: 20,
+            fontWeight: 400,
+            fill: '#0f172a',
+          },
+        ],
+      },
+    },
   };
 }

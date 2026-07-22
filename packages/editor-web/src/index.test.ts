@@ -340,6 +340,10 @@ class StubRenderer implements RendererV1 {
 
   mount(): void {}
 
+  setViewport() {
+    return { durationMs: 0 };
+  }
+
   applySnapshot(snapshot: SceneSnapshotV1) {
     if (this.shouldReject) {
       return { ok: false as const, reason: 'unsupported_scene' as const };

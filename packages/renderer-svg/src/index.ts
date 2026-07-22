@@ -1,10 +1,13 @@
 import type {
   RendererV1,
   RenderApplyResultV1,
+  RenderViewportResultV1,
   ScenePatchV1,
   ScenePathV1,
   SceneRectV1,
   SceneSnapshotV1,
+  SceneTextV1,
+  ViewportV1,
 } from '@nodeink-internal/protocol';
 
 const svgNamespace = 'http://www.w3.org/2000/svg';
@@ -26,6 +29,25 @@ export class SvgRenderer implements RendererV1 {
     this.#svg = svg;
   }
 
+  setViewport(viewport: ViewportV1): RenderViewportResultV1 {
+    const startedAt = performance.now();
+    if (
+      !Number.isFinite(viewport.x) ||
+      !Number.isFinite(viewport.y) ||
+      !Number.isFinite(viewport.width) ||
+      !Number.isFinite(viewport.height) ||
+      viewport.width <= 0 ||
+      viewport.height <= 0
+    ) {
+      throw new Error('SVG viewport must contain finite coordinates and positive dimensions');
+    }
+    this.requireSvg().setAttribute(
+      'viewBox',
+      `${viewport.x} ${viewport.y} ${viewport.width} ${viewport.height}`,
+    );
+    return { durationMs: performance.now() - startedAt };
+  }
+
   applySnapshot(snapshot: SceneSnapshotV1): RenderApplyResultV1 {
     const startedAt = performance.now();
     const svg = this.requireSvg();
@@ -45,7 +67,7 @@ export class SvgRenderer implements RendererV1 {
     for (const nodeId of snapshot.rootNodeIds) {
       const node = snapshot.nodes[nodeId];
       if (!node) continue;
-      const element = node.kind === 'rect' ? this.upsertRectangle(node) : this.upsertPath(node);
+      const element = this.upsertNode(node);
       svg.append(element);
     }
 
@@ -120,8 +142,9 @@ export class SvgRenderer implements RendererV1 {
     this.#sceneRevision = null;
   }
 
-  private upsertNode(node: SceneRectV1 | ScenePathV1): SVGElement {
-    return node.kind === 'rect' ? this.upsertRectangle(node) : this.upsertPath(node);
+  private upsertNode(node: SceneRectV1 | ScenePathV1 | SceneTextV1): SVGElement {
+    if (node.kind === 'rect') return this.upsertRectangle(node);
+    return node.kind === 'path' ? this.upsertPath(node) : this.upsertText(node);
   }
 
   private upsertRectangle(node: SceneRectV1): SVGRectElement {
@@ -160,6 +183,31 @@ export class SvgRenderer implements RendererV1 {
     path.setAttribute('stroke-linejoin', 'round');
     this.#nodeElements.set(node.id, path);
     return path;
+  }
+
+  private upsertText(node: SceneTextV1): SVGTextElement {
+    const existing = this.#nodeElements.get(node.id);
+    const text =
+      existing?.tagName.toLowerCase() === 'text'
+        ? (existing as SVGTextElement)
+        : document.createElementNS(svgNamespace, 'text');
+    text.dataset.sceneNodeId = node.id;
+    text.dataset.sourceElementId = node.sourceElementId;
+    text.replaceChildren(
+      ...node.runs.map((run) => {
+        const span = document.createElementNS(svgNamespace, 'tspan');
+        span.textContent = run.text;
+        span.setAttribute('x', String(run.x));
+        span.setAttribute('y', String(run.y));
+        span.setAttribute('font-family', run.fontFamily);
+        span.setAttribute('font-size', String(run.fontSize));
+        span.setAttribute('font-weight', String(run.fontWeight));
+        span.setAttribute('fill', run.fill);
+        return span;
+      }),
+    );
+    this.#nodeElements.set(node.id, text);
+    return text;
   }
 
   private requireSvg(): SVGSVGElement {

@@ -203,6 +203,7 @@ pub struct SceneResolutionV1 {
 pub enum SceneNodeV1 {
     Rect(SceneRectV1),
     Path(ScenePathV1),
+    Text(SceneTextV1),
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -227,6 +228,26 @@ pub struct ScenePathV1 {
     pub fill: String,
     pub stroke: String,
     pub stroke_width: f64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SceneTextV1 {
+    pub id: SceneNodeId,
+    pub source_element_id: ElementId,
+    pub runs: Vec<SceneTextRunV1>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SceneTextRunV1 {
+    pub text: String,
+    pub x: f64,
+    pub y: f64,
+    pub font_family: String,
+    pub font_size: f64,
+    pub font_weight: u16,
+    pub fill: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Error, Serialize)]
@@ -965,6 +986,29 @@ mod tests {
                 delta: Vec2 { x: 24.0, y: 8.0 },
             }
         );
+    }
+
+    #[test]
+    fn text_scene_nodes_use_framework_neutral_wire_fields() {
+        let node = SceneNodeV1::Text(SceneTextV1 {
+            id: "text-1:run".to_string(),
+            source_element_id: "text-1".to_string(),
+            runs: vec![SceneTextRunV1 {
+                text: "NodeInk 画布".to_string(),
+                x: 24.0,
+                y: 48.0,
+                font_family: "Arial".to_string(),
+                font_size: 20.0,
+                font_weight: 400,
+                fill: "#0f172a".to_string(),
+            }],
+        });
+
+        let value = serde_json::to_value(node).unwrap();
+        assert_eq!(value["kind"], "text");
+        assert_eq!(value["sourceElementId"], "text-1");
+        assert_eq!(value["runs"][0]["fontFamily"], "Arial");
+        assert_eq!(value["runs"][0]["fontWeight"], 400);
     }
 
     #[test]

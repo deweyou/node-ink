@@ -5,6 +5,7 @@ import {
   runPlaygroundPointerBenchmark,
   runPlaygroundSketchBenchmark,
   runPlaygroundScenePatchBenchmark,
+  runPlaygroundSvgScaleBenchmark,
   runPlaygroundStrokeBenchmark,
   runPlaygroundTextBenchmark,
 } from './benchmark-api';
@@ -56,7 +57,8 @@ if (
   benchmark === 'stroke' ||
   benchmark === 'sketch' ||
   benchmark === 'text' ||
-  benchmark === 'scene-patch'
+  benchmark === 'scene-patch' ||
+  benchmark === 'svg-scale'
 ) {
   const benchmarkOutput = document.createElement('pre');
   benchmarkOutput.className = 'nodeink-benchmark';
@@ -73,7 +75,9 @@ if (
             ? await runPlaygroundSketchBenchmark()
             : benchmark === 'text'
               ? await runPlaygroundTextBenchmark()
-              : await runPlaygroundScenePatchBenchmark(),
+              : benchmark === 'scene-patch'
+                ? await runPlaygroundScenePatchBenchmark()
+                : await runPlaygroundSvgScaleBenchmark(),
       null,
       2,
     );
