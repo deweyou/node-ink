@@ -6,6 +6,7 @@ import {
   parsePointerUpdate,
   parseSceneResolution,
   parseStrokeUpdate,
+  parseTextFixtureResolution,
 } from './index';
 
 describe('protocol V1', () => {
@@ -146,6 +147,34 @@ describe('protocol V1', () => {
     { engineAlgorithmVersion: 'v1', canonicalHash: 'hash', renderProfile: null, scene: {} },
   ])('rejects invalid scene resolution metadata', (value) => {
     expect(() => parseSceneResolution(JSON.stringify(value))).toThrow('invalid scene resolution');
+  });
+
+  it('parses pending and resolved text fixtures', () => {
+    const pending = {
+      request: { requestId: 'measure-1', fontFingerprint: 'font-v1', runs: [] },
+      scene: null,
+      canonicalHash: null,
+    };
+    const resolved = {
+      request: null,
+      scene: { fontFingerprint: 'font-v1', runs: [] },
+      canonicalHash: 'fnv1a64:text',
+    };
+
+    expect(parseTextFixtureResolution(JSON.stringify(pending))).toEqual(pending);
+    expect(parseTextFixtureResolution(JSON.stringify(resolved))).toEqual(resolved);
+  });
+
+  it.each([
+    null,
+    {},
+    { request: [], scene: null, canonicalHash: null },
+    { request: null, scene: [], canonicalHash: null },
+    { request: null, scene: null, canonicalHash: 1 },
+  ])('rejects invalid text fixture resolutions', (value) => {
+    expect(() => parseTextFixtureResolution(JSON.stringify(value))).toThrow(
+      'invalid text fixture resolution',
+    );
   });
 });
 

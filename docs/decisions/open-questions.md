@@ -96,6 +96,13 @@
 - Native 与 WASM canonical hash 必须逐项一致；算法升级需要新版本与 fixture 差异记录，不能原地漂移。
 - Phase 0 使用 FNV-1a 做快速 Scene fixture hash；它不替代持久化对象的安全完整性摘要。
 
+### D-16 文本测量与 IME 平台边界
+
+- Rust Scene Resolution 发出版本化 `TextMeasureRequest`，TypeScript 返回带 `fontFingerprint` 的 metrics snapshot。
+- 缓存键包含 fingerprint 与完整 run 参数；字体 epoch/status 变化会整体失效，不能复用旧 bounds。
+- IME composition buffer 只存在于浏览器 textarea overlay；compositionend 后才形成一次 Rust Command。
+- S4 的 Arial 仅为可复现实验输入，不代表 P-02 已确认；Phase 1A 字体包与许可仍需产品决定。
+
 ## 22. 需要产品负责人决策的问题
 
 以下问题不阻碍继续评审文档，但会阻碍对应功能进入实现。
@@ -116,6 +123,7 @@
 - **影响**：跨设备换行、布局、Scene hash、包体积和字体许可。
 - **决策时点**：Phase 0 文本测量 Spike 后、Phase 1A 文本实现前。
 - **当前状态**：待确认。
+- **Phase 0 证据**：两阶段测量与 fingerprint 失效可行；本机首次 3-run 测量 7.5ms、缓存 3/3 命中。跨设备一致性仍要求固定字体或明确降级契约。
 
 ### P-03 多标签页行为
 

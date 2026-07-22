@@ -6,6 +6,7 @@ use thiserror::Error;
 mod pointer;
 mod sketch;
 mod stroke;
+mod text;
 
 pub use pointer::{NormalizedPointerEventV1, PointerPhaseV1};
 use pointer::{PointerMachine, PointerPreview, PointerTransition};
@@ -13,6 +14,11 @@ pub use sketch::{ENGINE_ALGORITHM_VERSION, RenderProfileV1, SketchFillStyleV1};
 use sketch::{sketch_rectangle, sketch_stroke};
 pub use stroke::{StrokeInputBatchV1, StrokePhaseV1};
 use stroke::{StrokeMachine, StrokePreview, StrokeTransition};
+use text::resolve_text_fixture;
+pub use text::{
+    ResolvedTextRunV1, TextFixtureResolutionV1, TextFixtureSceneV1, TextMeasureRequestV1,
+    TextMetricsSnapshotV1, TextMetricsV1, TextRunV1,
+};
 
 pub const PROTOCOL_VERSION: u32 = 1;
 pub const SCHEMA_VERSION: u32 = 1;
@@ -246,6 +252,10 @@ pub enum EngineErrorV1 {
     InvalidStrokeInput { reason: String },
     #[error("invalid render profile")]
     InvalidRenderProfile,
+    #[error("invalid text measurement fixture")]
+    InvalidTextFixture,
+    #[error("text metrics fingerprint does not match the request")]
+    TextFingerprintMismatch,
     #[error("undo history is empty")]
     UndoUnavailable,
     #[error("redo history is empty")]
@@ -462,6 +472,16 @@ impl Engine {
             canonical_hash: fnv1a64_hex(canonical.as_bytes()),
             scene,
         })
+    }
+
+    pub fn resolve_text_fixture(
+        &self,
+        request_id: String,
+        font_fingerprint: String,
+        runs: Vec<TextRunV1>,
+        metrics: Option<TextMetricsSnapshotV1>,
+    ) -> Result<TextFixtureResolutionV1, EngineErrorV1> {
+        resolve_text_fixture(request_id, font_fingerprint, runs, metrics)
     }
 
     fn validate_envelope(&self, envelope: &CommandEnvelopeV1) -> Result<(), EngineErrorV1> {
@@ -1527,6 +1547,140 @@ mod tests {
         );
     }
 
+    #[test]
+    fn text_resolution_requests_only_missing_metrics_then_stabilizes() {
+        let engine = Engine::open(NodeInkDocumentV1::blank("doc-1")).unwrap();
+        let runs = text_runs();
+        let first = engine
+            .resolve_text_fixture(
+                "measure-1".to_string(),
+                "font-v1".to_string(),
+                runs.clone(),
+                None,
+            )
+            .unwrap();
+        assert_eq!(first.request.as_ref().unwrap().runs.len(), 3);
+        assert!(first.scene.is_none());
+
+        let partial = engine
+            .resolve_text_fixture(
+                "measure-2".to_string(),
+                "font-v1".to_string(),
+                runs.clone(),
+                Some(TextMetricsSnapshotV1 {
+                    font_fingerprint: "font-v1".to_string(),
+                    metrics: vec![text_metric("latin", 120.0)],
+                }),
+            )
+            .unwrap();
+        assert_eq!(
+            partial
+                .request
+                .unwrap()
+                .runs
+                .into_iter()
+                .map(|run| run.key)
+                .collect::<Vec<_>>(),
+            vec!["cjk", "emoji"]
+        );
+
+        let metrics = TextMetricsSnapshotV1 {
+            font_fingerprint: "font-v1".to_string(),
+            metrics: vec![
+                text_metric("latin", 120.0),
+                text_metric("cjk", 96.0),
+                text_metric("emoji", 32.0),
+            ],
+        };
+        let resolved = engine
+            .resolve_text_fixture(
+                "measure-3".to_string(),
+                "font-v1".to_string(),
+                runs.clone(),
+                Some(metrics.clone()),
+            )
+            .unwrap();
+        assert!(resolved.request.is_none());
+        assert_eq!(resolved.scene.as_ref().unwrap().runs.len(), 3);
+        for _ in 0..1_000 {
+            let repeated = engine
+                .resolve_text_fixture(
+                    "different-request-id".to_string(),
+                    "font-v1".to_string(),
+                    runs.clone(),
+                    Some(metrics.clone()),
+                )
+                .unwrap();
+            assert_eq!(repeated.canonical_hash, resolved.canonical_hash);
+        }
+
+        let font_changed = engine
+            .resolve_text_fixture(
+                "measure-4".to_string(),
+                "font-v2".to_string(),
+                runs,
+                Some(TextMetricsSnapshotV1 {
+                    font_fingerprint: "font-v2".to_string(),
+                    metrics: metrics.metrics,
+                }),
+            )
+            .unwrap();
+        assert_ne!(font_changed.canonical_hash, resolved.canonical_hash);
+    }
+
+    #[test]
+    fn text_resolution_rejects_invalid_runs_metrics_and_fingerprints() {
+        let engine = Engine::open(NodeInkDocumentV1::blank("doc-1")).unwrap();
+        assert_eq!(
+            engine
+                .resolve_text_fixture("measure".to_string(), "font-v1".to_string(), vec![], None,),
+            Err(EngineErrorV1::InvalidTextFixture)
+        );
+        assert_eq!(
+            engine.resolve_text_fixture(
+                "measure".to_string(),
+                "font-v1".to_string(),
+                text_runs(),
+                Some(TextMetricsSnapshotV1 {
+                    font_fingerprint: "font-v2".to_string(),
+                    metrics: vec![],
+                }),
+            ),
+            Err(EngineErrorV1::TextFingerprintMismatch)
+        );
+        let mut invalid_metrics = vec![
+            text_metric("latin", f64::NAN),
+            text_metric("cjk", 96.0),
+            text_metric("emoji", 32.0),
+        ];
+        assert_eq!(
+            engine.resolve_text_fixture(
+                "measure".to_string(),
+                "font-v1".to_string(),
+                text_runs(),
+                Some(TextMetricsSnapshotV1 {
+                    font_fingerprint: "font-v1".to_string(),
+                    metrics: invalid_metrics.clone(),
+                }),
+            ),
+            Err(EngineErrorV1::InvalidTextFixture)
+        );
+        invalid_metrics[0].width = 120.0;
+        assert!(
+            engine
+                .resolve_text_fixture(
+                    "measure".to_string(),
+                    "font-v1".to_string(),
+                    text_runs(),
+                    Some(TextMetricsSnapshotV1 {
+                        font_fingerprint: "font-v1".to_string(),
+                        metrics: invalid_metrics,
+                    }),
+                )
+                .is_ok()
+        );
+    }
+
     fn document_with_rectangle() -> NodeInkDocumentV1 {
         let mut document = NodeInkDocumentV1::blank("doc-1");
         let rectangle = rectangle("rect-1", 24.0);
@@ -1562,6 +1716,45 @@ mod tests {
             roughness,
             bowing: 0.8,
             fill_style,
+        }
+    }
+
+    fn text_runs() -> Vec<TextRunV1> {
+        vec![
+            TextRunV1 {
+                key: "latin".to_string(),
+                text: "NodeInk\ncanvas".to_string(),
+                font_family: "Arial".to_string(),
+                font_size: 20.0,
+                font_weight: 500,
+                max_width: Some(240.0),
+            },
+            TextRunV1 {
+                key: "cjk".to_string(),
+                text: "你好，画布".to_string(),
+                font_family: "Arial".to_string(),
+                font_size: 20.0,
+                font_weight: 400,
+                max_width: None,
+            },
+            TextRunV1 {
+                key: "emoji".to_string(),
+                text: "✍️🎨".to_string(),
+                font_family: "Arial".to_string(),
+                font_size: 24.0,
+                font_weight: 400,
+                max_width: None,
+            },
+        ]
+    }
+
+    fn text_metric(key: &str, width: f64) -> TextMetricsV1 {
+        TextMetricsV1 {
+            key: key.to_string(),
+            width,
+            height: 48.0,
+            baseline: 18.0,
+            line_breaks: if key == "latin" { vec![7] } else { vec![] },
         }
     }
 

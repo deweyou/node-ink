@@ -1,6 +1,6 @@
 use nodeink_core::{
     CommandEnvelopeV1, Engine, EngineErrorV1, NodeInkDocumentV1, NormalizedPointerEventV1,
-    RenderProfileV1, StrokeInputBatchV1, StrokePhaseV1, Vec2,
+    RenderProfileV1, StrokeInputBatchV1, StrokePhaseV1, TextMetricsSnapshotV1, TextRunV1, Vec2,
 };
 use wasm_bindgen::prelude::*;
 
@@ -120,6 +120,27 @@ impl EngineHandle {
         let resolution = self
             .engine
             .resolve_scene_profile(profile)
+            .map_err(engine_error)?;
+        serde_json::to_string(&resolution).map_err(|error| js_error("serialization_failed", error))
+    }
+
+    #[wasm_bindgen(js_name = resolveTextFixture)]
+    pub fn resolve_text_fixture(
+        &self,
+        request_id: String,
+        font_fingerprint: String,
+        runs_json: &str,
+        metrics_json: Option<String>,
+    ) -> Result<String, JsValue> {
+        let runs: Vec<TextRunV1> =
+            serde_json::from_str(runs_json).map_err(|error| js_error("schema_invalid", error))?;
+        let metrics = metrics_json
+            .map(|serialized| serde_json::from_str::<TextMetricsSnapshotV1>(&serialized))
+            .transpose()
+            .map_err(|error| js_error("schema_invalid", error))?;
+        let resolution = self
+            .engine
+            .resolve_text_fixture(request_id, font_fingerprint, runs, metrics)
             .map_err(engine_error)?;
         serde_json::to_string(&resolution).map_err(|error| js_error("serialization_failed", error))
     }

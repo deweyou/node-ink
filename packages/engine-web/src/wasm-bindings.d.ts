@@ -13,6 +13,12 @@ declare module '*nodeink_engine.js' {
       commandId: string,
     ): string;
     resolveSceneProfile(profileJson: string): string;
+    resolveTextFixture(
+      requestId: string,
+      fontFingerprint: string,
+      runsJson: string,
+      metricsJson: string | undefined,
+    ): string;
     undo(): string;
     redo(): string;
     serializeDocument(): string;

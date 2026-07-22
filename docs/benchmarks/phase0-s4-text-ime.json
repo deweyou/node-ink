@@ -1,0 +1,45 @@
+{
+  "commit": "c0f7553",
+  "build": "release-wasm-dev-host",
+  "engineAlgorithmVersion": "phase0-s4",
+  "browser": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36",
+  "os": "MacIntel",
+  "hardware": {
+    "logicalProcessors": 18,
+    "deviceMemoryGb": 32,
+    "display": "2056x1329@2x"
+  },
+  "sample": {
+    "runs": 3,
+    "content": ["english-multiline", "cjk", "emoji"],
+    "repeatedResolutions": 1000,
+    "includesImeComposition": true,
+    "fixtureFont": "Arial"
+  },
+  "metrics": {
+    "measureRequestRunCount": 3,
+    "firstMeasuredRunCount": 3,
+    "cachedHitCount": 3,
+    "firstMeasureMs": 7.5,
+    "cachedMeasureMs": 0,
+    "firstResolveMs": 0.3999999761581421,
+    "cachedResolveMs": 0,
+    "uniqueRepeatedHashCount": 1,
+    "imeCommitCount": 1
+  },
+  "fingerprints": {
+    "before": "nodeink-fixture-font-v1:loaded:Arial",
+    "afterInvalidation": "nodeink-fixture-font-v2:loaded:Arial"
+  },
+  "hashes": {
+    "before": "fnv1a64:9616a3f09e3f5fe0",
+    "afterInvalidation": "fnv1a64:d217edd628b07f1d"
+  },
+  "decision": {
+    "compositionWasNotInterrupted": true,
+    "sameMetricsFixtureIsStable": true,
+    "fontChangeInvalidatesFingerprintAndHash": true,
+    "cacheHitAvoidsRemeasure": true,
+    "phase1FontPackagingDecision": "pending_product_confirmation"
+  }
+}

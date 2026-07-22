@@ -292,6 +292,10 @@ export type {
   StrokeBenchmarkReportV1,
   StrokeBenchmarkVariantResultV1,
 } from './stroke-benchmark';
+export { attachImeComposition } from './ime-input';
+export type { ImeCompositionBindingV1, ImeCompositionStateV1 } from './ime-input';
+export { CanvasTextMetricsAdapter } from './text-metrics';
+export type { CanvasTextMetricsAdapterOptions, TextMeasureBatchResultV1 } from './text-metrics';
 
 function createRectangle(
   id: string,

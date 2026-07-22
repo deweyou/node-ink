@@ -11,6 +11,7 @@ const wasm = vi.hoisted(() => {
     handleStrokeBatchJson: vi.fn(),
     handleStrokePoints: vi.fn(),
     resolveSceneProfile: vi.fn(),
+    resolveTextFixture: vi.fn(),
     undo: vi.fn(),
     redo: vi.fn(),
     free: vi.fn(),
@@ -39,6 +40,7 @@ describe('createWasmEngine', () => {
     wasm.handle.handleStrokeBatchJson.mockReturnValue(strokeUpdate());
     wasm.handle.handleStrokePoints.mockReturnValue(strokeUpdate());
     wasm.handle.resolveSceneProfile.mockReturnValue(sceneResolution());
+    wasm.handle.resolveTextFixture.mockReturnValue(textResolution());
     wasm.handle.undo.mockReturnValue(update);
     wasm.handle.redo.mockReturnValue(update);
   });
@@ -93,6 +95,19 @@ describe('createWasmEngine', () => {
       engineAlgorithmVersion: 'nodeink-scene-v1',
       canonicalHash: 'fnv1a64:1234',
     });
+    const textRuns = [
+      {
+        key: 'cjk',
+        text: '你好',
+        fontFamily: 'Arial',
+        fontSize: 20,
+        fontWeight: 400 as const,
+        maxWidth: null,
+      },
+    ];
+    await expect(
+      engine.resolveTextFixture('measure-1', 'font-v1', textRuns, null),
+    ).resolves.toMatchObject({ request: { requestId: 'measure-1' }, scene: null });
     await expect(
       engine.handleStrokeBatch(strokeBatch, 'stroke-typed', 'typed_array'),
     ).resolves.toMatchObject({ processedPointCount: 2, didCommit: false });
@@ -120,6 +135,12 @@ describe('createWasmEngine', () => {
     );
     expect(wasm.handle.resolveSceneProfile).toHaveBeenCalledWith(
       JSON.stringify({ kind: 'clean', version: 1 }),
+    );
+    expect(wasm.handle.resolveTextFixture).toHaveBeenCalledWith(
+      'measure-1',
+      'font-v1',
+      JSON.stringify(textRuns),
+      undefined,
     );
   });
 
@@ -169,6 +190,13 @@ describe('createWasmEngine', () => {
     });
     await expect(engine.resolveSceneProfile({ kind: 'clean', version: 1 })).rejects.toThrow(
       'profile rejected',
+    );
+
+    wasm.handle.resolveTextFixture.mockImplementation(() => {
+      throw new Error(JSON.stringify({ message: 'metrics rejected' }));
+    });
+    await expect(engine.resolveTextFixture('measure', 'font-v1', [], null)).rejects.toThrow(
+      'metrics rejected',
     );
   });
 
@@ -232,5 +260,13 @@ function sceneResolution(): string {
     renderProfile: { kind: 'clean', version: 1 },
     canonicalHash: 'fnv1a64:1234',
     scene: JSON.parse(validUpdate()).scene,
+  });
+}
+
+function textResolution(): string {
+  return JSON.stringify({
+    request: { requestId: 'measure-1', fontFingerprint: 'font-v1', runs: [] },
+    scene: null,
+    canonicalHash: null,
   });
 }

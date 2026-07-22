@@ -91,6 +91,45 @@ export interface SceneResolutionV1 {
   scene: SceneSnapshotV1;
 }
 
+export interface TextRunV1 {
+  key: string;
+  text: string;
+  fontFamily: string;
+  fontSize: number;
+  fontWeight: 400 | 500;
+  maxWidth: number | null;
+}
+
+export interface TextMetricsV1 {
+  key: string;
+  width: number;
+  height: number;
+  baseline: number;
+  lineBreaks: number[];
+}
+
+export interface TextMeasureRequestV1 {
+  requestId: string;
+  fontFingerprint: string;
+  runs: TextRunV1[];
+}
+
+export interface TextMetricsSnapshotV1 {
+  fontFingerprint: string;
+  metrics: TextMetricsV1[];
+}
+
+export interface TextFixtureSceneV1 {
+  fontFingerprint: string;
+  runs: Array<{ run: TextRunV1; metrics: TextMetricsV1 }>;
+}
+
+export interface TextFixtureResolutionV1 {
+  request: TextMeasureRequestV1 | null;
+  scene: TextFixtureSceneV1 | null;
+  canonicalHash: string | null;
+}
+
 export type SceneNodeV1 = SceneRectV1 | ScenePathV1;
 
 export interface SceneRectV1 {
@@ -128,6 +167,12 @@ export interface EnginePortV1 {
     transport: StrokeTransportV1,
   ): Promise<StrokeUpdateV1>;
   resolveSceneProfile(profile: RenderProfileV1): Promise<SceneResolutionV1>;
+  resolveTextFixture(
+    requestId: string,
+    fontFingerprint: string,
+    runs: TextRunV1[],
+    metrics: TextMetricsSnapshotV1 | null,
+  ): Promise<TextFixtureResolutionV1>;
   undo(): Promise<EngineUpdateV1>;
   redo(): Promise<EngineUpdateV1>;
   dispose(): void;
@@ -273,6 +318,19 @@ export function parseSceneResolution(value: string): SceneResolutionV1 {
       }),
     ).scene,
   };
+}
+
+export function parseTextFixtureResolution(value: string): TextFixtureResolutionV1 {
+  const parsed: unknown = JSON.parse(value);
+  if (
+    !isRecord(parsed) ||
+    (parsed.request !== null && !isRecord(parsed.request)) ||
+    (parsed.scene !== null && !isRecord(parsed.scene)) ||
+    (parsed.canonicalHash !== null && typeof parsed.canonicalHash !== 'string')
+  ) {
+    throw new Error('Engine returned an invalid text fixture resolution payload');
+  }
+  return parsed as unknown as TextFixtureResolutionV1;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

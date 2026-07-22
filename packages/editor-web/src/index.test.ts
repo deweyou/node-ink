@@ -13,6 +13,9 @@ import type {
   StrokeInputBatchV1,
   StrokeTransportV1,
   StrokeUpdateV1,
+  TextFixtureResolutionV1,
+  TextMetricsSnapshotV1,
+  TextRunV1,
 } from '@nodeink-internal/protocol';
 
 import { EditorWebController } from './index';
@@ -253,6 +256,19 @@ class StubEngine implements EnginePortV1 {
       renderProfile: profile,
       canonicalHash: 'fnv1a64:test',
       scene: this.update().scene,
+    };
+  }
+
+  async resolveTextFixture(
+    requestId: string,
+    fontFingerprint: string,
+    runs: TextRunV1[],
+    _metrics: TextMetricsSnapshotV1 | null,
+  ): Promise<TextFixtureResolutionV1> {
+    return {
+      request: { requestId, fontFingerprint, runs },
+      scene: null,
+      canonicalHash: null,
     };
   }
 

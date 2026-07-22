@@ -12,7 +12,7 @@ flowchart LR
 
 > 日期：2026-07-21
 > 状态：已实现并验证
-> 覆盖 Spike：S0、S1、S2、S3、S10 的最小事务边界、S11、S12
+> 覆盖 Spike：S0、S1、S2、S3、S4、S10 的最小事务边界、S11、S12
 
 ## 结论
 
@@ -47,6 +47,7 @@ Rust nodeink-core
 - 矩形 Pointer drag：Move 只更新 Scene preview，PointerUp 才生成一个可撤销的 Document command。
 - 自由笔 Stroke：Rust 累积点并解析 SVG path，支持 JSON point 与 Float64Array batch，PointerUp 只提交一个 Undo entry。
 - 确定性 Sketch：Rust 使用显式 profile、seed 与算法版本生成矩形轮廓、hachure fill 和自由笔 path。
+- 文本与 IME：Rust 发出缺失 metrics request；TypeScript 测量固定 fixture 字体并按 fingerprint 缓存；composition buffer 不进入 Command。
 
 这不是日常可用的编辑器，也不包含持久化、Camera、选择框、文本/IME、自由笔、
 Mermaid 导入或公共 SDK。
@@ -67,6 +68,7 @@ Mermaid 导入或公共 SDK。
 | S1 release WASM browser benchmark | 单事件和 batch-8 均 P95 约 0.1ms、0 ignored、1 commit、0 long task |
 | S2 release WASM browser benchmark | JSON point 与 TypedArray batch-2/8/32 均 0 ignored、1 commit、0 long task；batch-2 首点估算 P95 13.03ms |
 | S3 Native/WASM canonical hash | 4 组 hash 逐项一致；同输入 WASM 连续解析 1,000 次只有 1 个 hash |
+| S4 text/IME browser benchmark | 3 个 run 首次测量、缓存后 3/3 命中；1,000 次 hash 稳定；font/IME 失效与提交边界正确 |
 | `git diff --check` | 通过 |
 
 真实浏览器中分别验证了 React 和 Vanilla 两个入口：
@@ -117,6 +119,17 @@ WASM 对 clean、seed-42、seed-43、roughness-2 产生完全一致的 canonical
 - FNV-1a 仅作为快速 canonical fixture hash，不作为安全完整性校验；S7 持久化仍使用 SHA-256 类完整性摘要。
 - Phase 0 的 seed 是显式 resolver 输入；进入 Phase 1A 时按架构草案落入元素公共字段并通过 Command 修改。
 
+## S4 文本测量与 IME 决策
+
+真实浏览器证据见 [`phase0-s4-text-ime.json`](../benchmarks/phase0-s4-text-ime.json)，测试源代码
+锚定提交 `c0f7553`。fixture 覆盖英文多行、中文和 emoji；Rust 两阶段 resolver 与浏览器
+Canvas metrics adapter 通过 fingerprint 交换数据，不让 Rust 读取 DOM 或浏览器字体 API。
+
+- 首次 3 个 run 测量 7.5ms，缓存后 3/3 命中且本次记录为 0ms；resolve 分别约 0.4ms/0ms。
+- 同一 metrics fixture 连续解析 1,000 次只有一个 hash；font epoch 改变后 fingerprint 与 hash 都变化。
+- 中文 composition 期间不提交，也拒绝外部 snapshot 覆盖 buffer；compositionend 只提交一次。
+- S4 证明两阶段协议可行，但 Arial 只是本机 Spike fixture，不是产品字体决定。P-02 仍需产品确认是否随应用捆绑固定画布字体。
+
 ## 工具链说明
 
 - Node：`24.15.0`
@@ -134,11 +147,11 @@ macOS 在仓库内 Cargo `target/` 上触发过扩展属性相关的 `Operation 
 
 按风险顺序继续 Phase 0，而不是直接铺开完整 UI：
 
-1. S4 文本测量与 IME，并在实现文本前确认 P-02 字体决策。
-2. S5/S6 ScenePatch、SVG 更新与裁剪预算。
-3. S7/S8 持久化、原子恢复与 migration fixture。
-4. S9 多标签页写入权与只读降级。
-5. 补齐 S10/S11/S12 的完整退出证据。
+1. S5/S6 ScenePatch、SVG 更新与裁剪预算。
+2. S7/S8 持久化、原子恢复与 migration fixture。
+3. S9 多标签页写入权与只读降级。
+4. 补齐 S10/S11/S12 的完整退出证据。
+5. Phase 1A 文本实现前确认 P-02 固定画布字体产品决策。
 
 ---
-*Last updated: 2026-07-22 | Reason: record S3 Native/WASM deterministic Sketch evidence*
+*Last updated: 2026-07-22 | Reason: record S4 two-phase text measurement and IME evidence*

@@ -3,6 +3,7 @@ import {
   parsePointerUpdate,
   parseSceneResolution,
   parseStrokeUpdate,
+  parseTextFixtureResolution,
   type CommandEnvelopeV1,
   type EnginePortV1,
   type EngineUpdateV1,
@@ -14,6 +15,9 @@ import {
   type StrokeInputBatchV1,
   type StrokeTransportV1,
   type StrokeUpdateV1,
+  type TextFixtureResolutionV1,
+  type TextMetricsSnapshotV1,
+  type TextRunV1,
 } from '@nodeink-internal/protocol';
 
 interface WasmEngineHandle {
@@ -30,6 +34,12 @@ interface WasmEngineHandle {
     commandId: string,
   ): string;
   resolveSceneProfile(profileJson: string): string;
+  resolveTextFixture(
+    requestId: string,
+    fontFingerprint: string,
+    runsJson: string,
+    metricsJson: string | undefined,
+  ): string;
   undo(): string;
   redo(): string;
   free(): void;
@@ -108,6 +118,26 @@ class WasmEnginePort implements EnginePortV1 {
     try {
       return parseSceneResolution(
         this.requireHandle().resolveSceneProfile(JSON.stringify(profile)),
+      );
+    } catch (error) {
+      throw normalizeEngineError(error);
+    }
+  }
+
+  async resolveTextFixture(
+    requestId: string,
+    fontFingerprint: string,
+    runs: TextRunV1[],
+    metrics: TextMetricsSnapshotV1 | null,
+  ): Promise<TextFixtureResolutionV1> {
+    try {
+      return parseTextFixtureResolution(
+        this.requireHandle().resolveTextFixture(
+          requestId,
+          fontFingerprint,
+          JSON.stringify(runs),
+          metrics ? JSON.stringify(metrics) : undefined,
+        ),
       );
     } catch (error) {
       throw normalizeEngineError(error);

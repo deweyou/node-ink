@@ -5,6 +5,7 @@ import {
   runPlaygroundPointerBenchmark,
   runPlaygroundSketchBenchmark,
   runPlaygroundStrokeBenchmark,
+  runPlaygroundTextBenchmark,
 } from './benchmark-api';
 import { createController } from './create-controller';
 import './styles.css';
@@ -49,7 +50,12 @@ await controller.mount(canvas);
 renderControls();
 
 const benchmark = new URLSearchParams(window.location.search).get('benchmark');
-if (benchmark === 'pointer' || benchmark === 'stroke' || benchmark === 'sketch') {
+if (
+  benchmark === 'pointer' ||
+  benchmark === 'stroke' ||
+  benchmark === 'sketch' ||
+  benchmark === 'text'
+) {
   const benchmarkOutput = document.createElement('pre');
   benchmarkOutput.className = 'nodeink-benchmark';
   benchmarkOutput.dataset.benchmarkResults = benchmark;
@@ -61,7 +67,9 @@ if (benchmark === 'pointer' || benchmark === 'stroke' || benchmark === 'sketch')
         ? await runPlaygroundPointerBenchmark(controller)
         : benchmark === 'stroke'
           ? await runPlaygroundStrokeBenchmark(controller)
-          : await runPlaygroundSketchBenchmark(),
+          : benchmark === 'sketch'
+            ? await runPlaygroundSketchBenchmark()
+            : await runPlaygroundTextBenchmark(),
       null,
       2,
     );
