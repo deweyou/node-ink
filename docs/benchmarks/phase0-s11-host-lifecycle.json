@@ -1,0 +1,66 @@
+{
+  "commit": "e70a684",
+  "build": "release-wasm-dev-host",
+  "engineAlgorithmVersion": "phase0-s11",
+  "browser": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36",
+  "os": "MacIntel",
+  "hardware": {
+    "logicalProcessors": 18,
+    "deviceMemoryGb": 32,
+    "display": "2056x1329@2x"
+  },
+  "cycles": 25,
+  "actionLoop": {
+    "createMoveUndoPassed": 25,
+    "finalRevision": 3,
+    "finalRectangleX": 80
+  },
+  "lifecycle": {
+    "pointerListenerAdds": 100,
+    "pointerListenerRemoves": 100,
+    "activePointerListeners": 0,
+    "subscriptionNotifications": 100,
+    "engineHandleDisposeCalls": 25,
+    "disposedHandlesRejectedUse": 25,
+    "rendererUnmountCalls": 25,
+    "residualSvgCount": 0,
+    "timerApiReferencesInCoreWebLifecycleSources": 0
+  },
+  "visibleHostLoops": {
+    "vanilla": {
+      "host": "vanilla",
+      "finalRevision": 3,
+      "elementCount": 1,
+      "rectangleX": 80,
+      "svgCount": 1
+    },
+    "react": {
+      "host": "react",
+      "finalRevision": 3,
+      "elementCount": 1,
+      "rectangleX": 80,
+      "svgCount": 1
+    }
+  },
+  "productionBuild": {
+    "command": "pnpm exec vp build apps/playground",
+    "durationMs": 90,
+    "reactAndVanillaEntrypoints": true
+  },
+  "quality": {
+    "webTests": 134,
+    "webLinesPercent": 99,
+    "webBranchesPercent": 92.08,
+    "rustLinesPercent": 98.86,
+    "frameworkBoundaryGate": "passed"
+  },
+  "decision": {
+    "listenersArePaired": true,
+    "subscriptionsAreDetached": true,
+    "engineHandlesAreReleasedOnce": true,
+    "rendererDomIsRemoved": true,
+    "repeatedCreateMoveUndoIsStable": true,
+    "hostsShareControllerEngineAndRenderer": true
+  },
+  "browserWarningsOrErrors": []
+}

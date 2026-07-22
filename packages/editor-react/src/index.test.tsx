@@ -17,10 +17,11 @@ beforeAll(() => {
 
 describe('NodeInkEditor', () => {
   let target: HTMLDivElement;
-  let root: Root;
+  let root: Root | null;
 
   afterEach(async () => {
     await act(async () => root?.unmount());
+    root = null;
   });
 
   it('mounts the shared controller and dispatches every visible action', async () => {
@@ -28,7 +29,7 @@ describe('NodeInkEditor', () => {
     target = document.createElement('div');
     root = createRoot(target);
 
-    await act(async () => root.render(<NodeInkEditor controller={controller} />));
+    await act(async () => root?.render(<NodeInkEditor controller={controller} />));
 
     expect(target.querySelector('[data-nodeink-host="react"]')).not.toBeNull();
     expect(target.querySelector('.nodeink-host-badge')?.textContent).toBe('React adapter');
@@ -66,11 +67,25 @@ describe('NodeInkEditor', () => {
     root = createRoot(target);
 
     await act(async () =>
-      root.render(<NodeInkEditor controller={controller} hostLabel="Embedded React" />),
+      root?.render(<NodeInkEditor controller={controller} hostLabel="Embedded React" />),
     );
 
     expect(target.querySelector('.nodeink-host-badge')?.textContent).toBe('Embedded React');
     expect(controller.disposeCalls).toBe(0);
+  });
+
+  it('unsubscribes the shared store and disposes the controller once on unmount', async () => {
+    const controller = new StubController();
+    target = document.createElement('div');
+    root = createRoot(target);
+    await act(async () => root?.render(<NodeInkEditor controller={controller} />));
+
+    expect(controller.listenerCount).toBe(1);
+    await act(async () => root?.unmount());
+    root = null;
+
+    expect(controller.listenerCount).toBe(0);
+    expect(controller.disposeCalls).toBe(1);
   });
 });
 
@@ -80,6 +95,9 @@ class StubController implements EditorWebControllerV1 {
   readonly #mountError: Error | null;
   mountTarget: HTMLElement | null = null;
   disposeCalls = 0;
+  get listenerCount(): number {
+    return this.#listeners.size;
+  }
   #snapshot: EditorUiSnapshotV1 = {
     status: 'booting',
     documentRevision: 0,

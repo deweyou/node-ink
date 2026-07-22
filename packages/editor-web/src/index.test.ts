@@ -194,6 +194,49 @@ describe('EditorWebController', () => {
 
     expect(controller.getSnapshot().activeElementId).toBe('existing-rect');
   });
+
+  it('pairs pointer listeners across repeated mounts and releases resources once', async () => {
+    const engine = new StubEngine();
+    const renderer = new StubRenderer();
+    const controller = new EditorWebController({ engine, renderer });
+    const firstTarget = document.createElement('div');
+    const secondTarget = document.createElement('div');
+    const firstAdd = vi.spyOn(firstTarget, 'addEventListener');
+    const firstRemove = vi.spyOn(firstTarget, 'removeEventListener');
+    const secondAdd = vi.spyOn(secondTarget, 'addEventListener');
+    const secondRemove = vi.spyOn(secondTarget, 'removeEventListener');
+
+    await controller.mount(firstTarget);
+    await controller.mount(secondTarget);
+
+    expect(firstAdd.mock.calls.map(([type]) => type)).toEqual([
+      'pointerdown',
+      'pointermove',
+      'pointerup',
+      'pointercancel',
+    ]);
+    expect(firstRemove.mock.calls.map(([type]) => type)).toEqual([
+      'pointerdown',
+      'pointermove',
+      'pointerup',
+      'pointercancel',
+    ]);
+    expect(secondAdd).toHaveBeenCalledTimes(4);
+    expect(secondRemove).not.toHaveBeenCalled();
+    expect(renderer.mountCalls).toBe(2);
+
+    controller.dispose();
+    controller.dispose();
+
+    expect(secondRemove.mock.calls.map(([type]) => type)).toEqual([
+      'pointerdown',
+      'pointermove',
+      'pointerup',
+      'pointercancel',
+    ]);
+    expect(engine.disposeCalls).toBe(1);
+    expect(renderer.unmountCalls).toBe(1);
+  });
 });
 
 class StubEngine implements EnginePortV1 {
@@ -374,9 +417,12 @@ class StubEngine implements EnginePortV1 {
 class StubRenderer implements RendererV1 {
   readonly snapshots: SceneSnapshotV1[] = [];
   shouldReject = false;
+  mountCalls = 0;
   unmountCalls = 0;
 
-  mount(): void {}
+  mount(): void {
+    this.mountCalls += 1;
+  }
 
   setViewport() {
     return { durationMs: 0 };

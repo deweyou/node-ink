@@ -694,6 +694,8 @@ interface EditorWebControllerV1 {
 - React adapter 把 `subscribe` 映射为框架状态订阅；未来 Vue/Vanilla host 使用相同契约，不新增第二套 Engine 或 Renderer API。
 - `dispose` 是唯一宿主销毁入口，负责释放 DOM listener、Text Overlay、Renderer、保存调度器和 Engine handle。
 - UI adapter 不直接调用 Renderer 私有方法，也不直接访问 wasm-bindgen glue 或 IndexedDB。
+- Phase 0 的 React 与 Vanilla host 已用同一 Controller/EnginePort/Renderer 完成 create/move/undo；25 轮真实 WASM mount/dispose 中 100 次 Pointer listener add/remove 完全配对，25 个 Engine handle 与 Renderer DOM 全部释放。
+- 根 `pnpm check` 执行 framework boundary gate，禁止 `protocol`、`engine-web`、`editor-web`、`renderer-svg`、`persistence-web` 导入 React/Vue；框架代码只能存在于 adapter 或 host。
 
 ### 13.5 Renderer 分歧决策
 

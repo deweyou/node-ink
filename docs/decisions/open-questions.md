@@ -150,6 +150,14 @@
 - 同一 batch 从相同 Document/revision 重放时结果、ScenePatch 与最终 Document 逐字节一致；在已推进的 revision 上重放则明确冲突。
 - Renderer 只消费来源无关的 ScenePatch，不知道调用来自 UI、SDK、CLI、MCP 或未来 Mermaid adapter。
 
+### D-23 框架无关宿主与销毁契约
+
+- React 与 Vanilla host 都只消费 `EditorWebControllerV1` 的 mount/getSnapshot/subscribe/dispatch/dispose；EnginePort 和 SVG Renderer 不因宿主框架分叉。
+- `dispose` 幂等地移除 Pointer listener、清空 subscription、卸载 Renderer DOM 并释放一次 WASM Engine handle；释放后的 handle 明确拒绝后续调用。
+- 本机真实 WASM 连续 25 轮 mount/create/move/undo/dispose：100 次 Pointer listener add/remove 配对、25 个 handle 全部释放、0 active listener、0 residual SVG。
+- React 与 Vanilla 可见入口均从 r0 完成 create→r1、move→r2、undo→r3，矩形 x 恢复 80；浏览器无 warn/error。
+- `pnpm check` 固化 React/Vue import boundary；新增 Vue 等适配器时只能依赖框架无关包，不能把框架依赖下沉。
+
 ## 22. 需要产品负责人决策的问题
 
 以下问题不阻碍继续评审文档，但会阻碍对应功能进入实现。

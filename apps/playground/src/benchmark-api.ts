@@ -1,6 +1,7 @@
 import {
   attachImeComposition,
   CanvasTextMetricsAdapter,
+  EditorWebController,
   runPointerBenchmark,
   runStrokeBenchmark,
   type EditorWebControllerV1,
@@ -22,7 +23,9 @@ import {
 } from '@nodeink-internal/persistence-web';
 import type {
   DiagramOperationBatchV1,
+  EnginePortV1,
   NodeInkDocumentV1,
+  RendererV1,
   RenderProfileV1,
   SceneBenchmarkPayloadV1,
   SceneNodeV1,
@@ -30,6 +33,7 @@ import type {
   SceneResolutionV1,
   SceneSnapshotV1,
   TextRunV1,
+  ViewportV1,
 } from '@nodeink-internal/protocol';
 import { SvgRenderer } from '@nodeink-internal/renderer-svg';
 
@@ -252,6 +256,37 @@ export interface PlaygroundOperationBenchmarkReport {
   };
 }
 
+export interface PlaygroundLifecycleBenchmarkReport {
+  build: 'release-wasm-dev-host';
+  engineAlgorithmVersion: 'phase0-s11';
+  browser: string;
+  os: string;
+  hardware: PlaygroundBenchmarkHardware;
+  cycles: 25;
+  actionLoop: {
+    createMoveUndoPassed: 25;
+    finalRevision: 3;
+    finalRectangleX: 80;
+  };
+  lifecycle: {
+    pointerListenerAdds: 100;
+    pointerListenerRemoves: 100;
+    activePointerListeners: 0;
+    subscriptionNotifications: 100;
+    engineHandleDisposeCalls: 25;
+    disposedHandlesRejectedUse: 25;
+    rendererUnmountCalls: 25;
+    residualSvgCount: 0;
+  };
+  decision: {
+    listenersArePaired: boolean;
+    subscriptionsAreDetached: boolean;
+    engineHandlesAreReleasedOnce: boolean;
+    rendererDomIsRemoved: boolean;
+    repeatedCreateMoveUndoIsStable: boolean;
+  };
+}
+
 interface PersistenceSizeScenarioReport {
   payloadBytes: 1_048_576 | 10_485_760;
   iterations: 5;
@@ -328,6 +363,7 @@ declare global {
     nodeInkRunPersistenceBenchmark?: () => Promise<PlaygroundPersistenceBenchmarkReport>;
     nodeInkRunMigrationBenchmark?: () => Promise<PlaygroundMigrationBenchmarkReport>;
     nodeInkRunOperationBenchmark?: () => Promise<PlaygroundOperationBenchmarkReport>;
+    nodeInkRunLifecycleBenchmark?: () => Promise<PlaygroundLifecycleBenchmarkReport>;
     nodeInkReleaseLeaseBenchmark?: () => Promise<number>;
   }
 }
@@ -342,6 +378,7 @@ export function exposePointerBenchmark(controller: EditorWebControllerV1): void 
   window.nodeInkRunPersistenceBenchmark = () => runPlaygroundPersistenceBenchmark();
   window.nodeInkRunMigrationBenchmark = () => runPlaygroundMigrationBenchmark();
   window.nodeInkRunOperationBenchmark = () => runPlaygroundOperationBenchmark();
+  window.nodeInkRunLifecycleBenchmark = () => runPlaygroundLifecycleBenchmark();
   window.nodeInkReleaseLeaseBenchmark = () => releasePlaygroundLeaseBenchmark();
 }
 
@@ -1109,6 +1146,202 @@ function atomicFailureBatch(): DiagramOperationBatchV1 {
         delta: { x: 1, y: 1 },
       },
     ],
+  };
+}
+
+export async function runPlaygroundLifecycleBenchmark(): Promise<PlaygroundLifecycleBenchmarkReport> {
+  const cycles = 25;
+  let createMoveUndoPassed = 0;
+  let pointerListenerAdds = 0;
+  let pointerListenerRemoves = 0;
+  let activePointerListeners = 0;
+  let subscriptionNotifications = 0;
+  let engineHandleDisposeCalls = 0;
+  let disposedHandlesRejectedUse = 0;
+  let rendererUnmountCalls = 0;
+  let residualSvgCount = 0;
+
+  for (let index = 0; index < cycles; index += 1) {
+    const engine = await createWasmEngine(operationDocument(`lifecycle-${index}`));
+    const trackedEngine = trackEngineDispose(engine, () => {
+      engineHandleDisposeCalls += 1;
+    });
+    const renderer = new LifecycleRenderer();
+    const controller = new EditorWebController({
+      engine: trackedEngine,
+      renderer,
+      createId: lifecycleIdFactory(index),
+    });
+    const target = document.createElement('div');
+    const listenerTracker = trackPointerListeners(target);
+    const unsubscribe = controller.subscribe(() => {
+      subscriptionNotifications += 1;
+    });
+
+    await controller.mount(target);
+    const created = await controller.dispatch({
+      type: 'create_rectangle',
+      elementId: `rect-${index}`,
+    });
+    const moved = await controller.dispatch({
+      type: 'move_active',
+      delta: { x: 32, y: 16 },
+    });
+    const undone = await controller.dispatch({ type: 'undo' });
+    const rectangleX = Number(target.querySelector('rect')?.getAttribute('x'));
+    if (
+      created.ok &&
+      moved.ok &&
+      undone.ok &&
+      created.snapshot.documentRevision === 1 &&
+      moved.snapshot.documentRevision === 2 &&
+      undone.snapshot.documentRevision === 3 &&
+      rectangleX === 80
+    ) {
+      createMoveUndoPassed += 1;
+    }
+
+    unsubscribe();
+    controller.dispose();
+    controller.dispose();
+    pointerListenerAdds += listenerTracker.addCount();
+    pointerListenerRemoves += listenerTracker.removeCount();
+    activePointerListeners += listenerTracker.activeCount();
+    rendererUnmountCalls += renderer.unmountCalls;
+    residualSvgCount += target.querySelectorAll('svg').length;
+    try {
+      await engine.currentUpdate();
+    } catch {
+      disposedHandlesRejectedUse += 1;
+    }
+  }
+
+  if (
+    createMoveUndoPassed !== 25 ||
+    pointerListenerAdds !== 100 ||
+    pointerListenerRemoves !== 100 ||
+    activePointerListeners !== 0 ||
+    subscriptionNotifications !== 100 ||
+    engineHandleDisposeCalls !== 25 ||
+    disposedHandlesRejectedUse !== 25 ||
+    rendererUnmountCalls !== 25 ||
+    residualSvgCount !== 0
+  ) {
+    throw new Error('repeated controller lifecycle fixture leaked or diverged');
+  }
+
+  return {
+    build: 'release-wasm-dev-host',
+    engineAlgorithmVersion: 'phase0-s11',
+    ...benchmarkEnvironment(),
+    cycles,
+    actionLoop: {
+      createMoveUndoPassed,
+      finalRevision: 3,
+      finalRectangleX: 80,
+    },
+    lifecycle: {
+      pointerListenerAdds,
+      pointerListenerRemoves,
+      activePointerListeners,
+      subscriptionNotifications,
+      engineHandleDisposeCalls,
+      disposedHandlesRejectedUse,
+      rendererUnmountCalls,
+      residualSvgCount,
+    },
+    decision: {
+      listenersArePaired: pointerListenerAdds === pointerListenerRemoves,
+      subscriptionsAreDetached: subscriptionNotifications === cycles * 4,
+      engineHandlesAreReleasedOnce:
+        engineHandleDisposeCalls === cycles && disposedHandlesRejectedUse === cycles,
+      rendererDomIsRemoved: rendererUnmountCalls === cycles && residualSvgCount === 0,
+      repeatedCreateMoveUndoIsStable: createMoveUndoPassed === cycles,
+    },
+  };
+}
+
+class LifecycleRenderer implements RendererV1 {
+  readonly #renderer = new SvgRenderer();
+  unmountCalls = 0;
+
+  mount(target: HTMLElement): void {
+    this.#renderer.mount(target);
+  }
+
+  setViewport(viewport: ViewportV1) {
+    return this.#renderer.setViewport(viewport);
+  }
+
+  applySnapshot(snapshot: SceneSnapshotV1) {
+    return this.#renderer.applySnapshot(snapshot);
+  }
+
+  applyPatch(patch: ScenePatchV1) {
+    return this.#renderer.applyPatch(patch);
+  }
+
+  unmount(): void {
+    this.unmountCalls += 1;
+    this.#renderer.unmount();
+  }
+}
+
+function trackEngineDispose(engine: EnginePortV1, onDispose: () => void): EnginePortV1 {
+  return new Proxy(engine, {
+    get(target, property) {
+      if (property === 'dispose') {
+        return () => {
+          onDispose();
+          target.dispose();
+        };
+      }
+      const value: unknown = Reflect.get(target, property, target);
+      return typeof value === 'function' ? value.bind(target) : value;
+    },
+  });
+}
+
+function lifecycleIdFactory(cycle: number): () => string {
+  let next = 0;
+  return () => `lifecycle-${cycle}-${next++}`;
+}
+
+function trackPointerListeners(target: HTMLElement) {
+  const pointerTypes = new Set(['pointerdown', 'pointermove', 'pointerup', 'pointercancel']);
+  const active = new Map<string, Set<EventListenerOrEventListenerObject>>();
+  const originalAdd = target.addEventListener.bind(target);
+  const originalRemove = target.removeEventListener.bind(target);
+  let adds = 0;
+  let removes = 0;
+  target.addEventListener = ((
+    type: string,
+    listener: EventListenerOrEventListenerObject,
+    options?: boolean | AddEventListenerOptions,
+  ) => {
+    if (pointerTypes.has(type)) {
+      adds += 1;
+      const listeners = active.get(type) ?? new Set<EventListenerOrEventListenerObject>();
+      listeners.add(listener);
+      active.set(type, listeners);
+    }
+    originalAdd(type, listener, options);
+  }) as typeof target.addEventListener;
+  target.removeEventListener = ((
+    type: string,
+    listener: EventListenerOrEventListenerObject,
+    options?: boolean | EventListenerOptions,
+  ) => {
+    if (pointerTypes.has(type)) {
+      removes += 1;
+      active.get(type)?.delete(listener);
+    }
+    originalRemove(type, listener, options);
+  }) as typeof target.removeEventListener;
+  return {
+    addCount: () => adds,
+    removeCount: () => removes,
+    activeCount: () => [...active.values()].reduce((total, listeners) => total + listeners.size, 0),
   };
 }
 
