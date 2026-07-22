@@ -32,6 +32,25 @@ export interface Vec2 {
   y: number;
 }
 
+export const minCameraZoom = 0.1;
+export const maxCameraZoom = 8;
+
+export interface CameraV1 {
+  x: number;
+  y: number;
+  zoom: number;
+}
+
+export interface CameraViewportV1 {
+  width: number;
+  height: number;
+}
+
+export type CameraActionV1 =
+  | { type: 'pan_by'; delta: Vec2 }
+  | { type: 'zoom_at'; factor: number; anchor: Vec2 }
+  | { type: 'fit_content'; viewport: CameraViewportV1; padding: number };
+
 export interface CommandEnvelopeV1 {
   protocolVersion: 1;
   commandId: string;
@@ -276,6 +295,10 @@ export interface RenderViewportResultV1 {
 
 export interface EnginePortV1 {
   currentUpdate(): Promise<EngineUpdateV1>;
+  currentCamera(): Promise<CameraV1>;
+  setCamera(camera: CameraV1): Promise<CameraV1>;
+  fitCamera(viewport: CameraViewportV1, padding: number): Promise<CameraV1>;
+  applyCameraAction(action: CameraActionV1): Promise<CameraV1>;
   executeCommand(command: CommandEnvelopeV1): Promise<EngineUpdateV1>;
   executeDiagramOperation(batch: DiagramOperationBatchV1): Promise<DiagramOperationBatchResultV1>;
   handlePointerEvents(
@@ -390,6 +413,24 @@ export function parseEngineUpdate(value: string): EngineUpdateV1 {
     throw new Error('Engine update does not satisfy protocol V1');
   }
   return parsed as unknown as EngineUpdateV1;
+}
+
+export function parseCamera(value: string): CameraV1 {
+  const parsed: unknown = JSON.parse(value);
+  if (
+    !isRecord(parsed) ||
+    typeof parsed.x !== 'number' ||
+    !Number.isFinite(parsed.x) ||
+    typeof parsed.y !== 'number' ||
+    !Number.isFinite(parsed.y) ||
+    typeof parsed.zoom !== 'number' ||
+    !Number.isFinite(parsed.zoom) ||
+    parsed.zoom < minCameraZoom ||
+    parsed.zoom > maxCameraZoom
+  ) {
+    throw new Error('Camera does not satisfy Camera V1');
+  }
+  return parsed as unknown as CameraV1;
 }
 
 export function parseSceneSnapshot(value: string): SceneSnapshotV1 {

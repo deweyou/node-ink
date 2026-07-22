@@ -3,6 +3,7 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+mod camera;
 mod migration;
 mod operation;
 mod pointer;
@@ -11,6 +12,8 @@ mod sketch;
 mod stroke;
 mod text;
 
+use camera::CameraContentBounds;
+pub use camera::{CameraActionV1, CameraV1, CameraViewportV1, MAX_CAMERA_ZOOM, MIN_CAMERA_ZOOM};
 pub use migration::{
     MigrationAttemptV1, MigrationReportV1, MigrationResultV1, migrate_document_payload,
 };
@@ -287,6 +290,10 @@ pub enum EngineErrorV1 {
     InvalidRectangle { element_id: ElementId },
     #[error("invalid movement delta")]
     InvalidDelta,
+    #[error("invalid camera state")]
+    InvalidCamera,
+    #[error("invalid camera action")]
+    InvalidCameraAction,
     #[error("invalid stroke geometry for {element_id}")]
     InvalidStroke { element_id: ElementId },
     #[error("invalid stroke input: {reason}")]
@@ -314,6 +321,7 @@ pub enum EngineErrorV1 {
 #[derive(Debug, Clone)]
 pub struct Engine {
     document: NodeInkDocumentV1,
+    camera: CameraV1,
     scene_revision: u64,
     undo_stack: Vec<NodeInkDocumentV1>,
     redo_stack: Vec<NodeInkDocumentV1>,
@@ -326,6 +334,7 @@ impl Engine {
         validate_document(&document)?;
         Ok(Self {
             document,
+            camera: CameraV1::default(),
             scene_revision: 0,
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
@@ -336,6 +345,36 @@ impl Engine {
 
     pub fn document(&self) -> &NodeInkDocumentV1 {
         &self.document
+    }
+
+    pub fn camera(&self) -> CameraV1 {
+        self.camera
+    }
+
+    pub fn set_camera(&mut self, camera: CameraV1) -> Result<CameraV1, EngineErrorV1> {
+        self.camera = camera.validate()?;
+        Ok(self.camera)
+    }
+
+    pub fn fit_camera(
+        &self,
+        viewport: CameraViewportV1,
+        padding: f64,
+    ) -> Result<CameraV1, EngineErrorV1> {
+        CameraV1::fit_content(document_content_bounds(&self.document), viewport, padding)
+    }
+
+    pub fn apply_camera_action(
+        &mut self,
+        action: CameraActionV1,
+    ) -> Result<CameraV1, EngineErrorV1> {
+        self.camera = match action {
+            CameraActionV1::FitContent { viewport, padding } => {
+                self.fit_camera(viewport, padding)?
+            }
+            navigation => self.camera.apply_navigation(navigation)?,
+        };
+        Ok(self.camera)
     }
 
     pub fn execute_command(
@@ -826,6 +865,37 @@ fn validate_document(document: &NodeInkDocumentV1) -> Result<(), EngineErrorV1> 
     Ok(())
 }
 
+fn document_content_bounds(document: &NodeInkDocumentV1) -> Option<CameraContentBounds> {
+    document
+        .root_order
+        .iter()
+        .filter_map(|element_id| document.elements.get(element_id))
+        .filter_map(element_content_bounds)
+        .reduce(CameraContentBounds::union)
+}
+
+fn element_content_bounds(element: &ElementRecordV1) -> Option<CameraContentBounds> {
+    match element {
+        ElementRecordV1::Rect(rectangle) => Some(CameraContentBounds::from_rect(
+            rectangle.x,
+            rectangle.y,
+            rectangle.width,
+            rectangle.height,
+        )),
+        ElementRecordV1::Stroke(stroke) => {
+            let mut points = stroke.points.iter().copied();
+            let first = points.next()?;
+            Some(
+                points
+                    .fold(CameraContentBounds::from_point(first), |bounds, point| {
+                        bounds.include_point(point)
+                    })
+                    .expand(stroke.stroke_width / 2.0),
+            )
+        }
+    }
+}
+
 fn validate_rectangle(rectangle: &RectElementV1) -> Result<(), EngineErrorV1> {
     let is_valid = !rectangle.id.trim().is_empty()
         && rectangle.x.is_finite()
@@ -998,6 +1068,202 @@ mod tests {
     use pretty_assertions::assert_eq;
 
     use super::*;
+
+    #[test]
+    fn camera_pan_and_anchor_zoom_do_not_change_document_or_history() {
+        let mut engine = Engine::open(NodeInkDocumentV1::blank("doc-1")).unwrap();
+        let before = engine.current_update();
+
+        engine
+            .apply_camera_action(CameraActionV1::PanBy {
+                delta: Vec2 { x: 80.0, y: 40.0 },
+            })
+            .unwrap();
+        let panned = engine.camera();
+        assert_eq!(
+            panned,
+            CameraV1 {
+                x: -80.0,
+                y: -40.0,
+                zoom: 1.0
+            }
+        );
+
+        engine
+            .apply_camera_action(CameraActionV1::ZoomAt {
+                factor: 2.0,
+                anchor: Vec2 { x: 200.0, y: 100.0 },
+            })
+            .unwrap();
+        assert_eq!(
+            engine.camera(),
+            CameraV1 {
+                x: 20.0,
+                y: 10.0,
+                zoom: 2.0,
+            }
+        );
+        assert_eq!(engine.current_update(), before);
+        assert!(!engine.current_update().history.can_undo);
+        assert!(!engine.current_update().history.can_redo);
+    }
+
+    #[test]
+    fn camera_fit_content_centers_document_bounds_with_screen_padding() {
+        let mut document = NodeInkDocumentV1::blank("doc-1");
+        let rectangle = RectElementV1 {
+            id: "rect-1".to_string(),
+            x: 100.0,
+            y: 50.0,
+            width: 200.0,
+            height: 100.0,
+        };
+        document.root_order.push(rectangle.id.clone());
+        document
+            .elements
+            .insert(rectangle.id.clone(), ElementRecordV1::Rect(rectangle));
+        let nested_rectangle = RectElementV1 {
+            id: "rect-2".to_string(),
+            x: 150.0,
+            y: 75.0,
+            width: 50.0,
+            height: 25.0,
+        };
+        document.root_order.push(nested_rectangle.id.clone());
+        document.elements.insert(
+            nested_rectangle.id.clone(),
+            ElementRecordV1::Rect(nested_rectangle),
+        );
+        let mut engine = Engine::open(document).unwrap();
+        let before = engine.current_update();
+        let viewport = CameraViewportV1 {
+            width: 500.0,
+            height: 300.0,
+        };
+
+        let fitted = engine.fit_camera(viewport, 50.0).unwrap();
+        assert_eq!(
+            fitted,
+            CameraV1 {
+                x: 75.0,
+                y: 25.0,
+                zoom: 2.0,
+            }
+        );
+
+        engine
+            .apply_camera_action(CameraActionV1::FitContent {
+                viewport,
+                padding: 50.0,
+            })
+            .unwrap();
+        assert_eq!(engine.camera(), fitted);
+        assert_eq!(engine.current_update(), before);
+    }
+
+    #[test]
+    fn camera_fit_content_includes_stroke_width_and_handles_empty_documents() {
+        let blank = Engine::open(NodeInkDocumentV1::blank("blank")).unwrap();
+        assert_eq!(
+            blank
+                .fit_camera(
+                    CameraViewportV1 {
+                        width: 800.0,
+                        height: 600.0,
+                    },
+                    64.0,
+                )
+                .unwrap(),
+            CameraV1::default()
+        );
+
+        let mut document = NodeInkDocumentV1::blank("stroke");
+        let stroke = StrokeElementV1 {
+            id: "stroke-1".to_string(),
+            points: vec![Vec2 { x: 0.0, y: 0.0 }, Vec2 { x: 100.0, y: 0.0 }],
+            stroke_width: 20.0,
+        };
+        document.root_order.push(stroke.id.clone());
+        document
+            .elements
+            .insert(stroke.id.clone(), ElementRecordV1::Stroke(stroke));
+        let engine = Engine::open(document).unwrap();
+
+        assert_eq!(
+            engine
+                .fit_camera(
+                    CameraViewportV1 {
+                        width: 360.0,
+                        height: 160.0,
+                    },
+                    60.0,
+                )
+                .unwrap(),
+            CameraV1 {
+                x: -40.0,
+                y: -40.0,
+                zoom: 2.0,
+            }
+        );
+    }
+
+    #[test]
+    fn camera_fit_content_rejects_invalid_viewport_or_padding() {
+        let engine = Engine::open(NodeInkDocumentV1::blank("doc-1")).unwrap();
+
+        assert!(
+            engine
+                .fit_camera(
+                    CameraViewportV1 {
+                        width: 100.0,
+                        height: 100.0,
+                    },
+                    50.0,
+                )
+                .is_err()
+        );
+        assert!(
+            engine
+                .fit_camera(
+                    CameraViewportV1 {
+                        width: f64::NAN,
+                        height: 100.0,
+                    },
+                    0.0,
+                )
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn camera_zoom_is_clamped_and_invalid_state_is_rejected() {
+        let mut engine = Engine::open(NodeInkDocumentV1::blank("doc-1")).unwrap();
+
+        engine
+            .apply_camera_action(CameraActionV1::ZoomAt {
+                factor: 100.0,
+                anchor: Vec2 { x: 0.0, y: 0.0 },
+            })
+            .unwrap();
+        assert_eq!(engine.camera().zoom, MAX_CAMERA_ZOOM);
+        engine
+            .apply_camera_action(CameraActionV1::ZoomAt {
+                factor: 0.0001,
+                anchor: Vec2 { x: 0.0, y: 0.0 },
+            })
+            .unwrap();
+        assert_eq!(engine.camera().zoom, MIN_CAMERA_ZOOM);
+
+        assert!(
+            engine
+                .set_camera(CameraV1 {
+                    x: f64::NAN,
+                    y: 0.0,
+                    zoom: 1.0,
+                })
+                .is_err()
+        );
+    }
 
     fn envelope(
         document: &NodeInkDocumentV1,

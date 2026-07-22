@@ -5,6 +5,10 @@ import { createBlankDocument } from '@nodeink-internal/protocol';
 
 const wasm = vi.hoisted(() => {
   const handle = {
+    currentCamera: vi.fn(),
+    setCamera: vi.fn(),
+    fitCamera: vi.fn(),
+    applyCameraAction: vi.fn(),
     currentUpdate: vi.fn(),
     executeCommand: vi.fn(),
     executeDiagramOperation: vi.fn(),
@@ -40,6 +44,10 @@ describe('createWasmEngine', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     const update = validUpdate();
+    wasm.handle.currentCamera.mockReturnValue('{"x":0,"y":0,"zoom":1}');
+    wasm.handle.setCamera.mockReturnValue('{"x":24,"y":12,"zoom":1.5}');
+    wasm.handle.fitCamera.mockReturnValue('{"x":75,"y":25,"zoom":2}');
+    wasm.handle.applyCameraAction.mockReturnValue('{"x":12,"y":6,"zoom":2}');
     wasm.handle.currentUpdate.mockReturnValue(update);
     wasm.handle.executeCommand.mockReturnValue(update);
     wasm.handle.executeDiagramOperation.mockReturnValue(diagramOperationResult());
@@ -75,6 +83,24 @@ describe('createWasmEngine', () => {
     await expect(engine.currentUpdate()).resolves.toMatchObject({
       scene: { documentRevision: 0 },
     });
+    await expect(engine.currentCamera()).resolves.toEqual({ x: 0, y: 0, zoom: 1 });
+    await expect(engine.setCamera({ x: 24, y: 12, zoom: 1.5 })).resolves.toEqual({
+      x: 24,
+      y: 12,
+      zoom: 1.5,
+    });
+    await expect(engine.fitCamera({ width: 500, height: 300 }, 50)).resolves.toEqual({
+      x: 75,
+      y: 25,
+      zoom: 2,
+    });
+    await expect(
+      engine.applyCameraAction({
+        type: 'zoom_at',
+        factor: 2,
+        anchor: { x: 100, y: 80 },
+      }),
+    ).resolves.toEqual({ x: 12, y: 6, zoom: 2 });
     await expect(engine.executeCommand(command)).resolves.toMatchObject({
       history: { canUndo: false },
     });
@@ -154,6 +180,11 @@ describe('createWasmEngine', () => {
     expect(wasm.default).toHaveBeenCalledOnce();
     expect(wasm.openDocument).toHaveBeenCalledWith(JSON.stringify(document));
     expect(wasm.handle.executeCommand).toHaveBeenCalledWith(JSON.stringify(command));
+    expect(wasm.handle.setCamera).toHaveBeenCalledWith('{"x":24,"y":12,"zoom":1.5}');
+    expect(wasm.handle.fitCamera).toHaveBeenCalledWith(500, 300, 50);
+    expect(wasm.handle.applyCameraAction).toHaveBeenCalledWith(
+      '{"type":"zoom_at","factor":2,"anchor":{"x":100,"y":80}}',
+    );
     expect(wasm.handle.executeDiagramOperation).toHaveBeenCalledWith(JSON.stringify(batch));
     expect(wasm.handle.handlePointerEvents).toHaveBeenCalledWith(
       JSON.stringify(pointerEvents),
@@ -190,6 +221,36 @@ describe('createWasmEngine', () => {
   it('normalizes structured and plain engine failures', async () => {
     const engine = await createWasmEngine(createBlankDocument('doc-1'));
     const command = commandFixture();
+
+    wasm.handle.currentCamera.mockImplementation(() => {
+      throw new Error(JSON.stringify({ message: 'camera unavailable' }));
+    });
+    await expect(engine.currentCamera()).rejects.toThrow('camera unavailable');
+
+    wasm.handle.setCamera.mockImplementation(() => {
+      throw new Error(JSON.stringify({ message: 'camera restore rejected' }));
+    });
+    await expect(engine.setCamera({ x: 0, y: 0, zoom: 1 })).rejects.toThrow(
+      'camera restore rejected',
+    );
+
+    wasm.handle.fitCamera.mockImplementation(() => {
+      throw new Error(JSON.stringify({ message: 'camera fit rejected' }));
+    });
+    await expect(engine.fitCamera({ width: 800, height: 600 }, 64)).rejects.toThrow(
+      'camera fit rejected',
+    );
+
+    wasm.handle.applyCameraAction.mockImplementation(() => {
+      throw new Error(JSON.stringify({ message: 'camera action rejected' }));
+    });
+    await expect(
+      engine.applyCameraAction({
+        type: 'fit_content',
+        viewport: { width: 800, height: 600 },
+        padding: 64,
+      }),
+    ).rejects.toThrow('camera action rejected');
 
     wasm.handle.executeCommand.mockImplementation(() => {
       throw new Error(JSON.stringify({ code: 'revision_conflict', message: 'stale revision' }));

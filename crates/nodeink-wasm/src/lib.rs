@@ -1,8 +1,8 @@
 use nodeink_core::{
-    CommandEnvelopeV1, DiagramOperationBatchV1, ENGINE_ALGORITHM_VERSION, Engine, EngineErrorV1,
-    NodeInkDocumentV1, NormalizedPointerEventV1, RenderProfileV1, StrokeInputBatchV1,
-    StrokePhaseV1, TextMetricsSnapshotV1, TextRunV1, Vec2, benchmark_scene_patch,
-    benchmark_scene_snapshot, migrate_document_payload,
+    CameraActionV1, CameraV1, CameraViewportV1, CommandEnvelopeV1, DiagramOperationBatchV1,
+    ENGINE_ALGORITHM_VERSION, Engine, EngineErrorV1, NodeInkDocumentV1, NormalizedPointerEventV1,
+    RenderProfileV1, StrokeInputBatchV1, StrokePhaseV1, TextMetricsSnapshotV1, TextRunV1, Vec2,
+    benchmark_scene_patch, benchmark_scene_snapshot, migrate_document_payload,
 };
 use wasm_bindgen::prelude::*;
 
@@ -21,6 +21,50 @@ pub fn open_document(document_json: &str) -> Result<EngineHandle, JsValue> {
 
 #[wasm_bindgen]
 impl EngineHandle {
+    #[wasm_bindgen(js_name = currentCamera)]
+    pub fn current_camera(&self) -> Result<String, JsValue> {
+        serialize_camera(self.engine.camera())
+    }
+
+    #[wasm_bindgen(js_name = setCamera)]
+    pub fn set_camera(&mut self, camera_json: &str) -> Result<String, JsValue> {
+        let camera: CameraV1 =
+            serde_json::from_str(camera_json).map_err(|error| js_error("schema_invalid", error))?;
+        let camera = self.engine.set_camera(camera).map_err(engine_error)?;
+        serialize_camera(camera)
+    }
+
+    #[wasm_bindgen(js_name = fitCamera)]
+    pub fn fit_camera(
+        &self,
+        viewport_width: f64,
+        viewport_height: f64,
+        padding: f64,
+    ) -> Result<String, JsValue> {
+        let camera = self
+            .engine
+            .fit_camera(
+                CameraViewportV1 {
+                    width: viewport_width,
+                    height: viewport_height,
+                },
+                padding,
+            )
+            .map_err(engine_error)?;
+        serialize_camera(camera)
+    }
+
+    #[wasm_bindgen(js_name = applyCameraAction)]
+    pub fn apply_camera_action(&mut self, action_json: &str) -> Result<String, JsValue> {
+        let action: CameraActionV1 =
+            serde_json::from_str(action_json).map_err(|error| js_error("schema_invalid", error))?;
+        let camera = self
+            .engine
+            .apply_camera_action(action)
+            .map_err(engine_error)?;
+        serialize_camera(camera)
+    }
+
     #[wasm_bindgen(js_name = executeCommand)]
     pub fn execute_command(&mut self, command_json: &str) -> Result<String, JsValue> {
         let command: CommandEnvelopeV1 = serde_json::from_str(command_json)
@@ -199,6 +243,10 @@ impl EngineHandle {
     pub fn engine_algorithm_version(&self) -> String {
         ENGINE_ALGORITHM_VERSION.to_string()
     }
+}
+
+fn serialize_camera(camera: CameraV1) -> Result<String, JsValue> {
+    serde_json::to_string(&camera).map_err(|error| js_error("serialization_failed", error))
 }
 
 fn parse_stroke_phase(phase: &str) -> Result<StrokePhaseV1, JsValue> {

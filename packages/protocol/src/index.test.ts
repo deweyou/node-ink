@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   createBlankDocument,
   parseDiagramOperationBatchResult,
+  parseCamera,
   parseEngineUpdate,
   parseMigrationAttempt,
   parsePointerUpdate,
@@ -14,6 +15,16 @@ import {
 } from './index';
 
 describe('protocol V1', () => {
+  it('parses finite Camera state within the supported zoom range', () => {
+    expect(parseCamera('{"x":-12,"y":24,"zoom":1.5}')).toEqual({
+      x: -12,
+      y: 24,
+      zoom: 1.5,
+    });
+    expect(() => parseCamera('{"x":0,"y":0,"zoom":0.09}')).toThrow('Camera V1');
+    expect(() => parseCamera('{"x":0,"y":0,"zoom":9}')).toThrow('Camera V1');
+  });
+
   it('creates a blank document with explicit versions', () => {
     expect(createBlankDocument('doc-1')).toEqual({
       schemaVersion: 1,

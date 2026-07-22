@@ -174,6 +174,14 @@
 - 第二标签页只读并提示关闭其他页面后刷新；Phase 1A 不实现显式接管或共同编辑。
 - React、Vue 与 Vanilla 只消费 `editor-web` 的同一保存/恢复 presentation，不分别定义状态语义。
 
+### D-26 Camera 回正与相对 100%
+
+- “回正并适应全部内容”由 Rust 根据 Semantic Document bounds、viewport 和 `64px` 屏幕 padding 计算；矩形使用语义几何，自由笔 bounds 包含 stroke width，Renderer 不读取 SVG/DOM bounds 反推内容。
+- UI 的 `100%` 定义为当前 `camera.zoom / fitZoom === 1`，不等于固定的底层 `zoom === 1`；工具栏按 `1.5` 倍及其精确倒数缩放。
+- Document bounds 或 viewport 改变只重算 fitZoom 与百分比，不自动移动 Camera；用户点击百分比按钮时才应用 fit Camera 并居中，避免编辑过程中画面跳动。
+- 空文档 fit 回到 `{ x: 0, y: 0, zoom: 1 }`；绝对 Camera 仍 clamp 到 10%–800%，超大范围到 10% 仍放不下时不越过安全边界。
+- 首次打开且没有已保存 Camera 时使用 fit content；已有 Camera 仍按 P-06 恢复。fitZoom 是派生状态，不进入 Document 或 Camera session store。
+
 ## 22. 需要产品负责人决策的问题
 
 以下问题不阻碍继续评审文档，但会阻碍对应功能进入实现。
@@ -228,7 +236,7 @@
 - **替代**：每次打开执行 fit content。
 - **影响**：用户连续性、Session schema 和“打开后找不到内容”的风险。
 - **决策时点**：Phase 1A 持久化前。
-- **当前状态**：已确认推荐方向。Camera 尚未进入本次持久化切片；实现后按每文档恢复最后 Camera，不恢复 selection、hover、active transform 或 IME buffer。
+- **当前状态**：已实现。每文档 Camera 存入独立 session database；已有 Camera 优先恢复，没有已保存 Camera 时执行 fit content。Document snapshot、selection、hover、active transform 与 IME buffer 均不受影响，详见 D-26。
 
 ### P-07 桌面手写笔与触控范围
 
@@ -260,4 +268,4 @@
 P-01 已确认，Phase 0 可以实施。进入相应产品功能前必须确认其余问题；未到决策时点的问题可以保留待确认，但不能由实现者自行选择用户可见行为。
 
 ---
-*Last updated: 2026-07-22 | Reason: confirm the Phase 1A autosave, recovery, multi-tab, and future Camera semantics*
+*Last updated: 2026-07-22 | Reason: record the confirmed fit-content Camera and fit-relative 100% semantics*

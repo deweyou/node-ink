@@ -117,7 +117,7 @@ UI / Internal Operation
 | Tool and gesture state | Rust Engine | Web Controller、UI adapter、Renderer overlay |
 | Raw DOM event/pointer capture | TypeScript Input Adapter | Rust 只见规范化事件 |
 | IME composition buffer | TypeScript Text Overlay | Rust 只接收已提交文本 |
-| Camera | Rust platform-neutral state；Host 可持久化最后值 | Renderer、Web Controller、UI adapter |
+| Camera | Rust platform-neutral state、content bounds 与 fit math；Host 提供 viewport/padding 并持久化最后绝对值 | Renderer、Web Controller、UI adapter |
 | Selection | Rust Editor State | Web Controller、UI adapter、Renderer overlay |
 | Save/recovery state | TypeScript Persistence Coordinator | Web Controller、UI adapter |
 | DOM/SVG nodes | Renderer | 无其他模块依赖其内部结构 |
@@ -487,12 +487,18 @@ interface PointerSample {
 - 基础形状 hit test、selection handles 和 resize/rotate 约束。
 - snapping candidates、guide 计算和空间查询。
 - Scene culling 所需的 world-space bounds。
+- Camera fit content 所需的完整 Semantic Document bounds；矩形使用语义几何，自由笔包含 stroke width，Renderer 不从 DOM/SVG 反推。
 
 Renderer 可以做 DOM 层面的事件代理和 SVG 属性更新，但不能自行定义命中、吸附或变换规则。
 
 ### 11.2 坐标与精度
 
 - Document 使用无界 world coordinates；Camera 将其映射到 screen coordinates。
+- Phase 1A Camera 使用 viewport 左上角 world `x/y` 与无单位 `zoom`；zoom 固定 clamp 到 `0.1..=8.0`。
+- 平移输入以屏幕像素表达，由 Rust 按 zoom 换算；锚点缩放必须保持鼠标位置对应的 world point 不变。
+- fit content 接收 Host 提供的 viewport 尺寸与 `64px` 屏幕 padding，由 Rust 计算居中的绝对 Camera；空文档回到默认 Camera。
+- UI 的 `100%` 是 `camera.zoom / fitZoom` 的相对值而非固定 `zoom === 1`。Document bounds 或 viewport 改变可更新 fitZoom 与标签，但不得自动移动 Camera；只有显式回正动作应用 fit Camera。
+- Camera state 与 Document/Scene/history 分离；Camera action 不增加 Document 或 Scene revision，也不进入 Undo/Redo。
 - Hit tolerance 以屏幕像素定义，再按 zoom 转为 world tolerance。
 - 所有输入先验证 finite 数值和合理上限。
 - 序列化时使用规范化舍入，避免无意义浮点漂移。
@@ -646,7 +652,7 @@ interface RendererV1 {
   mount(target: HTMLElement, context: RenderContextV1): void;
   applySnapshot(snapshot: SceneSnapshotV1): RenderApplyResult;
   applyPatch(patch: ScenePatchV1): RenderApplyResult;
-  setCamera(camera: CameraV1): void;
+  setViewport(viewport: ViewportV1): RenderViewportResultV1;
   setOverlay(overlay: EditorOverlaySceneV1): void;
   unmount(): void;
 }
@@ -670,7 +676,7 @@ type RenderApplyResult =
 
 - 维护 `SceneNodeId → SVGElement` 的私有索引。
 - Patch 只更新 changed nodes，不重新创建整个 SVG tree。
-- Camera 使用根 `<g>` transform 或等价 view transform；不回写元素 world coordinates。
+- Camera 使用 SVG `viewBox` 作为等价 view transform；不回写元素 world coordinates。
 - 文本编辑时实际输入由 HTML overlay 负责，SVG Text 只显示已提交内容。
 - Selection handles、hover 和 snapping guides 来自 Editor Overlay Scene，不进入 Semantic Document。
 - ARIA label 来自 Scene accessibility 字段或 Host 映射，不从 SVG path 猜测语义。
@@ -1171,4 +1177,4 @@ vp build apps/playground ──→ production web bundle
 | Web 工具链 | Vite+ 统一入口，Cargo 保持 Rust 真相源 | Phase 0 起 | 低—中 |
 
 ---
-*Last updated: 2026-07-22 | Reason: record the integrated Phase 1A autosave, recovery, and lease behavior*
+*Last updated: 2026-07-22 | Reason: record Rust-owned fit-content bounds and fit-relative Camera presentation*

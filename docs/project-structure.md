@@ -43,9 +43,9 @@ docs/                       Product, architecture, decisions, plans, and repo me
 ## Startup Path
 
 1. `pnpm exec vp run wasm:build` invokes [scripts/build-wasm.sh#L1](../scripts/build-wasm.sh#L1) and regenerates the ignored browser package.
-2. [apps/playground/src/create-controller.ts#L1](../apps/playground/src/create-controller.ts#L1) opens the local snapshot catalog, acquires a document lease, verifies or migrates the selected snapshot, and only then creates the real EnginePort.
+2. [apps/playground/src/create-controller.ts#L1](../apps/playground/src/create-controller.ts#L1) opens the local snapshot catalog and independent Camera session store, acquires a document lease, verifies or migrates the selected snapshot, and only then creates the real EnginePort.
 3. [packages/persistence-web/src/local-document.ts#L1](../packages/persistence-web/src/local-document.ts#L1) owns local-document recovery selection and the debounced save coordinator.
-4. [packages/editor-web/src/index.ts#L1](../packages/editor-web/src/index.ts#L1) owns host-neutral actions, subscriptions, lifecycle, and derived persistence presentation.
+4. [packages/editor-web/src/index.ts#L1](../packages/editor-web/src/index.ts#L1) owns host-neutral actions, Camera input/viewport mapping, subscriptions, lifecycle, and derived persistence presentation.
 5. [packages/renderer-svg/src/index.ts#L1](../packages/renderer-svg/src/index.ts#L1) reconciles resolved Scene nodes into SVG.
 6. `/`, `/vue.html`, and `/vanilla.html` independently mount React, Vue, and framework-free hosts over the same contracts.
 
@@ -56,7 +56,7 @@ docs/                       Product, architecture, decisions, plans, and repo me
 - `protocol` defines the TypeScript view of wire contracts; wire casing is camelCase.
 - `editor-web` may depend on browser APIs, but not component frameworks.
 - `renderer-svg` paints resolved nodes; it does not infer Document semantics.
-- `persistence-web` owns IndexedDB transactions, SHA-256 read-back verification, stable snapshot recovery, save scheduling, and single-writer leases; it does not mutate Document semantics.
+- `persistence-web` owns IndexedDB transactions, SHA-256 read-back verification, stable snapshot recovery, save scheduling, single-writer leases, and the separate per-document Camera store; it does not mutate Document semantics.
 - `editor-web` exposes save/access/recovery state without storing a second Document copy.
 - `editor-react` and `editor-vue` can be replaced independently without changing engine, controller, persistence, or renderer packages.
 
@@ -70,4 +70,4 @@ docs/                       Product, architecture, decisions, plans, and repo me
 - WASM release build uses wasm-pack for Cargo/wasm-bindgen and lockfile-pinned Binaryen 117 for `-Oz`; optimization writes a fresh sibling file before replacing the generated WASM, avoiding the observed wasm-pack/provenance replacement failure.
 
 ---
-*Last updated: 2026-07-22 | Reason: record the Phase 1A local-document startup and autosave path*
+*Last updated: 2026-07-22 | Reason: record the Phase 1A Camera session and viewport path*

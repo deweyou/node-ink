@@ -1,4 +1,5 @@
 import {
+  getEditorCameraPresentation,
   getEditorPersistencePresentation,
   type EditorWebControllerV1,
 } from '@nodeink-internal/editor-web';
@@ -30,7 +31,7 @@ rootElement.innerHTML = `
   <main class="nodeink-shell" data-nodeink-host="vanilla">
     <header class="nodeink-topbar">
       <div>
-        <span class="nodeink-kicker">NodeInk · Phase 0</span>
+        <span class="nodeink-kicker">NodeInk · Phase 1A</span>
         <h1>Framework-neutral canvas</h1>
       </div>
       <span class="nodeink-host-badge">Vanilla TypeScript</span>
@@ -43,6 +44,11 @@ rootElement.innerHTML = `
     </aside>
     <section class="nodeink-stage" aria-label="Infinite canvas proof">
       <div class="nodeink-canvas" data-canvas></div>
+      <nav class="nodeink-zoom-controls" aria-label="Canvas view controls">
+        <button type="button" data-action="zoom_out" aria-label="Zoom out" title="缩小">−</button>
+        <button type="button" data-action="reset_camera" data-zoom title="回正并适应全部内容">100%</button>
+        <button type="button" data-action="zoom_in" aria-label="Zoom in" title="放大">+</button>
+      </nav>
       <output class="nodeink-status" aria-live="polite" data-status></output>
       <p class="nodeink-notice" role="status" data-notice hidden></p>
       <p class="nodeink-error" role="alert" data-error hidden></p>
@@ -152,6 +158,10 @@ rootElement.addEventListener('click', (event) => {
     void controller.dispatch({ type: 'redo' });
   } else if (action === 'retry_save') {
     void controller.dispatch({ type: 'retry_save' });
+  } else if (action === 'retry_camera_save') {
+    void controller.dispatch({ type: 'retry_camera_save' });
+  } else if (action === 'zoom_out' || action === 'zoom_in' || action === 'reset_camera') {
+    void controller.dispatch({ type: action });
   }
 });
 
@@ -174,26 +184,49 @@ function renderSnapshot(
   `;
   noticeElement.hidden = !persistence.notice;
   noticeElement.textContent = persistence.notice;
-  const visibleError = snapshot.errorMessage ?? snapshot.saveErrorMessage;
+  const visibleError =
+    snapshot.errorMessage ?? snapshot.saveErrorMessage ?? snapshot.cameraSaveErrorMessage;
   errorElement.hidden = !visibleError;
   errorElement.replaceChildren();
   if (visibleError) {
     const message = document.createElement('span');
-    message.textContent = snapshot.saveErrorMessage ? `保存失败：${visibleError}` : visibleError;
+    message.textContent = snapshot.saveErrorMessage
+      ? `保存失败：${visibleError}`
+      : snapshot.cameraSaveErrorMessage
+        ? `视图位置保存失败：${visibleError}`
+        : visibleError;
     errorElement.append(message);
-    if (persistence.canRetrySave) {
+    const retryAction = snapshot.errorMessage
+      ? null
+      : snapshot.saveErrorMessage
+        ? 'retry_save'
+        : snapshot.cameraSaveErrorMessage
+          ? 'retry_camera_save'
+          : null;
+    if (retryAction) {
       const retry = document.createElement('button');
       retry.type = 'button';
-      retry.dataset.action = 'retry_save';
+      retry.dataset.action = retryAction;
       retry.textContent = '重试';
       errorElement.append(retry);
     }
   }
   const isEditable = snapshot.status === 'ready' && snapshot.documentAccess === 'writer';
+  const camera = getEditorCameraPresentation(snapshot);
   setDisabled(root, 'create_rectangle', !isEditable);
   setDisabled(root, 'move_active', !isEditable || !snapshot.activeElementId);
   setDisabled(root, 'undo', !isEditable || !snapshot.canUndo);
   setDisabled(root, 'redo', !isEditable || !snapshot.canRedo);
+  setDisabled(root, 'zoom_out', snapshot.status !== 'ready');
+  setDisabled(root, 'reset_camera', snapshot.status !== 'ready');
+  setDisabled(root, 'zoom_in', snapshot.status !== 'ready');
+  const zoom = root.querySelector<HTMLButtonElement>('[data-zoom]');
+  if (zoom) {
+    zoom.textContent = camera.zoomLabel;
+    zoom.title = camera.fitContentTitle;
+    zoom.ariaLabel = camera.fitContentAriaLabel;
+    zoom.dataset.cameraSaveStatus = snapshot.cameraSaveStatus;
+  }
 }
 
 function setDisabled(root: HTMLElement, action: string, disabled: boolean): void {

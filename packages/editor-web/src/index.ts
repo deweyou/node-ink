@@ -1,5 +1,7 @@
 import {
   protocolVersion,
+  type CameraActionV1,
+  type CameraV1,
   type CommandEnvelopeV1,
   type EnginePortV1,
   type EngineUpdateV1,
@@ -16,6 +18,10 @@ import {
 
 import { attachPointerInput } from './pointer-input';
 import { attachHistoryShortcuts } from './keyboard-input';
+import { attachCameraInput, type CameraInputBindingV1 } from './camera-input';
+
+const CAMERA_ZOOM_STEP = 1.5;
+const CAMERA_FIT_PADDING = 64;
 
 export type EditorActionV1 =
   | {
@@ -28,9 +34,15 @@ export type EditorActionV1 =
   | { type: 'stroke_batch'; batch: StrokeInputBatchV1; transport: StrokeTransportV1 }
   | { type: 'undo' }
   | { type: 'redo' }
-  | { type: 'retry_save' };
+  | { type: 'retry_save' }
+  | { type: 'camera_action'; action: CameraActionV1 }
+  | { type: 'zoom_in' }
+  | { type: 'zoom_out' }
+  | { type: 'reset_camera' }
+  | { type: 'retry_camera_save' };
 
 export type EditorSaveStatusV1 = 'saved' | 'dirty' | 'saving' | 'save_failed' | 'readonly';
+export type EditorCameraSaveStatusV1 = 'saved' | 'dirty' | 'saving' | 'save_failed';
 export type EditorDocumentAccessV1 = 'writer' | 'readonly';
 export type EditorReadonlyReasonV1 =
   | 'held_elsewhere'
@@ -63,6 +75,11 @@ export interface EditorPersistencePortV1 {
   dispose(): void;
 }
 
+export interface EditorCameraPersistencePortV1 {
+  loadCamera(documentId: string): Promise<CameraV1 | null>;
+  saveCamera(documentId: string, camera: CameraV1): Promise<void>;
+}
+
 export interface EditorUiSnapshotV1 {
   status: 'booting' | 'ready' | 'error' | 'disposed';
   documentRevision: number;
@@ -77,6 +94,10 @@ export interface EditorUiSnapshotV1 {
   documentAccess: EditorDocumentAccessV1;
   readonlyReason: EditorReadonlyReasonV1 | null;
   recovery: EditorRecoveryV1;
+  camera: CameraV1;
+  cameraZoomPercent: number;
+  cameraSaveStatus: EditorCameraSaveStatusV1;
+  cameraSaveErrorMessage: string | null;
 }
 
 export interface EditorActionResultV1 {
@@ -107,6 +128,7 @@ export interface EditorWebControllerOptions {
   renderer: RendererV1;
   createId?: () => string;
   persistence?: EditorPersistencePortV1;
+  cameraPersistence?: EditorCameraPersistencePortV1;
   documentAccess?: EditorDocumentAccessV1;
   readonlyReason?: EditorReadonlyReasonV1 | null;
   recovery?: EditorRecoveryV1;
@@ -118,14 +140,22 @@ export class EditorWebController implements EditorWebControllerV1 {
   readonly #renderer: RendererV1;
   readonly #createId: () => string;
   readonly #persistence: EditorPersistencePortV1 | null;
+  readonly #cameraPersistence: EditorCameraPersistencePortV1 | null;
   readonly #onDispose: (() => void | Promise<void>) | null;
   readonly #listeners = new Set<() => void>();
   #snapshot: EditorUiSnapshotV1;
   #documentId: string | null = null;
   #detachPointerInput: (() => void) | null = null;
+  #cameraInput: CameraInputBindingV1 | null = null;
   #detachHistoryShortcuts: (() => void) | null = null;
   #detachVisibilityFlush: (() => void) | null = null;
   #detachPersistence: (() => void) | null = null;
+  #detachResize: (() => void) | null = null;
+  #cameraTarget: HTMLElement | null = null;
+  #fitZoom = 1;
+  #pendingCamera: CameraV1 | null = null;
+  #cameraSaveTimer: ReturnType<typeof setTimeout> | null = null;
+  #cameraSavePromise: Promise<void> | null = null;
   #queue = Promise.resolve();
   #isDisposed = false;
 
@@ -134,6 +164,7 @@ export class EditorWebController implements EditorWebControllerV1 {
     this.#renderer = options.renderer;
     this.#createId = options.createId ?? defaultId;
     this.#persistence = options.persistence ?? null;
+    this.#cameraPersistence = options.cameraPersistence ?? null;
     this.#onDispose = options.onDispose ?? null;
     const documentAccess = options.documentAccess ?? 'writer';
     const persistenceSnapshot = this.#persistence?.getSnapshot() ?? null;
@@ -152,6 +183,10 @@ export class EditorWebController implements EditorWebControllerV1 {
       documentAccess,
       readonlyReason: options.readonlyReason ?? null,
       recovery: options.recovery ?? 'blank',
+      camera: { x: 0, y: 0, zoom: 1 },
+      cameraZoomPercent: 100,
+      cameraSaveStatus: 'saved',
+      cameraSaveErrorMessage: null,
     };
     this.#detachPersistence =
       this.#persistence?.subscribe(() => {
@@ -171,12 +206,24 @@ export class EditorWebController implements EditorWebControllerV1 {
   async mount(target: HTMLElement): Promise<void> {
     this.ensureActive();
     this.#renderer.mount(target);
+    this.#cameraTarget = target;
+    this.#cameraInput?.detach();
+    this.#cameraInput = attachCameraInput(target, (action) => {
+      void this.dispatch({ type: 'camera_action', action });
+    });
     this.#detachPointerInput?.();
     this.#detachPointerInput =
       this.#snapshot.documentAccess === 'writer'
-        ? attachPointerInput(target, (events) => {
-            void this.dispatch({ type: 'pointer_events', events });
-          })
+        ? attachPointerInput(
+            target,
+            (events) => {
+              void this.dispatch({ type: 'pointer_events', events });
+            },
+            {
+              shouldHandleEvent: (event) =>
+                this.#cameraInput?.shouldHandleDocumentPointer(event) ?? true,
+            },
+          )
         : null;
     this.#detachHistoryShortcuts?.();
     this.#detachHistoryShortcuts =
@@ -191,18 +238,39 @@ export class EditorWebController implements EditorWebControllerV1 {
           })
         : null;
     this.#detachVisibilityFlush?.();
-    if (this.#persistence) {
+    if (this.#persistence || this.#cameraPersistence) {
       const flushWhenHidden = () => {
         if (target.ownerDocument.visibilityState === 'hidden') {
           void this.#persistence?.flush();
+          void this.flushCamera();
         }
       };
       target.ownerDocument.addEventListener('visibilitychange', flushWhenHidden);
       this.#detachVisibilityFlush = () =>
         target.ownerDocument.removeEventListener('visibilitychange', flushWhenHidden);
     }
+    this.#detachResize?.();
+    const ResizeObserverConstructor = target.ownerDocument.defaultView?.ResizeObserver;
+    if (ResizeObserverConstructor) {
+      const observer = new ResizeObserverConstructor(() => {
+        this.applyCameraToRenderer();
+        void this.refreshFitCamera().catch((error: unknown) => {
+          if (!this.#isDisposed) {
+            this.setError(error);
+          }
+        });
+      });
+      observer.observe(target);
+      this.#detachResize = () => observer.disconnect();
+    }
     try {
-      this.applyUpdate(await this.#engine.currentUpdate());
+      const update = await this.#engine.currentUpdate();
+      this.#documentId = update.scene.documentId;
+      const fitCamera = await this.refreshFitCamera(false);
+      const camera = await this.restoreCamera(update.scene.documentId, fitCamera);
+      this.setCameraSnapshot(camera, false);
+      this.applyCameraToRenderer();
+      this.applyUpdate(update);
     } catch (error) {
       this.setError(error);
       throw error;
@@ -234,23 +302,29 @@ export class EditorWebController implements EditorWebControllerV1 {
     this.#isDisposed = true;
     this.#detachPointerInput?.();
     this.#detachPointerInput = null;
+    this.#cameraInput?.detach();
+    this.#cameraInput = null;
     this.#detachHistoryShortcuts?.();
     this.#detachHistoryShortcuts = null;
     this.#detachVisibilityFlush?.();
     this.#detachVisibilityFlush = null;
     this.#detachPersistence?.();
     this.#detachPersistence = null;
+    this.#detachResize?.();
+    this.#detachResize = null;
+    this.#cameraTarget = null;
     this.#listeners.clear();
     this.#renderer.unmount();
     const persistenceFlush = this.#persistence?.flush() ?? null;
+    const cameraFlush = this.#cameraPersistence ? this.flushCamera() : null;
     this.#snapshot = { ...this.#snapshot, status: 'disposed' };
     const finalize = () => {
       this.#engine.dispose();
       this.#persistence?.dispose();
       return this.#onDispose?.();
     };
-    if (persistenceFlush) {
-      void persistenceFlush.finally(finalize);
+    if (persistenceFlush || cameraFlush) {
+      void Promise.all([persistenceFlush, cameraFlush]).finally(finalize);
     } else {
       void finalize();
     }
@@ -265,6 +339,13 @@ export class EditorWebController implements EditorWebControllerV1 {
       await this.#persistence.retry();
       return { ok: this.#snapshot.saveStatus !== 'save_failed', snapshot: this.#snapshot };
     }
+    if (action.type === 'retry_camera_save') {
+      await this.savePendingCamera();
+      return { ok: this.#snapshot.cameraSaveStatus !== 'save_failed', snapshot: this.#snapshot };
+    }
+    if (isCameraAction(action)) {
+      return this.runCameraAction(action);
+    }
     if (this.#snapshot.documentAccess === 'readonly') {
       return { ok: false, snapshot: this.#snapshot };
     }
@@ -272,10 +353,12 @@ export class EditorWebController implements EditorWebControllerV1 {
     try {
       const previousRevision = this.#snapshot.documentRevision;
       const execution = await this.executeAction(action);
-      const renderResult = this.applyUpdate(execution.update);
+      const renderResult = this.applyUpdate(execution.update, false);
       if (this.#snapshot.documentRevision > previousRevision) {
         this.#persistence?.markCommitted(this.#snapshot.documentRevision);
       }
+      await this.refreshFitCamera(false);
+      this.emit();
       return {
         ok: true,
         snapshot: this.#snapshot,
@@ -292,6 +375,172 @@ export class EditorWebController implements EditorWebControllerV1 {
       this.setError(error);
       return { ok: false, snapshot: this.#snapshot };
     }
+  }
+
+  private async runCameraAction(action: EditorActionV1): Promise<EditorActionResultV1> {
+    try {
+      const cameraAction = this.resolveCameraAction(action);
+      const camera = await this.#engine.applyCameraAction(cameraAction);
+      if (cameraAction.type === 'fit_content') {
+        this.#fitZoom = camera.zoom;
+      }
+      this.setCameraSnapshot(camera);
+      this.applyCameraToRenderer();
+      this.scheduleCameraSave(camera);
+      return { ok: true, snapshot: this.#snapshot };
+    } catch (error) {
+      this.setError(error);
+      return { ok: false, snapshot: this.#snapshot };
+    }
+  }
+
+  private resolveCameraAction(action: EditorActionV1): CameraActionV1 {
+    if (action.type === 'camera_action') {
+      return action.action;
+    }
+    if (action.type === 'reset_camera') {
+      return {
+        type: 'fit_content',
+        viewport: this.cameraViewportSize(),
+        padding: CAMERA_FIT_PADDING,
+      };
+    }
+    if (action.type === 'zoom_in' || action.type === 'zoom_out') {
+      const size = this.cameraViewportSize();
+      return {
+        type: 'zoom_at',
+        factor: action.type === 'zoom_in' ? CAMERA_ZOOM_STEP : 1 / CAMERA_ZOOM_STEP,
+        anchor: { x: size.width / 2, y: size.height / 2 },
+      };
+    }
+    throw new Error(`Unsupported Camera action: ${action.type}`);
+  }
+
+  private async restoreCamera(documentId: string, fitCamera: CameraV1): Promise<CameraV1> {
+    try {
+      const restored = await this.#cameraPersistence?.loadCamera(documentId);
+      this.#snapshot = {
+        ...this.#snapshot,
+        cameraSaveStatus: 'saved',
+        cameraSaveErrorMessage: null,
+      };
+      return await this.#engine.setCamera(restored ?? fitCamera);
+    } catch (error) {
+      const camera = await this.#engine.setCamera(fitCamera);
+      this.#pendingCamera = camera;
+      this.#snapshot = {
+        ...this.#snapshot,
+        cameraSaveStatus: 'save_failed',
+        cameraSaveErrorMessage: errorMessage(error),
+      };
+      return camera;
+    }
+  }
+
+  private setCameraSnapshot(camera: CameraV1, emit = true): void {
+    this.#snapshot = {
+      ...this.#snapshot,
+      camera,
+      cameraZoomPercent: relativeCameraZoomPercent(camera.zoom, this.#fitZoom),
+    };
+    if (emit) {
+      this.emit();
+    }
+  }
+
+  private applyCameraToRenderer(): void {
+    if (!this.#cameraTarget) {
+      return;
+    }
+    const size = this.cameraViewportSize();
+    this.#renderer.setViewport({
+      x: this.#snapshot.camera.x,
+      y: this.#snapshot.camera.y,
+      width: size.width / this.#snapshot.camera.zoom,
+      height: size.height / this.#snapshot.camera.zoom,
+    });
+  }
+
+  private cameraViewportSize(): { width: number; height: number } {
+    const bounds = this.#cameraTarget?.getBoundingClientRect();
+    return {
+      width: positiveSize(bounds?.width, 960),
+      height: positiveSize(bounds?.height, 640),
+    };
+  }
+
+  private async refreshFitCamera(emit = true): Promise<CameraV1> {
+    const fitCamera = await this.#engine.fitCamera(this.cameraViewportSize(), CAMERA_FIT_PADDING);
+    this.#fitZoom = fitCamera.zoom;
+    this.#snapshot = {
+      ...this.#snapshot,
+      cameraZoomPercent: relativeCameraZoomPercent(this.#snapshot.camera.zoom, this.#fitZoom),
+    };
+    if (emit) {
+      this.emit();
+    }
+    return fitCamera;
+  }
+
+  private scheduleCameraSave(camera: CameraV1): void {
+    if (!this.#cameraPersistence || !this.#documentId) {
+      return;
+    }
+    this.#pendingCamera = camera;
+    this.#snapshot = {
+      ...this.#snapshot,
+      cameraSaveStatus: 'dirty',
+      cameraSaveErrorMessage: null,
+    };
+    this.emit();
+    if (this.#cameraSaveTimer) {
+      clearTimeout(this.#cameraSaveTimer);
+    }
+    this.#cameraSaveTimer = setTimeout(() => {
+      this.#cameraSaveTimer = null;
+      void this.savePendingCamera();
+    }, 150);
+  }
+
+  private async savePendingCamera(): Promise<void> {
+    if (this.#cameraSaveTimer) {
+      clearTimeout(this.#cameraSaveTimer);
+      this.#cameraSaveTimer = null;
+    }
+    if (this.#cameraSavePromise) {
+      await this.#cameraSavePromise.catch(() => undefined);
+    }
+    if (!this.#cameraPersistence || !this.#documentId || !this.#pendingCamera) {
+      return;
+    }
+    const camera = this.#pendingCamera;
+    this.#pendingCamera = null;
+    this.#snapshot = { ...this.#snapshot, cameraSaveStatus: 'saving' };
+    this.emit();
+    const save = this.#cameraPersistence.saveCamera(this.#documentId, camera);
+    this.#cameraSavePromise = save;
+    try {
+      await save;
+      this.#snapshot = {
+        ...this.#snapshot,
+        cameraSaveStatus: this.#pendingCamera ? 'dirty' : 'saved',
+        cameraSaveErrorMessage: null,
+      };
+    } catch (error) {
+      this.#pendingCamera ??= camera;
+      this.#snapshot = {
+        ...this.#snapshot,
+        cameraSaveStatus: 'save_failed',
+        cameraSaveErrorMessage: errorMessage(error),
+      };
+    } finally {
+      this.#cameraSavePromise = null;
+      this.emit();
+    }
+  }
+
+  private async flushCamera(): Promise<void> {
+    await this.savePendingCamera();
   }
 
   private async executeAction(action: EditorActionV1): Promise<ActionExecutionResult> {
@@ -355,7 +604,10 @@ export class EditorWebController implements EditorWebControllerV1 {
     return { update: await this.#engine.executeCommand(envelope) };
   }
 
-  private applyUpdate(update: EngineUpdateV1): Extract<RenderApplyResultV1, { ok: true }> {
+  private applyUpdate(
+    update: EngineUpdateV1,
+    emit = true,
+  ): Extract<RenderApplyResultV1, { ok: true }> {
     const renderResult = this.#renderer.applySnapshot(update.scene);
     if (!renderResult.ok) {
       throw new Error(`Renderer rejected scene: ${renderResult.reason}`);
@@ -376,7 +628,9 @@ export class EditorWebController implements EditorWebControllerV1 {
       canRedo: update.history.canRedo,
       errorMessage: null,
     };
-    this.emit();
+    if (emit) {
+      this.emit();
+    }
     return renderResult;
   }
 
@@ -413,6 +667,23 @@ export interface EditorPersistencePresentationV1 {
   statusLabel: string;
   notice: string | null;
   canRetrySave: boolean;
+}
+
+export interface EditorCameraPresentationV1 {
+  zoomLabel: string;
+  fitContentTitle: string;
+  fitContentAriaLabel: string;
+}
+
+export function getEditorCameraPresentation(
+  snapshot: EditorUiSnapshotV1,
+): EditorCameraPresentationV1 {
+  const zoomLabel = `${snapshot.cameraZoomPercent}%`;
+  return {
+    zoomLabel,
+    fitContentTitle: '回正并适应全部内容',
+    fitContentAriaLabel: `回正并适应全部内容，当前 ${zoomLabel}`,
+  };
 }
 
 export function getEditorPersistencePresentation(
@@ -496,4 +767,25 @@ function chooseActiveElement(
 
 function defaultId(): string {
   return globalThis.crypto.randomUUID();
+}
+
+function isCameraAction(action: EditorActionV1): boolean {
+  return (
+    action.type === 'camera_action' ||
+    action.type === 'zoom_in' ||
+    action.type === 'zoom_out' ||
+    action.type === 'reset_camera'
+  );
+}
+
+function positiveSize(value: number | undefined, fallback: number): number {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : fallback;
+}
+
+function relativeCameraZoomPercent(zoom: number, fitZoom: number): number {
+  return Math.round((zoom / fitZoom) * 100);
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }

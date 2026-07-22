@@ -9,6 +9,7 @@ import {
 } from 'vue';
 
 import {
+  getEditorCameraPresentation,
   getEditorPersistencePresentation,
   type EditorActionV1,
   type EditorWebControllerV1,
@@ -79,13 +80,23 @@ export const NodeInkEditor = defineComponent({
       const currentSnapshot = snapshot.value;
       const isReady = currentSnapshot.status === 'ready';
       const isEditable = isReady && currentSnapshot.documentAccess === 'writer';
+      const cameraPresentation = getEditorCameraPresentation(currentSnapshot);
       const persistence = getEditorPersistencePresentation(currentSnapshot);
-      const visibleError = currentSnapshot.errorMessage ?? currentSnapshot.saveErrorMessage;
-
+      const visibleError =
+        currentSnapshot.errorMessage ??
+        currentSnapshot.saveErrorMessage ??
+        currentSnapshot.cameraSaveErrorMessage;
+      const retryAction = currentSnapshot.errorMessage
+        ? null
+        : currentSnapshot.saveErrorMessage
+          ? 'retry_save'
+          : currentSnapshot.cameraSaveErrorMessage
+            ? 'retry_camera_save'
+            : null;
       return h('main', { class: 'nodeink-shell', 'data-nodeink-host': 'vue' }, [
         h('header', { class: 'nodeink-topbar' }, [
           h('div', [
-            h('span', { class: 'nodeink-kicker' }, 'NodeInk · Phase 0'),
+            h('span', { class: 'nodeink-kicker' }, 'NodeInk · Phase 1A'),
             h('h1', 'Framework-neutral canvas'),
           ]),
           h('span', { class: 'nodeink-host-badge' }, props.hostLabel),
@@ -130,6 +141,42 @@ export const NodeInkEditor = defineComponent({
         ]),
         h('section', { class: 'nodeink-stage', 'aria-label': 'Infinite canvas proof' }, [
           h('div', { ref: canvas, class: 'nodeink-canvas' }),
+          h('nav', { class: 'nodeink-zoom-controls', 'aria-label': 'Canvas view controls' }, [
+            h(
+              'button',
+              {
+                type: 'button',
+                disabled: !isReady,
+                'aria-label': 'Zoom out',
+                title: '缩小',
+                onClick: () => dispatch({ type: 'zoom_out' }),
+              },
+              '−',
+            ),
+            h(
+              'button',
+              {
+                type: 'button',
+                disabled: !isReady,
+                'data-camera-save-status': currentSnapshot.cameraSaveStatus,
+                'aria-label': cameraPresentation.fitContentAriaLabel,
+                title: cameraPresentation.fitContentTitle,
+                onClick: () => dispatch({ type: 'reset_camera' }),
+              },
+              cameraPresentation.zoomLabel,
+            ),
+            h(
+              'button',
+              {
+                type: 'button',
+                disabled: !isReady,
+                'aria-label': 'Zoom in',
+                title: '放大',
+                onClick: () => dispatch({ type: 'zoom_in' }),
+              },
+              '+',
+            ),
+          ]),
           h('output', { class: 'nodeink-status', 'aria-live': 'polite' }, [
             h('span', { 'data-save-status': currentSnapshot.saveStatus }, persistence.statusLabel),
             h('span', currentSnapshot.status),
@@ -143,12 +190,16 @@ export const NodeInkEditor = defineComponent({
             ? h('p', { class: 'nodeink-error', role: 'alert' }, [
                 h(
                   'span',
-                  currentSnapshot.saveErrorMessage ? `保存失败：${visibleError}` : visibleError,
+                  currentSnapshot.saveErrorMessage
+                    ? `保存失败：${visibleError}`
+                    : currentSnapshot.cameraSaveErrorMessage
+                      ? `视图位置保存失败：${visibleError}`
+                      : visibleError,
                 ),
-                persistence.canRetrySave
+                retryAction
                   ? h(
                       'button',
-                      { type: 'button', onClick: () => dispatch({ type: 'retry_save' }) },
+                      { type: 'button', onClick: () => dispatch({ type: retryAction }) },
                       '重试',
                     )
                   : null,

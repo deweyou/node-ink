@@ -2,6 +2,7 @@ import { EditorWebController } from '@nodeink-internal/editor-web';
 import { createWasmEngine } from '@nodeink-internal/engine-web';
 import {
   AtomicSnapshotPersistenceV1,
+  IndexedDbCameraStoreV1,
   IndexedDbSnapshotStoreV1,
   WebLockDocumentLeaseV1,
   type LockManagerPortV1,
@@ -18,9 +19,11 @@ const localDatabaseName = 'nodeink-playground-v1';
 
 export async function createController() {
   let store: IndexedDbSnapshotStoreV1 | null = null;
+  let cameraStore: IndexedDbCameraStoreV1 | null = null;
   let migrationEngine: Awaited<ReturnType<typeof createWasmEngine>> | null = null;
   try {
     store = await IndexedDbSnapshotStoreV1.open(localDatabaseName);
+    cameraStore = await IndexedDbCameraStoreV1.open(`${localDatabaseName}-camera`);
     const durability = store.probeStrictDurability() ? 'strict' : 'relaxed';
     migrationEngine = await createWasmEngine(createBlankDocument('nodeink-migration-runtime'));
     const openMigrationEngine = migrationEngine;
@@ -67,23 +70,28 @@ export async function createController() {
         : undefined;
     const openedRelease = opened.release;
     const openStore = store;
+    const openCameraStore = cameraStore;
     store = null;
+    cameraStore = null;
     migrationEngine = null;
     return new EditorWebController({
       engine,
       renderer: new SvgRenderer(),
       ...(persistenceCoordinator ? { persistence: persistenceCoordinator } : {}),
+      cameraPersistence: openCameraStore,
       documentAccess,
       readonlyReason: isDiagnostic ? 'readonly_diagnostic' : opened.readonlyReason,
       recovery: opened.recovery,
       onDispose: async () => {
         await openedRelease();
         openMigrationEngine.dispose();
+        openCameraStore.close();
         openStore.close();
       },
     });
   } catch (error) {
     migrationEngine?.dispose();
+    cameraStore?.close();
     store?.close();
     throw error;
   }

@@ -2,14 +2,19 @@ import type { NormalizedPointerEventV1, PointerPhaseV1 } from '@nodeink-internal
 
 export type PointerBatchListener = (events: NormalizedPointerEventV1[]) => void;
 
+export interface PointerInputOptionsV1 {
+  shouldHandleEvent?: (event: PointerEvent) => boolean;
+}
+
 export function attachPointerInput(
   target: HTMLElement,
   onPointerBatch: PointerBatchListener,
+  options: PointerInputOptionsV1 = {},
 ): () => void {
   const sequences = new Map<number, number>();
 
   const handlePointerDown = (event: PointerEvent) => {
-    if (event.button !== 0) {
+    if (event.button !== 0 || options.shouldHandleEvent?.(event) === false) {
       return;
     }
     target.setPointerCapture?.(event.pointerId);
@@ -17,18 +22,27 @@ export function attachPointerInput(
     onPointerBatch(normalizeEvents(target, [event], 'down', sequences));
   };
   const handlePointerMove = (event: PointerEvent) => {
+    if (options.shouldHandleEvent?.(event) === false) {
+      return;
+    }
     const coalescedEvents = event.getCoalescedEvents?.() ?? [];
     const events = coalescedEvents.length > 0 ? coalescedEvents : [event];
     event.preventDefault();
     onPointerBatch(normalizeEvents(target, events, 'move', sequences));
   };
   const handlePointerUp = (event: PointerEvent) => {
+    if (options.shouldHandleEvent?.(event) === false) {
+      return;
+    }
     event.preventDefault();
     onPointerBatch(normalizeEvents(target, [event], 'up', sequences));
     releasePointer(target, event.pointerId);
     sequences.delete(event.pointerId);
   };
   const handlePointerCancel = (event: PointerEvent) => {
+    if (options.shouldHandleEvent?.(event) === false) {
+      return;
+    }
     onPointerBatch(normalizeEvents(target, [event], 'cancel', sequences));
     releasePointer(target, event.pointerId);
     sequences.delete(event.pointerId);

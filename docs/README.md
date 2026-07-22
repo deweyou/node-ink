@@ -50,6 +50,7 @@
 ## 工程状态
 
 - [Phase 0 纵向切片结果](planning/phase0-vertical-slice.md)：记录已经实现的边界、验证命令、浏览器证据与尚未覆盖的 Spike。
+- [Phase 1A Camera 与无限画布](planning/phase1a-camera-viewport.md)：记录 Camera 状态、手势、Viewport、独立恢复与三宿主证据。
 - [S1 Pointer benchmark](benchmarks/phase0-s1-pointer.json)：记录 release WASM 环境、P50/P95/P99、字节、错序、commit 与 long task 基线。
 - [S2 Stroke benchmark](benchmarks/phase0-s2-stroke.json)：比较 JSON point 与 Float64Array batch-2/8/32 的延迟、吞吐、复制字节、Scene payload 与 DOM 更新。
 - [S3 Sketch determinism](benchmarks/phase0-s3-sketch.json)：记录 1,000 次稳定性、seed/profile 差异及 Native/WASM canonical hash 对照。
