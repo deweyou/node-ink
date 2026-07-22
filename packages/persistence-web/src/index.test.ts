@@ -1,5 +1,10 @@
 import { IDBFactory } from 'fake-indexeddb';
 import { afterEach, describe, expect, it } from 'vitest';
+import {
+  createBlankDocument,
+  type MigrationAttemptV1,
+  type NodeInkDocumentV1,
+} from '@nodeink-internal/protocol';
 
 import {
   AtomicSnapshotPersistenceV1,
@@ -242,8 +247,8 @@ describe('sha256Hex', () => {
 });
 
 describe('recoverCopyOnWriteV1', () => {
-  it('opens a valid V1 snapshot without requesting a persisted copy', async () => {
-    const candidate = migrationCandidate('head', 1, currentPayload());
+  it('opens a valid V2 snapshot without requesting a persisted copy', async () => {
+    const candidate = migrationCandidate('head', 2, currentPayload());
 
     const recovered = await recoverCopyOnWriteV1({
       candidates: [candidate],
@@ -260,10 +265,12 @@ describe('recoverCopyOnWriteV1', () => {
     });
   });
 
-  it('migrates a copy while preserving the exact source payload', async () => {
-    const legacy = new TextEncoder().encode('{"schemaVersion":0,"documentId":"doc-1"}');
+  it('migrates an explicit V1 copy while preserving the exact source payload', async () => {
+    const legacy = new TextEncoder().encode(
+      '{"schemaVersion":1,"documentId":"doc-1","revision":4,"rootOrder":[],"elements":{}}',
+    );
     const original = [...legacy];
-    const candidate = migrationCandidate('head', 0, legacy);
+    const candidate = migrationCandidate('head', 1, legacy);
 
     const recovered = await recoverCopyOnWriteV1({
       candidates: [candidate],
@@ -275,15 +282,17 @@ describe('recoverCopyOnWriteV1', () => {
     expect([...legacy]).toEqual(original);
     if (recovered.ok) {
       expect(JSON.parse(new TextDecoder().decode(recovered.canonicalPayload))).toMatchObject({
-        schemaVersion: 1,
+        schemaVersion: 2,
+        revision: 5,
+        renderProfile: { kind: 'clean', version: 1 },
       });
     }
   });
 
   it('records a hash mismatch and deterministically falls back to stable', async () => {
-    const corruptHead = migrationCandidate('head', 1, currentPayload());
+    const corruptHead = migrationCandidate('head', 2, currentPayload());
     corruptHead.snapshot.integrity.digest = 'wrong';
-    const stable = migrationCandidate('stable', 1, currentPayload());
+    const stable = migrationCandidate('stable', 2, currentPayload());
 
     const recovered = await recoverCopyOnWriteV1({
       candidates: [corruptHead, stable],
@@ -394,8 +403,8 @@ function saveInput(revision: number, expectedPreviousRevision: number, bytes: Ui
     documentId: 'doc-1',
     revision,
     expectedPreviousRevision,
-    schemaVersion: 1,
-    engineAlgorithmVersion: 'nodeink-scene-v1',
+    schemaVersion: 2,
+    engineAlgorithmVersion: 'nodeink-scene-v2',
     payload: bytes,
     durability: 'strict' as const,
     interruptAt: null,
@@ -419,8 +428,8 @@ function snapshot(revision: number): SnapshotRecordV1 {
     snapshotKey: `doc-1@${revision}`,
     documentId: 'doc-1',
     revision,
-    schemaVersion: 1,
-    engineAlgorithmVersion: 'nodeink-scene-v1',
+    schemaVersion: 2,
+    engineAlgorithmVersion: 'nodeink-scene-v2',
     payload: payload(revision),
     integrity: { algorithm: 'sha-256', digest: String(revision) },
     status: 'candidate',
@@ -439,15 +448,7 @@ function delegateStore(store: SnapshotStoreV1): SnapshotStoreV1 {
 }
 
 function currentPayload(): Uint8Array {
-  return new TextEncoder().encode(
-    JSON.stringify({
-      schemaVersion: 1,
-      documentId: 'doc-1',
-      revision: 0,
-      rootOrder: [],
-      elements: {},
-    }),
-  );
+  return new TextEncoder().encode(JSON.stringify(createBlankDocument('doc-1')));
 }
 
 function migrationCandidate(
@@ -469,26 +470,31 @@ function migrationCandidate(
 
 function migrationPort() {
   return {
-    async migrateDocumentPayload(payloadJson: string) {
-      const parsed = JSON.parse(payloadJson) as { schemaVersion?: number; failMigration?: boolean };
+    async migrateDocumentPayload(payloadJson: string): Promise<MigrationAttemptV1> {
+      const parsed = JSON.parse(payloadJson) as {
+        schemaVersion?: number;
+        documentId?: string;
+        revision?: number;
+        failMigration?: boolean;
+      };
       if (parsed.schemaVersion === 99) {
         return failedMigrationAttempt('schema', 'unknown_schema', 99);
       }
       if (parsed.failMigration) {
         return failedMigrationAttempt('migration', 'migration_failed', 0);
       }
-      const migrated = parsed.schemaVersion === 0;
-      const document = {
-        schemaVersion: 1 as const,
-        documentId: 'doc-1',
-        revision: 0,
-        rootOrder: [],
-        elements: {},
+      if (parsed.schemaVersion !== 0 && parsed.schemaVersion !== 1 && parsed.schemaVersion !== 2) {
+        return failedMigrationAttempt('schema', 'unknown_schema', parsed.schemaVersion ?? -1);
+      }
+      const migrated = parsed.schemaVersion !== 2;
+      const document: NodeInkDocumentV1 = {
+        ...createBlankDocument(parsed.documentId ?? 'doc-1'),
+        revision: (parsed.revision ?? 0) + (migrated ? 1 : 0),
       };
       return {
         result: {
-          sourceSchemaVersion: parsed.schemaVersion ?? 1,
-          targetSchemaVersion: 1,
+          sourceSchemaVersion: parsed.schemaVersion,
+          targetSchemaVersion: 2,
           migrated,
           document,
           canonicalPayload: JSON.stringify(document),
@@ -506,7 +512,7 @@ function failedMigrationAttempt(stage: string, code: string, sourceSchemaVersion
       stage,
       code,
       sourceSchemaVersion,
-      targetSchemaVersion: 1,
+      targetSchemaVersion: 2,
       message: code,
       recovery: 'try_next_snapshot_then_readonly_diagnostic' as const,
     },

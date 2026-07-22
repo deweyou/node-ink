@@ -81,7 +81,10 @@ describe('SvgRenderer', () => {
     expect(result).toMatchObject({ ok: true, changedNodeCount: 1 });
     expect(target.querySelector('text')).toBe(firstText);
     expect(firstText?.querySelector('tspan')?.textContent).toBe('画布');
-    expect(firstText?.querySelector('tspan')?.getAttribute('font-family')).toBe('Arial');
+    expect(firstText?.querySelector('tspan')?.getAttribute('font-family')).toBe(
+      'Noto Sans SC Variable',
+    );
+    expect(firstText?.querySelector('tspan')?.getAttribute('text-anchor')).toBe('middle');
   });
 
   it('updates the viewport independently of scene revision', () => {
@@ -263,6 +266,7 @@ function scene(sceneRevision: number, x: number): SceneSnapshotV1 {
     documentId: 'doc-1',
     documentRevision: sceneRevision,
     sceneRevision,
+    renderProfile: { kind: 'clean', version: 1 },
     rootNodeIds: ['rect-1:shape'],
     nodes: {
       'rect-1:shape': {
@@ -287,6 +291,7 @@ function strokeScene(sceneRevision: number, pathData: string): SceneSnapshotV1 {
     documentId: 'doc-1',
     documentRevision: 0,
     sceneRevision,
+    renderProfile: { kind: 'clean', version: 1 },
     rootNodeIds: ['stroke-1:path'],
     nodes: {
       'stroke-1:path': {
@@ -315,12 +320,17 @@ function movePatch(baseSceneRevision: number, sceneRevision: number, x: number):
   };
 }
 
-function textScene(sceneRevision: number, value: string): SceneSnapshotV1 {
+function textScene(
+  sceneRevision: number,
+  value: string,
+  textAnchor: 'start' | 'middle' | 'end' = sceneRevision === 1 ? 'start' : 'middle',
+): SceneSnapshotV1 {
   return {
     protocolVersion: 1,
     documentId: 'text-fixture',
     documentRevision: sceneRevision,
     sceneRevision,
+    renderProfile: { kind: 'clean', version: 1 },
     rootNodeIds: ['text-1:run'],
     nodes: {
       'text-1:run': {
@@ -332,10 +342,11 @@ function textScene(sceneRevision: number, value: string): SceneSnapshotV1 {
             text: value,
             x: 24,
             y: 48,
-            fontFamily: 'Arial',
+            fontFamily: 'Noto Sans SC Variable',
             fontSize: 20,
             fontWeight: 400,
             fill: '#0f172a',
+            textAnchor,
           },
         ],
       },

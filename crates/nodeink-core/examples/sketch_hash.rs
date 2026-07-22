@@ -1,6 +1,7 @@
 use nodeink_core::{
-    ElementRecordV1, Engine, NodeInkDocumentV1, RectElementV1, RenderProfileV1, SketchFillStyleV1,
-    StrokeElementV1, Vec2,
+    DEFAULT_INK_COLOR, DEFAULT_RECTANGLE_STROKE_COLOR, DEFAULT_RECTANGLE_STROKE_WIDTH,
+    ElementRecordV1, Engine, FillV1, NodeInkDocumentV1, RectElementV1, RenderProfileV1,
+    SketchFillStyleV1, StrokeElementV1, Vec2,
 };
 use serde_json::json;
 
@@ -39,6 +40,9 @@ fn fixture_document() -> NodeInkDocumentV1 {
         y: 40.0,
         width: 160.0,
         height: 96.0,
+        fill: FillV1::default_rectangle(),
+        stroke: DEFAULT_RECTANGLE_STROKE_COLOR.to_string(),
+        stroke_width: DEFAULT_RECTANGLE_STROKE_WIDTH,
     };
     let stroke = StrokeElementV1 {
         id: "stroke-1".to_string(),
@@ -47,6 +51,7 @@ fn fixture_document() -> NodeInkDocumentV1 {
             Vec2 { x: 24.0, y: 28.0 },
             Vec2 { x: 48.0, y: 16.0 },
         ],
+        stroke: DEFAULT_INK_COLOR.to_string(),
         stroke_width: 3.0,
     };
     document.root_order = vec![rectangle.id.clone(), stroke.id.clone()];

@@ -207,6 +207,9 @@ mod tests {
                 y: 2.0,
                 width: 3.0,
                 height: 4.0,
+                fill: crate::FillV1::default_rectangle(),
+                stroke: crate::DEFAULT_RECTANGLE_STROKE_COLOR.to_string(),
+                stroke_width: crate::DEFAULT_RECTANGLE_STROKE_WIDTH,
             },
         }
     }

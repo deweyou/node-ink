@@ -8,6 +8,13 @@ tokens:
     surface: '#ffffff'
     text: 'hsl(28 3.68% 18%)'
     primary: 'hsl(154 37.2% 27%)'
+    ink: '#0f172a'
+    emerald: '#047857'
+    blue: '#2563eb'
+    rose: '#e11d48'
+    mint-fill: '#d1fae5'
+    blue-fill: '#dbeafe'
+    amber-fill: '#fef3c7'
   typography:
     control: 'Source Han Sans SC Web, PingFang SC, Heiti SC, Microsoft YaHei, Noto Sans CJK SC, sans-serif'
     content: 'Noto Sans SC Variable'
@@ -29,7 +36,7 @@ The interface should disappear until the user needs it. Content owns the visual 
 - Show only implemented actions; do not seed the UI with disabled future-product promises.
 - Use compact desktop controls with generous canvas space.
 - Preserve predictable, explicit state transitions over decorative motion.
-- Let Clean and future Sketch rendering express content style; application chrome stays restrained.
+- Let Clean and Sketch rendering express content style; application chrome stays restrained.
 
 ## Typography
 
@@ -57,6 +64,7 @@ The interface should disappear until the user needs it. Content owns the visual 
 - Active tools must be distinguishable without relying only on color.
 - Status badges are compact metadata, not primary calls to action.
 - New panels should be contextual and dismissible rather than permanently shrinking the canvas.
+- Selection styles live in a compact overlay panel at the upper-right canvas edge. It appears only when Rust reports an editable selection and never changes canvas geometry.
 
 ## Interaction
 
@@ -64,6 +72,9 @@ The interface should disappear until the user needs it. Content owns the visual 
 - Tool changes are explicit; history availability is reflected immediately in control state.
 - Select, Draw, and Text are persistent tools. `V`, `P`, and `T` activate them, active buttons use `aria-pressed`, Draw uses a crosshair, Text uses a text cursor, and creating a rectangle returns to Select.
 - Text starts from a canvas click in Text or a semantic double-click on existing text in Select. Editing uses a fixed-font HTML textarea overlay; Enter inserts a line, `Cmd/Ctrl+Enter` or blur commits one Transaction, and `Escape` cancels. Clearing existing text deletes the element through the normal undoable Command path.
+- The top bar exposes one document-level segmented profile control: Clean or Sketch. Sketch uses a fixed v1 preset; seed, roughness, bowing, and hatch parameters are not end-user controls in Phase 1A.
+- Context styles use a fixed accessible palette and discrete presets: rectangle fill/stroke/width, freehand stroke/width, and text color/size/alignment. “No fill” is explicit; arbitrary CSS colors, opacity, dash, and custom Sketch parameters remain outside this slice.
+- Each profile or style press is one Rust Command and one Undo entry. Current values use `aria-pressed` and a visible check/state treatment, not color alone.
 - Freehand uses fixed 3px round ink in this slice. Pen pressure, variable-width outlines, mobile touch editing, and style controls are separate capabilities.
 - The Camera percentage is relative to the current fit-content zoom. Clicking it recenters all content with 64px screen padding; content changes may update the percentage but must not move the Camera automatically.
 - A primary click selects the topmost semantic element; an empty-canvas click or `Escape` clears selection. `Delete`, `Backspace`, and the visible Delete button invoke the same undoable element-deletion action.
@@ -93,7 +104,8 @@ The interface should disappear until the user needs it. Content owns the visual 
 - Do not substitute system fonts for committed canvas text or infer mobile editing from Pointer Events support.
 - Do not let a framework adapter invent save, recovery, or read-only copy independently of the shared presentation contract.
 - Do not add empty toolbar entries for Mermaid, AI, collaboration, or other future phases.
+- Do not infer selected styles from SVG attributes or store a parallel profile in a framework component.
 
 ---
 
-_Last updated: 2026-07-23 | Reason: confirm the fixed canvas font and product text-editing interaction_
+_Last updated: 2026-07-23 | Reason: confirm Phase 1A style presets and Clean/Sketch product controls_

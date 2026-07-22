@@ -7,6 +7,7 @@ import {
   parseCamera,
   parseEngineUpdate,
   parseMigrationAttempt,
+  parseNodeInkDocument,
   parsePointerUpdate,
   parseScenePatch,
   parseSceneResolution,
@@ -18,7 +19,7 @@ import {
 
 const fixtureFontFingerprint = 'noto-sans-sc-v40-fontsource-5.3.0';
 
-describe('protocol V1', () => {
+describe('protocol V1 with schema V2 documents', () => {
   it('parses finite Camera state within the supported zoom range', () => {
     expect(parseCamera('{"x":-12,"y":24,"zoom":1.5}')).toEqual({
       x: -12,
@@ -31,9 +32,10 @@ describe('protocol V1', () => {
 
   it('creates a blank document with explicit versions', () => {
     expect(createBlankDocument('doc-1')).toEqual({
-      schemaVersion: 1,
+      schemaVersion: 2,
       documentId: 'doc-1',
       revision: 0,
+      renderProfile: { kind: 'clean', version: 1 },
       rootOrder: [],
       elements: {},
     });
@@ -48,11 +50,12 @@ describe('protocol V1', () => {
             protocolVersion: 2,
             documentRevision: 0,
             sceneRevision: 0,
+            renderProfile: { kind: 'clean', version: 1 },
             rootNodeIds: [],
             nodes: {},
           },
           history: { canUndo: false, canRedo: false },
-          selection: { selectedElementId: null, bounds: null },
+          selection: { selectedElementId: null, bounds: null, style: null },
         }),
       ),
     ).toThrow('protocol V1');
@@ -81,6 +84,7 @@ describe('protocol V1', () => {
         documentId: 'doc-1',
         documentRevision: 3,
         sceneRevision: 4,
+        renderProfile: { kind: 'clean', version: 1 },
         rootNodeIds: [],
         nodes: {},
       },
@@ -88,6 +92,25 @@ describe('protocol V1', () => {
       selection: {
         selectedElementId: 'rect-1',
         bounds: { x: 8, y: 12, width: 120, height: 80 },
+        style: {
+          kind: 'rect',
+          fill: { kind: 'solid', color: '#d1fae5' },
+          stroke: '#047857',
+          strokeWidth: 2,
+        },
+      },
+    };
+
+    expect(parseEngineUpdate(JSON.stringify(update))).toEqual(update);
+  });
+
+  it('keeps selected unresolved text style while its measured bounds are pending', () => {
+    const update = {
+      ...updateFixture(),
+      selection: {
+        selectedElementId: 'text-1',
+        bounds: null,
+        style: textSelectionStyle(),
       },
     };
 
@@ -104,6 +127,51 @@ describe('protocol V1', () => {
       activeTool: 'select',
       textMeasureRequest: null,
     });
+  });
+
+  it('does not synthesize required schema V2 scene or selection style fields', () => {
+    const missingProfile = updateFixture();
+    delete (missingProfile.scene as { renderProfile?: unknown }).renderProfile;
+    expect(() => parseEngineUpdate(JSON.stringify(missingProfile))).toThrow('protocol V1');
+
+    const missingStyle = updateFixture();
+    delete (missingStyle.selection as { style?: unknown }).style;
+    expect(() => parseEngineUpdate(JSON.stringify(missingStyle))).toThrow('protocol V1');
+  });
+
+  it('strictly parses schema V2 document paint, profile, and finite style values', () => {
+    const document = styledDocumentFixture();
+    expect(parseNodeInkDocument(JSON.stringify(document))).toEqual(document);
+
+    expect(() =>
+      parseNodeInkDocument(
+        JSON.stringify({
+          ...document,
+          elements: {
+            ...document.elements,
+            'rect-1': {
+              ...document.elements['rect-1'],
+              fill: { kind: 'solid', color: '#D1FAE5' },
+            },
+          },
+        }),
+      ),
+    ).toThrow('serialized Document');
+    expect(() =>
+      parseNodeInkDocument(
+        JSON.stringify({
+          ...document,
+          renderProfile: {
+            kind: 'sketch',
+            version: 1,
+            seed: 7,
+            roughness: null,
+            bowing: 0.8,
+            fillStyle: 'hachure',
+          },
+        }),
+      ),
+    ).toThrow('serialized Document');
   });
 
   it.each([null, '', 'pen', {}, 1])('rejects an invalid active tool %o', (activeTool) => {
@@ -165,6 +233,13 @@ describe('protocol V1', () => {
         selection: {
           selectedElementId: 'text-1',
           bounds: { x: 40, y: 48, width: 240, height: 48 },
+          style: {
+            kind: 'text',
+            color: '#0f172a',
+            fontSize: 20,
+            fontWeight: 400,
+            textAlign: 'start',
+          },
         },
       },
     };
@@ -197,6 +272,14 @@ describe('protocol V1', () => {
     {
       ...sceneTextFixture(),
       runs: [{ ...sceneTextFixture().runs[0], x: null }],
+    },
+    {
+      ...sceneTextFixture(),
+      runs: [{ ...sceneTextFixture().runs[0], fill: '#1F2937' }],
+    },
+    {
+      ...sceneTextFixture(),
+      runs: [{ ...sceneTextFixture().runs[0], textAnchor: 'left' }],
     },
   ])('rejects an invalid text Scene node %o', (textNode) => {
     const scene = {
@@ -277,11 +360,30 @@ describe('protocol V1', () => {
 
   it.each([
     {},
-    { selectedElementId: 1, bounds: null },
-    { selectedElementId: null, bounds: {} },
-    { selectedElementId: null, bounds: { x: 0, y: 0, width: 10, height: 10 } },
-    { selectedElementId: 'rect-1', bounds: null },
-    { selectedElementId: 'rect-1', bounds: { x: 0, y: 0, width: -1, height: 10 } },
+    { selectedElementId: 1, bounds: null, style: null },
+    { selectedElementId: null, bounds: {}, style: null },
+    {
+      selectedElementId: null,
+      bounds: { x: 0, y: 0, width: 10, height: 10 },
+      style: null,
+    },
+    { selectedElementId: null, bounds: null, style: textSelectionStyle() },
+    { selectedElementId: 'rect-1', bounds: null, style: null },
+    {
+      selectedElementId: 'rect-1',
+      bounds: { x: 0, y: 0, width: -1, height: 10 },
+      style: rectangleSelectionStyle(),
+    },
+    {
+      selectedElementId: 'rect-1',
+      bounds: { x: 0, y: 0, width: 10, height: 10 },
+      style: { ...rectangleSelectionStyle(), strokeWidth: Number.NaN },
+    },
+    {
+      selectedElementId: 'text-1',
+      bounds: { x: 0, y: 0, width: 10, height: 10 },
+      style: { ...textSelectionStyle(), color: '#0F172A' },
+    },
   ])('rejects invalid selection state %o', (selection) => {
     expect(() => parseEngineUpdate(JSON.stringify({ ...updateFixture(), selection }))).toThrow(
       'protocol V1',
@@ -291,6 +393,7 @@ describe('protocol V1', () => {
   it.each([
     ['document revision', { documentRevision: '0' }],
     ['scene revision', { sceneRevision: '0' }],
+    ['render profile', { renderProfile: { kind: 'sketch', version: 1, seed: -1 } }],
     ['root node ids', { rootNodeIds: {} }],
     ['scene nodes', { nodes: [] }],
   ])('rejects an invalid %s', (_label, sceneOverride) => {
@@ -371,6 +474,22 @@ describe('protocol V1', () => {
     { engineAlgorithmVersion: 1, canonicalHash: 'hash', renderProfile: {}, scene: {} },
     { engineAlgorithmVersion: 'v1', canonicalHash: 1, renderProfile: {}, scene: {} },
     { engineAlgorithmVersion: 'v1', canonicalHash: 'hash', renderProfile: null, scene: {} },
+    {
+      engineAlgorithmVersion: 'v1',
+      canonicalHash: 'hash',
+      renderProfile: { kind: 'clean', version: 1 },
+      scene: {
+        ...updateFixture().scene,
+        renderProfile: {
+          kind: 'sketch',
+          version: 1,
+          seed: 1,
+          roughness: 1,
+          bowing: 1,
+          fillStyle: 'solid',
+        },
+      },
+    },
   ])('rejects invalid scene resolution metadata', (value) => {
     expect(() => parseSceneResolution(JSON.stringify(value))).toThrow('invalid scene resolution');
   });
@@ -399,7 +518,7 @@ describe('protocol V1', () => {
     const success = {
       result: {
         sourceSchemaVersion: 0,
-        targetSchemaVersion: 1,
+        targetSchemaVersion: 2,
         migrated: true,
         document: createBlankDocument('doc-1'),
         canonicalPayload: '{}',
@@ -412,7 +531,7 @@ describe('protocol V1', () => {
         stage: 'schema',
         code: 'unknown_schema',
         sourceSchemaVersion: 99,
-        targetSchemaVersion: 1,
+        targetSchemaVersion: 2,
         message: 'unsupported',
         recovery: 'try_next_snapshot_then_readonly_diagnostic',
       },
@@ -458,12 +577,13 @@ function updateFixture(
       documentId: 'doc-1',
       documentRevision: 0,
       sceneRevision: 0,
+      renderProfile: { kind: 'clean', version: 1 },
       rootNodeIds: [],
       nodes: {},
       ...sceneOverride,
     },
     history: { canUndo: false, canRedo: false, ...historyOverride },
-    selection: { selectedElementId: null, bounds: null },
+    selection: { selectedElementId: null, bounds: null, style: null },
   };
 }
 
@@ -481,6 +601,7 @@ function sceneTextFixture() {
         fontSize: 20,
         fontWeight: 400 as const,
         fill: '#1f2937',
+        textAnchor: 'start' as const,
       },
       {
         text: 'Second line',
@@ -490,6 +611,7 @@ function sceneTextFixture() {
         fontSize: 20,
         fontWeight: 400 as const,
         fill: '#1f2937',
+        textAnchor: 'start' as const,
       },
     ],
   };
@@ -507,6 +629,54 @@ function textElementFixture() {
     fontWeight: 400 as const,
     maxWidth: 240,
     fontFingerprint: fixtureFontFingerprint,
+    color: '#0f172a',
+    textAlign: 'start' as const,
+  };
+}
+
+function rectangleSelectionStyle() {
+  return {
+    kind: 'rect' as const,
+    fill: { kind: 'solid' as const, color: '#d1fae5' },
+    stroke: '#047857',
+    strokeWidth: 2,
+  };
+}
+
+function textSelectionStyle() {
+  return {
+    kind: 'text' as const,
+    color: '#0f172a',
+    fontSize: 20,
+    fontWeight: 400 as const,
+    textAlign: 'start' as const,
+  };
+}
+
+function styledDocumentFixture() {
+  return {
+    schemaVersion: 2 as const,
+    documentId: 'doc-1',
+    revision: 3,
+    renderProfile: {
+      kind: 'sketch' as const,
+      version: 1 as const,
+      seed: 7,
+      roughness: 1.2,
+      bowing: 0.8,
+      fillStyle: 'hachure' as const,
+    },
+    rootOrder: ['rect-1'],
+    elements: {
+      'rect-1': {
+        id: 'rect-1',
+        x: 12,
+        y: 24,
+        width: 160,
+        height: 96,
+        ...rectangleSelectionStyle(),
+      },
+    },
   };
 }
 

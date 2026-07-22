@@ -2,7 +2,9 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
-use crate::{EngineErrorV1, NodeInkDocumentV1, SceneTextRunV1, TextElementV1, fnv1a64_hex};
+use crate::{
+    EngineErrorV1, NodeInkDocumentV1, SceneTextRunV1, TextAnchorV1, TextElementV1, fnv1a64_hex,
+};
 
 pub const CANVAS_FONT_FAMILY: &str = "Noto Sans SC Variable";
 pub const DEFAULT_TEXT_FONT_SIZE: f64 = 24.0;
@@ -199,7 +201,8 @@ pub(crate) fn scene_runs(element: &TextElementV1, metric: &TextMetricsV1) -> Vec
             font_family: element.font_family.clone(),
             font_size: element.font_size,
             font_weight: element.font_weight,
-            fill: "#0f172a".to_string(),
+            fill: element.color.clone(),
+            text_anchor: TextAnchorV1::from(element.text_align),
         })
         .collect()
 }

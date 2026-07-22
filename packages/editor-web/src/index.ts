@@ -5,13 +5,16 @@ import {
   type CommandEnvelopeV1,
   type EnginePortV1,
   type EditorToolV1,
+  type ElementStylePatchV1,
   type EngineUpdateV1,
   type NormalizedPointerEventV1,
   type PointerUpdateV1,
   type RectElementV1,
+  type RenderProfileV1,
   type RendererV1,
   type RenderApplyResultV1,
   type SelectionBoundsV1,
+  type SelectionStyleV1,
   type StrokeInputBatchV1,
   type StrokeTransportV1,
   type StrokeUpdateV1,
@@ -32,6 +35,12 @@ import {
   NODEINK_DEFAULT_TEXT_SIZE,
   type TextEditorOverlayV1,
 } from './text-editor-overlay';
+import {
+  NODEINK_CLEAN_PROFILE,
+  NODEINK_DEFAULT_RECT_STYLE,
+  NODEINK_DEFAULT_TEXT_STYLE,
+  NODEINK_SKETCH_PROFILE,
+} from './style-presets';
 
 const CAMERA_ZOOM_STEP = 1.5;
 const CAMERA_FIT_PADDING = 64;
@@ -51,6 +60,8 @@ export type EditorActionV1 =
   | { type: 'begin_text_edit'; point: Vec2 }
   | { type: 'commit_text_edit'; value: string }
   | { type: 'cancel_text_edit' }
+  | { type: 'update_selection_style'; patch: ElementStylePatchV1 }
+  | { type: 'set_render_profile'; profile: 'clean' | 'sketch' }
   | { type: 'pointer_events'; events: NormalizedPointerEventV1[] }
   | { type: 'stroke_batch'; batch: StrokeInputBatchV1; transport: StrokeTransportV1 }
   | { type: 'undo' }
@@ -114,6 +125,8 @@ export interface EditorUiSnapshotV1 {
   activeElementId: string | null;
   activeTool: EditorToolV1;
   selectionBounds: SelectionBoundsV1 | null;
+  selectionStyle: SelectionStyleV1 | null;
+  renderProfile: RenderProfileV1;
   canUndo: boolean;
   canRedo: boolean;
   errorMessage: string | null;
@@ -210,6 +223,8 @@ export class EditorWebController implements EditorWebControllerV1 {
       activeElementId: null,
       activeTool: 'select',
       selectionBounds: null,
+      selectionStyle: null,
+      renderProfile: NODEINK_CLEAN_PROFILE,
       canUndo: false,
       canRedo: false,
       errorMessage: null,
@@ -644,7 +659,7 @@ export class EditorWebController implements EditorWebControllerV1 {
 
     if (action.type === 'begin_text_edit') {
       const target = await this.#engine.beginTextEditAt(action.point);
-      this.openTextEditor(target.element, action.point);
+      this.openTextEditor(target.element, action.point, target.update.selection.bounds);
       return { update: target.update };
     }
     if (action.type === 'commit_text_edit') {
@@ -672,7 +687,7 @@ export class EditorWebController implements EditorWebControllerV1 {
         const down = action.events.find((event) => event.phase === 'down');
         if (down && !this.#textEditor) {
           const target = await this.#engine.beginTextEditAt(down.point);
-          this.openTextEditor(target.element, down.point);
+          this.openTextEditor(target.element, down.point, target.update.selection.bounds);
           return { update: target.update };
         }
         return { update: await this.#engine.currentUpdate() };
@@ -705,7 +720,9 @@ export class EditorWebController implements EditorWebControllerV1 {
     if (
       action.type !== 'create_rectangle' &&
       action.type !== 'move_active' &&
-      action.type !== 'delete_selection'
+      action.type !== 'delete_selection' &&
+      action.type !== 'update_selection_style' &&
+      action.type !== 'set_render_profile'
     ) {
       throw new Error(`Unsupported editor action: ${action.type}`);
     }
@@ -726,10 +743,22 @@ export class EditorWebController implements EditorWebControllerV1 {
                 elementIds: [this.requireActiveElement()],
                 delta: action.delta,
               }
-            : {
-                type: 'delete_elements',
-                elementIds: [this.requireActiveElement()],
-              },
+            : action.type === 'update_selection_style'
+              ? {
+                  type: 'update_element_style',
+                  elementId: this.requireActiveElement(),
+                  patch: action.patch,
+                }
+              : action.type === 'set_render_profile'
+                ? {
+                    type: 'set_render_profile',
+                    renderProfile:
+                      action.profile === 'clean' ? NODEINK_CLEAN_PROFILE : NODEINK_SKETCH_PROFILE,
+                  }
+                : {
+                    type: 'delete_elements',
+                    elementIds: [this.requireActiveElement()],
+                  },
     };
     if (action.type === 'create_rectangle' && this.#snapshot.activeTool !== 'select') {
       this.#freehandInput.reset();
@@ -738,12 +767,21 @@ export class EditorWebController implements EditorWebControllerV1 {
     return { update: await this.#engine.executeCommand(envelope) };
   }
 
-  private openTextEditor(element: TextElementV1 | null, point: Vec2): void {
+  private openTextEditor(
+    element: TextElementV1 | null,
+    point: Vec2,
+    selectionBounds: SelectionBoundsV1 | null,
+  ): void {
     if (!this.#cameraTarget) {
       throw new Error('Editor must be mounted before editing text');
     }
     this.#textEditor?.cancel();
-    const position = element ? { x: element.x, y: element.y } : point;
+    const position = element
+      ? {
+          x: selectionBounds?.x ?? element.x,
+          y: selectionBounds?.y ?? element.y,
+        }
+      : point;
     this.#textDraft = {
       element,
       position,
@@ -757,6 +795,7 @@ export class EditorWebController implements EditorWebControllerV1 {
       camera: this.#snapshot.camera,
       fontSize: element?.fontSize ?? NODEINK_DEFAULT_TEXT_SIZE,
       fontWeight: element?.fontWeight ?? 400,
+      textAlign: element?.textAlign ?? NODEINK_DEFAULT_TEXT_STYLE.textAlign,
       onCommit: (value) => {
         if (this.#textEditor === overlay) {
           this.#textEditor = null;
@@ -811,6 +850,8 @@ export class EditorWebController implements EditorWebControllerV1 {
             fontWeight: 400,
             maxWidth: null,
             fontFingerprint: this.#textMetrics.fingerprint(),
+            color: NODEINK_DEFAULT_TEXT_STYLE.color,
+            textAlign: NODEINK_DEFAULT_TEXT_STYLE.textAlign,
           },
         };
     return this.#engine.executeCommand({
@@ -852,6 +893,8 @@ export class EditorWebController implements EditorWebControllerV1 {
       activeElementId: update.selection.selectedElementId,
       activeTool: update.activeTool,
       selectionBounds: update.selection.bounds,
+      selectionStyle: update.selection.style,
+      renderProfile: update.scene.renderProfile,
       canUndo: update.history.canUndo,
       canRedo: update.history.canRedo,
       errorMessage: null,
@@ -982,10 +1025,24 @@ export {
   NODEINK_CANVAS_FONT_FAMILY,
   NODEINK_DEFAULT_TEXT_SIZE,
 } from './text-font';
+export {
+  NODEINK_CLEAN_PROFILE,
+  NODEINK_COLOR_PRESETS,
+  NODEINK_DEFAULT_RECT_STYLE,
+  NODEINK_DEFAULT_STROKE_STYLE,
+  NODEINK_DEFAULT_TEXT_STYLE,
+  NODEINK_FILL_PRESETS,
+  NODEINK_SKETCH_PROFILE,
+  NODEINK_STROKE_WIDTH_PRESETS,
+  NODEINK_TEXT_ALIGN_PRESETS,
+  NODEINK_TEXT_SIZE_PRESETS,
+  fillPresetMatches,
+} from './style-presets';
 export { attachImeComposition } from './ime-input';
 export type { ImeCompositionBindingV1, ImeCompositionStateV1 } from './ime-input';
 export { CanvasTextMetricsAdapter } from './text-metrics';
 export type { CanvasTextMetricsAdapterOptions, TextMeasureBatchResultV1 } from './text-metrics';
+export type { ElementStylePatchV1, SelectionStyleV1 } from '@nodeink-internal/protocol';
 
 function createRectangle(
   id: string,
@@ -998,6 +1055,9 @@ function createRectangle(
     y: position?.y ?? 72,
     width: 176,
     height: 104,
+    fill: NODEINK_DEFAULT_RECT_STYLE.fill,
+    stroke: NODEINK_DEFAULT_RECT_STYLE.stroke,
+    strokeWidth: NODEINK_DEFAULT_RECT_STYLE.strokeWidth,
   };
 }
 

@@ -90,7 +90,7 @@ describe('createWasmEngine', () => {
       expectedRevision: 0,
       command: {
         type: 'create_rectangle',
-        rectangle: { kind: 'rect', id: 'rect-1', x: 1, y: 2, width: 3, height: 4 },
+        rectangle: rectangleElement(),
       },
     };
     const batch = diagramOperationBatch();
@@ -137,8 +137,44 @@ describe('createWasmEngine', () => {
         patch: { text: 'Updated\ntext', maxWidth: null },
       },
     };
+    const updateStyleCommand: CommandEnvelopeV1 = {
+      protocolVersion: 1,
+      commandId: 'update-style-1',
+      documentId: 'doc-1',
+      expectedRevision: 0,
+      command: {
+        type: 'update_element_style',
+        elementId: 'text-1',
+        patch: {
+          kind: 'text',
+          color: '#2563eb',
+          fontSize: 28,
+          fontWeight: 500,
+          textAlign: 'center',
+        },
+      },
+    };
+    const renderProfileCommand: CommandEnvelopeV1 = {
+      protocolVersion: 1,
+      commandId: 'set-render-profile-1',
+      documentId: 'doc-1',
+      expectedRevision: 0,
+      command: {
+        type: 'set_render_profile',
+        renderProfile: {
+          kind: 'sketch',
+          version: 1,
+          seed: 42,
+          roughness: 1.2,
+          bowing: 0.8,
+          fillStyle: 'hachure',
+        },
+      },
+    };
     await expect(engine.executeCommand(createTextCommand)).resolves.toBeDefined();
     await expect(engine.executeCommand(updateTextCommand)).resolves.toBeDefined();
+    await expect(engine.executeCommand(updateStyleCommand)).resolves.toBeDefined();
+    await expect(engine.executeCommand(renderProfileCommand)).resolves.toBeDefined();
     await expect(engine.setActiveTool('freehand')).resolves.toMatchObject({
       activeTool: 'freehand',
     });
@@ -242,6 +278,8 @@ describe('createWasmEngine', () => {
     expect(wasm.handle.executeCommand).toHaveBeenCalledWith(JSON.stringify(command));
     expect(wasm.handle.executeCommand).toHaveBeenCalledWith(JSON.stringify(createTextCommand));
     expect(wasm.handle.executeCommand).toHaveBeenCalledWith(JSON.stringify(updateTextCommand));
+    expect(wasm.handle.executeCommand).toHaveBeenCalledWith(JSON.stringify(updateStyleCommand));
+    expect(wasm.handle.executeCommand).toHaveBeenCalledWith(JSON.stringify(renderProfileCommand));
     expect(wasm.handle.setActiveTool).toHaveBeenCalledWith('freehand');
     expect(wasm.handle.setSelection).toHaveBeenCalledWith('rect-1');
     expect(wasm.handle.beginTextEditAt).toHaveBeenCalledWith('{"x":40,"y":48}');
@@ -443,7 +481,7 @@ function diagramOperationBatch(): DiagramOperationBatchV1 {
       {
         type: 'create_rectangle',
         opId: 'create-1',
-        rectangle: { kind: 'rect', id: 'rect-1', x: 1, y: 2, width: 3, height: 4 },
+        rectangle: rectangleElement(),
       },
     ],
   };
@@ -470,11 +508,12 @@ function validUpdate(activeTool: 'select' | 'freehand' | 'text' = 'select'): str
       documentId: 'doc-1',
       documentRevision: 0,
       sceneRevision: 0,
+      renderProfile: { kind: 'clean', version: 1 },
       rootNodeIds: [],
       nodes: {},
     },
     history: { canUndo: false, canRedo: false },
-    selection: { selectedElementId: null, bounds: null },
+    selection: { selectedElementId: null, bounds: null, style: null },
   });
 }
 
@@ -490,6 +529,8 @@ function textElement(): TextElementV1 {
     fontWeight: 400,
     maxWidth: 240,
     fontFingerprint: fixtureFontFingerprint,
+    color: '#0f172a',
+    textAlign: 'start',
   };
 }
 
@@ -501,6 +542,13 @@ function textEditTarget(): string {
       selection: {
         selectedElementId: 'text-1',
         bounds: { x: 40, y: 48, width: 240, height: 48 },
+        style: {
+          kind: 'text',
+          color: '#0f172a',
+          fontSize: 20,
+          fontWeight: 400,
+          textAlign: 'start',
+        },
       },
     },
   });
@@ -570,11 +618,25 @@ function migrationAttempt(): string {
   return JSON.stringify({
     result: {
       sourceSchemaVersion: 0,
-      targetSchemaVersion: 1,
+      targetSchemaVersion: 2,
       migrated: true,
       document: createBlankDocument('doc-1'),
       canonicalPayload: JSON.stringify(createBlankDocument('doc-1')),
     },
     report: null,
   });
+}
+
+function rectangleElement() {
+  return {
+    kind: 'rect' as const,
+    id: 'rect-1',
+    x: 1,
+    y: 2,
+    width: 3,
+    height: 4,
+    fill: { kind: 'solid' as const, color: '#d1fae5' },
+    stroke: '#047857',
+    strokeWidth: 2,
+  };
 }

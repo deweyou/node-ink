@@ -205,6 +205,14 @@
 - IME buffer 只存在于 HTML textarea overlay。Enter 插入换行，`Cmd/Ctrl+Enter` 或 blur 提交一次，`Escape` 取消；空白新文本不产生 Command，清空已有文本走 `delete_elements`。
 - Text 工具快捷键为 `T`；Text 单击开始创建，Select 对已有文本的双击通过 Rust 语义命中进入编辑，不能依赖 SVG DOM target。
 
+### D-30 Phase 1A 持久样式与 Clean/Sketch
+
+- `renderProfile` 是 Rust Document 的持久字段；UI 只暴露 `Clean | Sketch`。Sketch v1 使用固定 preset：`seed=1313817669`、`roughness=1.2`、`bowing=0.8`、`fillStyle=hachure`，不把 benchmark 参数面板直接暴露给用户。
+- 元素样式同样属于 Document：矩形持久 fill/stroke/strokeWidth，自由笔持久 stroke/strokeWidth，文本持久 color/fontSize/fontWeight/textAlign。Style 与 Profile 修改都通过一次 Rust Command/Transaction，并形成一个可理解的 Undo entry。
+- Phase 1A 使用固定 preset：fill 为 mint/blue/amber/none，stroke/text color 为 ink/emerald/blue/rose，线宽为 1/2/4px，字号为 18/24/32px，文本对齐为 start/center/end。协议只接受显式 none 或 canonical 小写六位 sRGB hex，不接受任意 CSS paint。
+- Rust 从选中语义元素派生只读 style presentation；React、Vue、Vanilla 不读取 SVG 属性或反序列化 Document 来猜测当前值。右侧样式面板是画布 overlay，只在可编辑选择存在时显示。
+- schemaVersion 2 通过 Rust copy-on-write migration 把 V1 默认成 Clean 与当前视觉样式；迁移不修改源 bytes。Scene 自描述 resolved Profile，Clean/Sketch 都消费持久 paint，Sketch 随机几何仍只由 Rust resolver 生成。
+
 ## 22. 需要产品负责人决策的问题
 
 以下问题不阻碍继续评审文档，但会阻碍对应功能进入实现。

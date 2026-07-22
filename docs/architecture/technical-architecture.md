@@ -188,35 +188,32 @@ TypeScript 负责平台能力和用户体验集成：
 type DocumentId = string;
 type ElementId = string;
 
-interface NodeInkDocumentV1 {
-  schemaVersion: 1;
+interface NodeInkDocumentV2 {
+  schemaVersion: 2;
   documentId: DocumentId;
   revision: number;
-  title: string;
-  createdAt: string;
-  updatedAt: string;
-  renderProfile: RenderProfile;
+  renderProfile: RenderProfileV1;
   rootOrder: ElementId[];
   elements: Record<ElementId, ElementRecordV1>;
-  metadata: Record<string, JsonValue>;
 }
 
-type RenderProfile =
+type RenderProfileV1 =
   | { kind: 'clean'; version: 1 }
   | {
       kind: 'sketch';
       version: 1;
+      seed: number;
       roughness: number;
       bowing: number;
       fillStyle: 'solid' | 'hachure';
     };
 ```
 
-`rootOrder` 是根层级唯一顺序真相。Group 自己持有 `childOrder`；元素不能同时出现在多个 order 中。加载和每次 Transaction 都验证引用完整性、无环和唯一父级。
+Schema V2 是 Phase 1A 当前持久格式：V0/V1 通过 Rust copy-on-write migration 补齐原视觉默认值与 Clean Profile，迁移不修改源 payload。`rootOrder` 是当前扁平元素顺序真相；Group、Transform 与 parent/child order 在 Phase 1B 的下一 schema 中显式引入。
 
-时间字段用于产品展示，不参与几何确定性；重放测试比较规范化内容与 Scene hash，不比较 `updatedAt`。
+### 8.2 元素公共字段（Phase 1B 目标）
 
-### 8.2 元素公共字段
+下面的公共 Transform/metadata 是后续目标模型，不属于 Phase 1A Schema V2。当前 V2 的 Rect、Stroke、Text 继续保留各自直接几何字段，并持久化有限样式：Rect 的 fill/stroke/strokeWidth、Stroke 的 stroke/strokeWidth、Text 的 color/fontSize/fontWeight/textAlign。
 
 ```ts
 interface ElementBaseV1 {
@@ -247,7 +244,7 @@ interface ShapeStyleV1 {
 
 持久化时对浮点值执行明确的 finite 检查和规范化舍入，拒绝 `NaN`、`Infinity` 和超出安全边界的坐标。渲染阶段可以保留更高内部精度。
 
-### 8.3 Phase 1 元素
+### 8.3 Phase 1B 目标元素
 
 ```ts
 type ElementRecordV1 =
@@ -339,7 +336,8 @@ type CommandV1 =
   | { type: 'update_elements'; updates: ElementUpdateV1[] }
   | { type: 'delete_elements'; elementIds: ElementId[] }
   | { type: 'move_elements'; elementIds: ElementId[]; delta: Vec2 }
-  | { type: 'set_render_profile'; profile: RenderProfile }
+  | { type: 'update_element_style'; elementId: ElementId; patch: ElementStylePatchV1 }
+  | { type: 'set_render_profile'; renderProfile: RenderProfileV1 }
   | { type: 'group_elements'; groupId: ElementId; elementIds: ElementId[] }
   | { type: 'ungroup_elements'; groupId: ElementId };
 ```
@@ -637,7 +635,7 @@ interface ScenePatchV1 {
 - **理由**：SVG、Canvas、Headless 和导出共享确定性几何；Renderer 保持简单。
 - **替代方案**：Renderer 根据 roughness/seed 各自生成路径。
 - **适用边界**：若未来 GPU Renderer 需要专用 tessellation，可在 Scene 中携带规范化 path/segment，而不是重做随机几何。
-- **当前实施**：Phase 0 验证同 seed Scene hash，Phase 1A 实施。
+- **当前实施**：Phase 0 验证同 seed Scene hash；Phase 1A 已把 Clean/Sketch 作为持久 Document Profile，并让两种 resolver 消费同一份元素 paint。Renderer 只接收最终 fill/stroke/textAnchor。
 - **未来切换成本**：若从 Renderer 后移回 Scene，成本高；因此从第一天固定在 Scene 层。
 
 ## 13. Renderer 接口

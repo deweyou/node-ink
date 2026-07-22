@@ -233,6 +233,7 @@ export class SvgRenderer implements RendererV1 {
         span.setAttribute('font-size', String(run.fontSize));
         span.setAttribute('font-weight', String(run.fontWeight));
         span.setAttribute('fill', run.fill);
+        span.setAttribute('text-anchor', run.textAnchor);
         return span;
       }),
     );

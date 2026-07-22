@@ -35,6 +35,8 @@ describe('NodeInkEditor', () => {
     expect(button(target, 'Rectangle').disabled).toBe(false);
     expect(button(target, 'Move').disabled).toBe(true);
     expect(button(target, 'Delete').disabled).toBe(true);
+    expect(button(target, 'Clean').ariaPressed).toBe('true');
+    expect(button(target, 'Sketch').ariaPressed).toBe('false');
     expect(button(target, '100%').title).toBe('回正并适应全部内容');
     expect(button(target, '100%').ariaLabel).toBe('回正并适应全部内容，当前 100%');
 
@@ -79,6 +81,89 @@ describe('NodeInkEditor', () => {
     expect(target.querySelector('[role="alert"]')?.textContent).toContain(
       'recoverable engine error',
     );
+  });
+
+  it('dispatches rendering profiles and contextual selection styles', async () => {
+    const controller = new StubController();
+    const target = document.createElement('div');
+    app = createApp(NodeInkEditor, { controller });
+    app.mount(target);
+    await nextTick();
+
+    expect(target.querySelector('[aria-label="Selection style"]')).toBeNull();
+    button(target, 'Sketch').click();
+    expect(controller.actions.at(-1)).toEqual({
+      type: 'set_render_profile',
+      profile: 'sketch',
+    });
+
+    controller.setSnapshot({
+      ...controller.getSnapshot(),
+      activeElementId: 'rect-1',
+      renderProfile: {
+        kind: 'sketch',
+        version: 1,
+        seed: 1_313_817_669,
+        roughness: 1.2,
+        bowing: 0.8,
+        fillStyle: 'hachure',
+      },
+      selectionStyle: {
+        kind: 'rect',
+        fill: { kind: 'solid', color: '#d1fae5' },
+        stroke: '#047857',
+        strokeWidth: 2,
+      },
+    });
+    await nextTick();
+
+    expect(button(target, 'Clean').ariaPressed).toBe('false');
+    expect(button(target, 'Sketch').ariaPressed).toBe('true');
+    expect(target.querySelector('[aria-label="Selection style"]')).not.toBeNull();
+    expect(labelledButton(target, 'Fill Mint').ariaPressed).toBe('true');
+    expect(labelledButton(target, 'Fill Blue').ariaPressed).toBe('false');
+    expect(labelledButton(target, 'Stroke Emerald').ariaPressed).toBe('true');
+    expect(button(target, '2px').ariaPressed).toBe('true');
+
+    labelledButton(target, 'Fill Blue').click();
+    labelledButton(target, 'Stroke Blue').click();
+    button(target, '4px').click();
+    expect(controller.actions.slice(-3)).toEqual([
+      {
+        type: 'update_selection_style',
+        patch: { kind: 'rect', fill: { kind: 'solid', color: '#dbeafe' } },
+      },
+      {
+        type: 'update_selection_style',
+        patch: { kind: 'rect', stroke: '#2563eb' },
+      },
+      {
+        type: 'update_selection_style',
+        patch: { kind: 'rect', strokeWidth: 4 },
+      },
+    ]);
+
+    controller.setSnapshot({
+      ...controller.getSnapshot(),
+      activeElementId: 'text-1',
+      selectionStyle: {
+        kind: 'text',
+        color: '#2563eb',
+        fontSize: 24,
+        fontWeight: 400,
+        textAlign: 'center',
+      },
+    });
+    await nextTick();
+
+    expect(labelledButton(target, 'Color Blue').ariaPressed).toBe('true');
+    expect(button(target, '24').ariaPressed).toBe('true');
+    expect(button(target, 'Center').ariaPressed).toBe('true');
+    button(target, 'Right').click();
+    expect(controller.actions.at(-1)).toEqual({
+      type: 'update_selection_style',
+      patch: { kind: 'text', textAlign: 'end' },
+    });
   });
 
   it('uses a custom host label and absorbs mount rejection', async () => {
@@ -195,6 +280,8 @@ class StubController implements EditorWebControllerV1 {
     activeElementId: null,
     activeTool: 'select',
     selectionBounds: null,
+    selectionStyle: null,
+    renderProfile: { kind: 'clean', version: 1 },
     canUndo: false,
     canRedo: false,
     errorMessage: null,
@@ -253,6 +340,16 @@ function button(target: HTMLElement, label: string): HTMLButtonElement {
   );
   if (!match) {
     throw new Error(`button ${label} was not rendered`);
+  }
+  return match;
+}
+
+function labelledButton(target: HTMLElement, label: string): HTMLButtonElement {
+  const match = [...target.querySelectorAll('button')].find(
+    (candidate) => candidate.ariaLabel === label,
+  );
+  if (!match) {
+    throw new Error(`button labelled ${label} was not rendered`);
   }
   return match;
 }

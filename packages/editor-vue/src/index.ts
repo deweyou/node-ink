@@ -9,10 +9,18 @@ import {
 } from 'vue';
 
 import {
+  NODEINK_COLOR_PRESETS,
+  NODEINK_FILL_PRESETS,
+  NODEINK_STROKE_WIDTH_PRESETS,
+  NODEINK_TEXT_ALIGN_PRESETS,
+  NODEINK_TEXT_SIZE_PRESETS,
+  fillPresetMatches,
   getEditorCameraPresentation,
   getEditorPersistencePresentation,
+  type ElementStylePatchV1,
   type EditorActionV1,
   type EditorWebControllerV1,
+  type SelectionStyleV1,
 } from '@nodeink-internal/editor-web';
 
 export interface NodeInkEditorProps {
@@ -99,7 +107,25 @@ export const NodeInkEditor = defineComponent({
             h('span', { class: 'nodeink-kicker' }, 'NodeInk · Phase 1A'),
             h('h1', 'Framework-neutral canvas'),
           ]),
-          h('span', { class: 'nodeink-host-badge' }, props.hostLabel),
+          h('div', { class: 'nodeink-topbar-actions' }, [
+            h(
+              'nav',
+              { class: 'nodeink-profile-toggle', 'aria-label': 'Rendering profile' },
+              (['clean', 'sketch'] as const).map((profile) =>
+                h(
+                  'button',
+                  {
+                    type: 'button',
+                    'aria-pressed': currentSnapshot.renderProfile.kind === profile,
+                    disabled: !isEditable,
+                    onClick: () => dispatch({ type: 'set_render_profile', profile }),
+                  },
+                  profile === 'clean' ? 'Clean' : 'Sketch',
+                ),
+              ),
+            ),
+            h('span', { class: 'nodeink-host-badge' }, props.hostLabel),
+          ]),
         ]),
         h('aside', { class: 'nodeink-toolbar', 'aria-label': 'Canvas actions' }, [
           h(
@@ -187,6 +213,11 @@ export const NodeInkEditor = defineComponent({
         ]),
         h('section', { class: 'nodeink-stage', 'aria-label': 'Infinite canvas proof' }, [
           h('div', { ref: canvas, class: 'nodeink-canvas' }),
+          isEditable && currentSnapshot.selectionStyle
+            ? renderSelectionStylePanel(currentSnapshot.selectionStyle, (patch) =>
+                dispatch({ type: 'update_selection_style', patch }),
+              )
+            : null,
           h('nav', { class: 'nodeink-zoom-controls', 'aria-label': 'Canvas view controls' }, [
             h(
               'button',
@@ -258,3 +289,120 @@ export const NodeInkEditor = defineComponent({
     };
   },
 });
+
+function renderSelectionStylePanel(
+  style: SelectionStyleV1,
+  dispatch: (patch: ElementStylePatchV1) => void,
+) {
+  const groups =
+    style.kind === 'rect'
+      ? [
+          styleGroup(
+            'Fill',
+            NODEINK_FILL_PRESETS.map((preset) =>
+              swatchButton(
+                `Fill ${preset.label}`,
+                preset.value.kind === 'solid' ? preset.value.color : null,
+                fillPresetMatches(style.fill, preset.value),
+                () => dispatch({ kind: 'rect', fill: preset.value }),
+              ),
+            ),
+          ),
+          colorGroup('Stroke', style.stroke, (stroke) => dispatch({ kind: 'rect', stroke })),
+          widthGroup(style.strokeWidth, (strokeWidth) => dispatch({ kind: 'rect', strokeWidth })),
+        ]
+      : style.kind === 'stroke'
+        ? [
+            colorGroup('Color', style.stroke, (stroke) => dispatch({ kind: 'stroke', stroke })),
+            widthGroup(style.strokeWidth, (strokeWidth) =>
+              dispatch({ kind: 'stroke', strokeWidth }),
+            ),
+          ]
+        : [
+            colorGroup('Color', style.color, (color) => dispatch({ kind: 'text', color })),
+            styleGroup(
+              'Size',
+              NODEINK_TEXT_SIZE_PRESETS.map((fontSize) =>
+                h(
+                  'button',
+                  {
+                    type: 'button',
+                    'aria-pressed': style.fontSize === fontSize,
+                    onClick: () => dispatch({ kind: 'text', fontSize }),
+                  },
+                  String(fontSize),
+                ),
+              ),
+            ),
+            styleGroup(
+              'Align',
+              NODEINK_TEXT_ALIGN_PRESETS.map((preset) =>
+                h(
+                  'button',
+                  {
+                    type: 'button',
+                    'aria-pressed': style.textAlign === preset.value,
+                    onClick: () => dispatch({ kind: 'text', textAlign: preset.value }),
+                  },
+                  preset.label,
+                ),
+              ),
+            ),
+          ];
+
+  return h('aside', { class: 'nodeink-style-panel', 'aria-label': 'Selection style' }, [
+    h('h2', { class: 'nodeink-style-title' }, [
+      'Style',
+      h('span', style.kind === 'rect' ? 'Rectangle' : style.kind === 'stroke' ? 'Stroke' : 'Text'),
+    ]),
+    ...groups,
+  ]);
+}
+
+function colorGroup(label: string, value: string, onChange: (color: string) => void) {
+  return styleGroup(
+    label,
+    NODEINK_COLOR_PRESETS.map((preset) =>
+      swatchButton(`${label} ${preset.label}`, preset.value, value === preset.value, () =>
+        onChange(preset.value),
+      ),
+    ),
+  );
+}
+
+function widthGroup(value: number, onChange: (value: number) => void) {
+  return styleGroup(
+    'Width',
+    NODEINK_STROKE_WIDTH_PRESETS.map((strokeWidth) =>
+      h(
+        'button',
+        {
+          type: 'button',
+          'aria-pressed': value === strokeWidth,
+          onClick: () => onChange(strokeWidth),
+        },
+        `${strokeWidth}px`,
+      ),
+    ),
+  );
+}
+
+function styleGroup(label: string, children: ReturnType<typeof h>[]) {
+  return h('fieldset', { class: 'nodeink-style-group' }, [
+    h('legend', label),
+    h('div', { class: 'nodeink-style-options' }, children),
+  ]);
+}
+
+function swatchButton(label: string, color: string | null, pressed: boolean, onClick: () => void) {
+  return h('button', {
+    type: 'button',
+    class: 'nodeink-swatch',
+    'data-none': color === null ? 'true' : undefined,
+    'aria-label': label,
+    title: label,
+    'aria-pressed': pressed,
+    style: color ? { '--swatch-color': color } : undefined,
+    onClick,
+  });
+}

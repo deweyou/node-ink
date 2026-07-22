@@ -1,16 +1,21 @@
 export const protocolVersion = 1 as const;
-export const schemaVersion = 1 as const;
+export const schemaVersion = 2 as const;
 export const canvasFontFamily = 'Noto Sans SC Variable' as const;
 
 export interface NodeInkDocumentV1 {
-  schemaVersion: 1;
+  schemaVersion: 2;
   documentId: string;
   revision: number;
+  renderProfile: RenderProfileV1;
   rootOrder: string[];
   elements: Record<string, ElementRecordV1>;
 }
 
 export type ElementRecordV1 = RectElementV1 | StrokeElementV1 | TextElementV1;
+
+export type FillV1 = { kind: 'none' } | { kind: 'solid'; color: string };
+
+export type TextAlignV1 = 'start' | 'center' | 'end';
 
 export interface RectElementV1 {
   kind: 'rect';
@@ -19,6 +24,9 @@ export interface RectElementV1 {
   y: number;
   width: number;
   height: number;
+  fill: FillV1;
+  stroke: string;
+  strokeWidth: number;
 }
 
 export interface StrokeElementV1 {
@@ -26,6 +34,7 @@ export interface StrokeElementV1 {
   id: string;
   points: Vec2[];
   strokeWidth: number;
+  stroke: string;
 }
 
 export interface TextElementV1 {
@@ -39,6 +48,8 @@ export interface TextElementV1 {
   fontWeight: 400 | 500;
   maxWidth: number | null;
   fontFingerprint: string;
+  color: string;
+  textAlign: TextAlignV1;
 }
 
 export interface Vec2 {
@@ -80,7 +91,29 @@ export type CommandV1 =
   | { type: 'create_text'; text: TextElementV1 }
   | { type: 'update_text'; elementId: string; patch: TextPatchV1 }
   | { type: 'update_rectangle'; elementId: string; patch: RectanglePatchV1 }
+  | { type: 'update_element_style'; elementId: string; patch: ElementStylePatchV1 }
+  | { type: 'set_render_profile'; renderProfile: RenderProfileV1 }
   | { type: 'delete_elements'; elementIds: string[] };
+
+export type ElementStylePatchV1 =
+  | {
+      kind: 'rect';
+      fill?: FillV1;
+      stroke?: string;
+      strokeWidth?: number;
+    }
+  | {
+      kind: 'stroke';
+      stroke?: string;
+      strokeWidth?: number;
+    }
+  | {
+      kind: 'text';
+      color?: string;
+      fontSize?: number;
+      fontWeight?: 400 | 500;
+      textAlign?: TextAlignV1;
+    };
 
 export interface TextPatchV1 {
   text?: string;
@@ -169,7 +202,28 @@ export interface SelectionBoundsV1 {
 export interface SelectionStateV1 {
   selectedElementId: string | null;
   bounds: SelectionBoundsV1 | null;
+  style: SelectionStyleV1 | null;
 }
+
+export type SelectionStyleV1 =
+  | {
+      kind: 'rect';
+      fill: FillV1;
+      stroke: string;
+      strokeWidth: number;
+    }
+  | {
+      kind: 'stroke';
+      stroke: string;
+      strokeWidth: number;
+    }
+  | {
+      kind: 'text';
+      color: string;
+      fontSize: number;
+      fontWeight: 400 | 500;
+      textAlign: TextAlignV1;
+    };
 
 export interface SerializedDocumentV1 {
   canonicalPayload: string;
@@ -182,6 +236,7 @@ export interface SceneSnapshotV1 {
   documentId: string;
   documentRevision: number;
   sceneRevision: number;
+  renderProfile: RenderProfileV1;
   rootNodeIds: string[];
   nodes: Record<string, SceneNodeV1>;
 }
@@ -327,6 +382,7 @@ export interface SceneTextRunV1 {
   fontSize: number;
   fontWeight: 400 | 500;
   fill: string;
+  textAnchor: 'start' | 'middle' | 'end';
 }
 
 export interface ViewportV1 {
@@ -447,9 +503,18 @@ export function createBlankDocument(documentId: string): NodeInkDocumentV1 {
     schemaVersion,
     documentId,
     revision: 0,
+    renderProfile: { kind: 'clean', version: 1 },
     rootOrder: [],
     elements: {},
   };
+}
+
+export function parseNodeInkDocument(value: string): NodeInkDocumentV1 {
+  const parsed: unknown = JSON.parse(value);
+  if (!isNodeInkDocument(parsed)) {
+    throw new Error('Engine returned an invalid serialized Document');
+  }
+  return parsed;
 }
 
 export function parseEngineUpdate(value: string): EngineUpdateV1 {
@@ -464,12 +529,15 @@ export function parseEngineUpdate(value: string): EngineUpdateV1 {
   }
   if (
     !isSceneSnapshot(parsed.scene) ||
+    !isOperationResultOrNull(parsed.operation) ||
     typeof parsed.history.canUndo !== 'boolean' ||
     typeof parsed.history.canRedo !== 'boolean' ||
     (parsed.selection.selectedElementId !== null &&
-      typeof parsed.selection.selectedElementId !== 'string') ||
+      !isNonEmptyString(parsed.selection.selectedElementId)) ||
     !isSelectionBounds(parsed.selection.bounds) ||
-    (parsed.selection.selectedElementId === null) !== (parsed.selection.bounds === null)
+    !isSelectionStyleOrNull(parsed.selection.style) ||
+    (parsed.selection.selectedElementId === null && parsed.selection.bounds !== null) ||
+    (parsed.selection.selectedElementId === null) !== (parsed.selection.style === null)
   ) {
     throw new Error('Engine update does not satisfy protocol V1');
   }
@@ -504,14 +572,10 @@ export function parseCamera(value: string): CameraV1 {
 
 export function parseSceneSnapshot(value: string): SceneSnapshotV1 {
   const parsed: unknown = JSON.parse(value);
-  return parseEngineUpdate(
-    JSON.stringify({
-      operation: null,
-      scene: parsed,
-      history: { canUndo: false, canRedo: false },
-      selection: { selectedElementId: null, bounds: null },
-    }),
-  ).scene;
+  if (!isRecord(parsed) || !isSceneSnapshot(parsed)) {
+    throw new Error('Engine scene does not satisfy protocol V1');
+  }
+  return parsed as unknown as SceneSnapshotV1;
 }
 
 export function parseScenePatch(value: string): ScenePatchV1 {
@@ -519,9 +583,9 @@ export function parseScenePatch(value: string): ScenePatchV1 {
   if (
     !isRecord(parsed) ||
     parsed.protocolVersion !== protocolVersion ||
-    typeof parsed.documentRevision !== 'number' ||
-    typeof parsed.baseSceneRevision !== 'number' ||
-    typeof parsed.sceneRevision !== 'number' ||
+    !isNonNegativeSafeInteger(parsed.documentRevision) ||
+    !isNonNegativeSafeInteger(parsed.baseSceneRevision) ||
+    !isNonNegativeSafeInteger(parsed.sceneRevision) ||
     !isRecord(parsed.addedNodes) ||
     !isRecord(parsed.updatedNodes) ||
     !Array.isArray(parsed.removedNodeIds) ||
@@ -543,8 +607,8 @@ export function parseDiagramOperationBatchResult(value: string): DiagramOperatio
     !isRecord(parsed) ||
     typeof parsed.batchId !== 'string' ||
     (parsed.mode !== 'apply' && parsed.mode !== 'dry_run') ||
-    typeof parsed.previousRevision !== 'number' ||
-    (parsed.revision !== null && typeof parsed.revision !== 'number') ||
+    !isNonNegativeSafeInteger(parsed.previousRevision) ||
+    (parsed.revision !== null && !isNonNegativeSafeInteger(parsed.revision)) ||
     !Array.isArray(parsed.results) ||
     !isRecord(parsed.scenePatch)
   ) {
@@ -576,8 +640,8 @@ export function parsePointerUpdate(value: string): PointerUpdateV1 {
   if (
     !isRecord(parsed) ||
     !isRecord(parsed.update) ||
-    typeof parsed.processedEventCount !== 'number' ||
-    typeof parsed.ignoredEventCount !== 'number' ||
+    !isNonNegativeSafeInteger(parsed.processedEventCount) ||
+    !isNonNegativeSafeInteger(parsed.ignoredEventCount) ||
     typeof parsed.didCommit !== 'boolean'
   ) {
     throw new Error('Engine returned an invalid pointer update payload');
@@ -595,8 +659,8 @@ export function parseStrokeUpdate(value: string): StrokeUpdateV1 {
   if (
     !isRecord(parsed) ||
     !isRecord(parsed.update) ||
-    typeof parsed.processedPointCount !== 'number' ||
-    typeof parsed.ignoredPointCount !== 'number' ||
+    !isNonNegativeSafeInteger(parsed.processedPointCount) ||
+    !isNonNegativeSafeInteger(parsed.ignoredPointCount) ||
     typeof parsed.didCommit !== 'boolean'
   ) {
     throw new Error('Engine returned an invalid stroke update payload');
@@ -636,33 +700,27 @@ export function parseSceneResolution(value: string): SceneResolutionV1 {
     !isRecord(parsed) ||
     typeof parsed.engineAlgorithmVersion !== 'string' ||
     typeof parsed.canonicalHash !== 'string' ||
-    !isRecord(parsed.renderProfile) ||
-    !isRecord(parsed.scene)
+    !isRenderProfile(parsed.renderProfile) ||
+    !isRecord(parsed.scene) ||
+    !isSceneSnapshot(parsed.scene) ||
+    !renderProfilesEqual(parsed.renderProfile, parsed.scene.renderProfile as RenderProfileV1)
   ) {
     throw new Error('Engine returned an invalid scene resolution payload');
   }
-  return {
-    engineAlgorithmVersion: parsed.engineAlgorithmVersion,
-    canonicalHash: parsed.canonicalHash,
-    renderProfile: parsed.renderProfile as unknown as RenderProfileV1,
-    scene: parseEngineUpdate(
-      JSON.stringify({
-        operation: null,
-        scene: parsed.scene,
-        history: { canUndo: false, canRedo: false },
-        selection: { selectedElementId: null, bounds: null },
-      }),
-    ).scene,
-  };
+  return parsed as unknown as SceneResolutionV1;
 }
 
 export function parseTextFixtureResolution(value: string): TextFixtureResolutionV1 {
   const parsed: unknown = JSON.parse(value);
   if (
     !isRecord(parsed) ||
-    (parsed.request !== null && !isRecord(parsed.request)) ||
-    (parsed.scene !== null && !isRecord(parsed.scene)) ||
-    (parsed.canonicalHash !== null && typeof parsed.canonicalHash !== 'string')
+    !isTextMeasureRequest(parsed.request) ||
+    (parsed.scene !== null && !isTextFixtureScene(parsed.scene)) ||
+    (parsed.canonicalHash !== null && typeof parsed.canonicalHash !== 'string') ||
+    !(
+      (parsed.request !== null && parsed.scene === null && parsed.canonicalHash === null) ||
+      (parsed.request === null && parsed.scene !== null && typeof parsed.canonicalHash === 'string')
+    )
   ) {
     throw new Error('Engine returned an invalid text fixture resolution payload');
   }
@@ -676,10 +734,10 @@ export function parseMigrationAttempt(value: string): MigrationAttemptV1 {
   }
   if (isRecord(parsed.result) && parsed.report === null) {
     if (
-      typeof parsed.result.sourceSchemaVersion === 'number' &&
-      typeof parsed.result.targetSchemaVersion === 'number' &&
+      isNonNegativeSafeInteger(parsed.result.sourceSchemaVersion) &&
+      parsed.result.targetSchemaVersion === schemaVersion &&
       typeof parsed.result.migrated === 'boolean' &&
-      isRecord(parsed.result.document) &&
+      isNodeInkDocument(parsed.result.document) &&
       typeof parsed.result.canonicalPayload === 'string'
     ) {
       return parsed as unknown as MigrationAttemptV1;
@@ -689,8 +747,8 @@ export function parseMigrationAttempt(value: string): MigrationAttemptV1 {
       typeof parsed.report.stage === 'string' &&
       typeof parsed.report.code === 'string' &&
       (parsed.report.sourceSchemaVersion === null ||
-        typeof parsed.report.sourceSchemaVersion === 'number') &&
-      typeof parsed.report.targetSchemaVersion === 'number' &&
+        isNonNegativeSafeInteger(parsed.report.sourceSchemaVersion)) &&
+      parsed.report.targetSchemaVersion === schemaVersion &&
       typeof parsed.report.message === 'string' &&
       parsed.report.recovery === 'try_next_snapshot_then_readonly_diagnostic'
     ) {
@@ -708,16 +766,73 @@ function isEditorTool(value: unknown): value is EditorToolV1 {
   return value === 'select' || value === 'freehand' || value === 'text';
 }
 
+function isNodeInkDocument(value: unknown): value is NodeInkDocumentV1 {
+  if (
+    !isRecord(value) ||
+    value.schemaVersion !== schemaVersion ||
+    typeof value.documentId !== 'string' ||
+    value.documentId.length === 0 ||
+    !isNonNegativeSafeInteger(value.revision) ||
+    !isRenderProfile(value.renderProfile) ||
+    !Array.isArray(value.rootOrder) ||
+    !value.rootOrder.every(isNonEmptyString) ||
+    new Set(value.rootOrder).size !== value.rootOrder.length ||
+    !isRecord(value.elements)
+  ) {
+    return false;
+  }
+  const elements = value.elements as Record<string, unknown>;
+  const elementEntries = Object.entries(elements);
+  if (
+    elementEntries.length !== value.rootOrder.length ||
+    !elementEntries.every(
+      ([elementId, element]) => isElementRecord(element) && element.id === elementId,
+    )
+  ) {
+    return false;
+  }
+  return value.rootOrder.every((elementId) => elements[elementId] !== undefined);
+}
+
+function isElementRecord(value: unknown): value is ElementRecordV1 {
+  if (!isRecord(value) || !isNonEmptyString(value.id)) {
+    return false;
+  }
+  if (value.kind === 'rect') {
+    return (
+      isFiniteNumber(value.x) &&
+      isFiniteNumber(value.y) &&
+      isPositiveFiniteNumber(value.width) &&
+      isPositiveFiniteNumber(value.height) &&
+      isFill(value.fill) &&
+      isCanonicalColor(value.stroke) &&
+      isValidStrokeWidth(value.strokeWidth)
+    );
+  }
+  if (value.kind === 'stroke') {
+    return (
+      Array.isArray(value.points) &&
+      value.points.length >= 2 &&
+      value.points.every(isVec2) &&
+      isValidStrokeWidth(value.strokeWidth) &&
+      isCanonicalColor(value.stroke)
+    );
+  }
+  return isTextElement(value);
+}
+
 function isSceneSnapshot(value: Record<string, unknown>): boolean {
   const rootNodeIds = value.rootNodeIds;
   const nodes = value.nodes;
   if (
     value.protocolVersion !== protocolVersion ||
-    typeof value.documentId !== 'string' ||
-    !isNonNegativeInteger(value.documentRevision) ||
-    !isNonNegativeInteger(value.sceneRevision) ||
+    !isNonEmptyString(value.documentId) ||
+    !isNonNegativeSafeInteger(value.documentRevision) ||
+    !isNonNegativeSafeInteger(value.sceneRevision) ||
+    !isRenderProfile(value.renderProfile) ||
     !Array.isArray(rootNodeIds) ||
-    !rootNodeIds.every((nodeId) => typeof nodeId === 'string') ||
+    !rootNodeIds.every(isNonEmptyString) ||
+    new Set(rootNodeIds).size !== rootNodeIds.length ||
     !isRecord(nodes) ||
     !isSceneNodeMap(nodes)
   ) {
@@ -731,11 +846,7 @@ function isSceneNodeMap(value: Record<string, unknown>): boolean {
 }
 
 function isSceneNode(value: unknown): value is SceneNodeV1 {
-  if (
-    !isRecord(value) ||
-    typeof value.id !== 'string' ||
-    typeof value.sourceElementId !== 'string'
-  ) {
+  if (!isRecord(value) || !isNonEmptyString(value.id) || !isNonEmptyString(value.sourceElementId)) {
     return false;
   }
   if (value.kind === 'rect') {
@@ -744,16 +855,16 @@ function isSceneNode(value: unknown): value is SceneNodeV1 {
       isFiniteNumber(value.y) &&
       isNonNegativeFiniteNumber(value.width) &&
       isNonNegativeFiniteNumber(value.height) &&
-      typeof value.fill === 'string' &&
-      typeof value.stroke === 'string' &&
+      isScenePaint(value.fill) &&
+      isScenePaint(value.stroke) &&
       isNonNegativeFiniteNumber(value.strokeWidth)
     );
   }
   if (value.kind === 'path') {
     return (
       typeof value.pathData === 'string' &&
-      typeof value.fill === 'string' &&
-      typeof value.stroke === 'string' &&
+      isScenePaint(value.fill) &&
+      isScenePaint(value.stroke) &&
       isNonNegativeFiniteNumber(value.strokeWidth)
     );
   }
@@ -767,9 +878,23 @@ function isSceneTextRun(value: unknown): value is SceneTextRunV1 {
     isFiniteNumber(value.x) &&
     isFiniteNumber(value.y) &&
     value.fontFamily === canvasFontFamily &&
-    isPositiveFiniteNumber(value.fontSize) &&
+    isValidFontSize(value.fontSize) &&
     (value.fontWeight === 400 || value.fontWeight === 500) &&
-    typeof value.fill === 'string'
+    isCanonicalColor(value.fill) &&
+    (value.textAnchor === 'start' || value.textAnchor === 'middle' || value.textAnchor === 'end')
+  );
+}
+
+function isOperationResultOrNull(value: unknown): value is OperationResultV1 | null {
+  return (
+    value === null ||
+    (isRecord(value) &&
+      isNonEmptyString(value.commandId) &&
+      isNonNegativeSafeInteger(value.previousRevision) &&
+      isNonNegativeSafeInteger(value.revision) &&
+      Array.isArray(value.changedElementIds) &&
+      value.changedElementIds.every(isNonEmptyString) &&
+      isNonNegativeSafeInteger(value.sceneRevision))
   );
 }
 
@@ -796,11 +921,13 @@ function isTextElement(value: unknown): value is TextElementV1 {
     isFiniteNumber(value.y) &&
     typeof value.text === 'string' &&
     value.fontFamily === canvasFontFamily &&
-    isPositiveFiniteNumber(value.fontSize) &&
+    isValidFontSize(value.fontSize) &&
     (value.fontWeight === 400 || value.fontWeight === 500) &&
     (value.maxWidth === null || isPositiveFiniteNumber(value.maxWidth)) &&
     typeof value.fontFingerprint === 'string' &&
-    value.fontFingerprint.length > 0
+    value.fontFingerprint.trim().length > 0 &&
+    isCanonicalColor(value.color) &&
+    isTextAlign(value.textAlign)
   );
 }
 
@@ -817,6 +944,38 @@ function isTextRun(value: unknown): value is TextRunV1 {
   );
 }
 
+function isTextFixtureScene(value: unknown): value is TextFixtureSceneV1 {
+  return (
+    isRecord(value) &&
+    isNonEmptyString(value.fontFingerprint) &&
+    Array.isArray(value.runs) &&
+    value.runs.every(
+      (entry) =>
+        isRecord(entry) &&
+        isTextRun(entry.run) &&
+        isTextMetrics(entry.metrics) &&
+        entry.run.key === entry.metrics.key,
+    )
+  );
+}
+
+function isTextMetrics(value: unknown): value is TextMetricsV1 {
+  if (
+    !isRecord(value) ||
+    !isNonEmptyString(value.key) ||
+    !isNonNegativeFiniteNumber(value.width) ||
+    !isPositiveFiniteNumber(value.height) ||
+    !isNonNegativeFiniteNumber(value.baseline) ||
+    value.baseline > value.height ||
+    !Array.isArray(value.lineBreaks) ||
+    !value.lineBreaks.every(isNonNegativeSafeInteger)
+  ) {
+    return false;
+  }
+  const lineBreaks = value.lineBreaks as number[];
+  return lineBreaks.every((lineBreak, index) => index === 0 || lineBreak > lineBreaks[index - 1]!);
+}
+
 function isFiniteNumber(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value);
 }
@@ -829,8 +988,16 @@ function isPositiveFiniteNumber(value: unknown): value is number {
   return isFiniteNumber(value) && value > 0;
 }
 
-function isNonNegativeInteger(value: unknown): value is number {
-  return typeof value === 'number' && Number.isInteger(value) && value >= 0;
+function isValidStrokeWidth(value: unknown): value is number {
+  return isFiniteNumber(value) && value >= 0.1 && value <= 128;
+}
+
+function isValidFontSize(value: unknown): value is number {
+  return isFiniteNumber(value) && value >= 1 && value <= 512;
+}
+
+function isNonNegativeSafeInteger(value: unknown): value is number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
 }
 
 function isSelectionBounds(value: unknown): boolean {
@@ -847,5 +1014,94 @@ function isSelectionBounds(value: unknown): boolean {
       typeof value.height === 'number' &&
       Number.isFinite(value.height) &&
       value.height >= 0)
+  );
+}
+
+function isSelectionStyleOrNull(value: unknown): value is SelectionStyleV1 | null {
+  return value === null || isSelectionStyle(value);
+}
+
+function isSelectionStyle(value: unknown): value is SelectionStyleV1 {
+  if (!isRecord(value)) {
+    return false;
+  }
+  if (value.kind === 'rect') {
+    return (
+      isFill(value.fill) && isCanonicalColor(value.stroke) && isValidStrokeWidth(value.strokeWidth)
+    );
+  }
+  if (value.kind === 'stroke') {
+    return isCanonicalColor(value.stroke) && isValidStrokeWidth(value.strokeWidth);
+  }
+  return (
+    value.kind === 'text' &&
+    isCanonicalColor(value.color) &&
+    isValidFontSize(value.fontSize) &&
+    (value.fontWeight === 400 || value.fontWeight === 500) &&
+    isTextAlign(value.textAlign)
+  );
+}
+
+function isFill(value: unknown): value is FillV1 {
+  return (
+    isRecord(value) &&
+    (value.kind === 'none' || (value.kind === 'solid' && isCanonicalColor(value.color)))
+  );
+}
+
+function isCanonicalColor(value: unknown): value is string {
+  return typeof value === 'string' && /^#[0-9a-f]{6}$/.test(value);
+}
+
+function isScenePaint(value: unknown): value is string {
+  return value === 'none' || isCanonicalColor(value);
+}
+
+function isTextAlign(value: unknown): value is TextAlignV1 {
+  return value === 'start' || value === 'center' || value === 'end';
+}
+
+function isVec2(value: unknown): value is Vec2 {
+  return isRecord(value) && isFiniteNumber(value.x) && isFiniteNumber(value.y);
+}
+
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === 'string' && value.length > 0;
+}
+
+function isRenderProfile(value: unknown): value is RenderProfileV1 {
+  if (!isRecord(value) || value.version !== 1) {
+    return false;
+  }
+  if (value.kind === 'clean') {
+    return true;
+  }
+  return (
+    value.kind === 'sketch' &&
+    isUint32(value.seed) &&
+    isNonNegativeFiniteNumber(value.roughness) &&
+    isNonNegativeFiniteNumber(value.bowing) &&
+    (value.fillStyle === 'solid' || value.fillStyle === 'hachure')
+  );
+}
+
+function isUint32(value: unknown): value is number {
+  return isNonNegativeSafeInteger(value) && value <= 0xffff_ffff;
+}
+
+function renderProfilesEqual(first: RenderProfileV1, second: RenderProfileV1): boolean {
+  if (first.kind !== second.kind) {
+    return false;
+  }
+  if (first.kind === 'clean' && second.kind === 'clean') {
+    return true;
+  }
+  return (
+    first.kind === 'sketch' &&
+    second.kind === 'sketch' &&
+    first.seed === second.seed &&
+    first.roughness === second.roughness &&
+    first.bowing === second.bowing &&
+    first.fillStyle === second.fillStyle
   );
 }

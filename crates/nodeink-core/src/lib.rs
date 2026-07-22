@@ -11,6 +11,7 @@ mod scene_patch;
 mod selection;
 mod sketch;
 mod stroke;
+mod style;
 mod text;
 mod tool;
 
@@ -34,6 +35,12 @@ pub use sketch::{ENGINE_ALGORITHM_VERSION, RenderProfileV1, SketchFillStyleV1};
 use sketch::{sketch_rectangle, sketch_stroke};
 pub use stroke::{StrokeInputBatchV1, StrokePhaseV1};
 use stroke::{StrokeMachine, StrokePreview, StrokeTransition};
+pub use style::{
+    DEFAULT_INK_COLOR, DEFAULT_RECTANGLE_FILL_COLOR, DEFAULT_RECTANGLE_STROKE_COLOR,
+    DEFAULT_RECTANGLE_STROKE_WIDTH, DEFAULT_STROKE_WIDTH, ElementStylePatchV1, FillV1,
+    SelectionStyleV1, TextAlignV1, TextAnchorV1,
+};
+use style::{aligned_text_x, is_canonical_color, is_valid_font_size, is_valid_stroke_width};
 pub use text::{
     CANVAS_FONT_FAMILY, DEFAULT_TEXT_FONT_SIZE, DEFAULT_TEXT_FONT_WEIGHT, ResolvedTextRunV1,
     TextFixtureResolutionV1, TextFixtureSceneV1, TextMeasureRequestV1, TextMetricsSnapshotV1,
@@ -44,8 +51,7 @@ pub use tool::EditorToolV1;
 use tool::ToolState;
 
 pub const PROTOCOL_VERSION: u32 = 1;
-pub const SCHEMA_VERSION: u32 = 1;
-pub(crate) const RECTANGLE_STROKE_WIDTH: f64 = 2.0;
+pub const SCHEMA_VERSION: u32 = 2;
 
 pub type DocumentId = String;
 pub type ElementId = String;
@@ -57,6 +63,7 @@ pub struct NodeInkDocumentV1 {
     pub schema_version: u32,
     pub document_id: DocumentId,
     pub revision: u64,
+    pub render_profile: RenderProfileV1,
     pub root_order: Vec<ElementId>,
     pub elements: BTreeMap<ElementId, ElementRecordV1>,
 }
@@ -67,6 +74,7 @@ impl NodeInkDocumentV1 {
             schema_version: SCHEMA_VERSION,
             document_id: document_id.into(),
             revision: 0,
+            render_profile: RenderProfileV1::clean(),
             root_order: Vec::new(),
             elements: BTreeMap::new(),
         }
@@ -125,6 +133,9 @@ pub struct RectElementV1 {
     pub y: f64,
     pub width: f64,
     pub height: f64,
+    pub fill: FillV1,
+    pub stroke: String,
+    pub stroke_width: f64,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -132,6 +143,7 @@ pub struct RectElementV1 {
 pub struct StrokeElementV1 {
     pub id: ElementId,
     pub points: Vec<Vec2>,
+    pub stroke: String,
     pub stroke_width: f64,
 }
 
@@ -145,6 +157,8 @@ pub struct TextElementV1 {
     pub font_family: String,
     pub font_size: f64,
     pub font_weight: u16,
+    pub color: String,
+    pub text_align: TextAlignV1,
     pub max_width: Option<f64>,
     pub font_fingerprint: String,
 }
@@ -165,6 +179,8 @@ impl TextElementV1 {
             font_family: CANVAS_FONT_FAMILY.to_string(),
             font_size: DEFAULT_TEXT_FONT_SIZE,
             font_weight: DEFAULT_TEXT_FONT_WEIGHT,
+            color: DEFAULT_INK_COLOR.to_string(),
+            text_align: TextAlignV1::Start,
             max_width: None,
             font_fingerprint: font_fingerprint.into(),
         }
@@ -227,6 +243,13 @@ pub enum CommandV1 {
     UpdateRectangle {
         element_id: ElementId,
         patch: RectanglePatchV1,
+    },
+    UpdateElementStyle {
+        element_id: ElementId,
+        patch: ElementStylePatchV1,
+    },
+    SetRenderProfile {
+        render_profile: RenderProfileV1,
     },
     DeleteElements {
         element_ids: Vec<ElementId>,
@@ -315,6 +338,7 @@ pub struct SceneSnapshotV1 {
     pub document_id: DocumentId,
     pub document_revision: u64,
     pub scene_revision: u64,
+    pub render_profile: RenderProfileV1,
     pub root_node_ids: Vec<SceneNodeId>,
     pub nodes: BTreeMap<SceneNodeId, SceneNodeV1>,
 }
@@ -379,6 +403,7 @@ pub struct SceneTextRunV1 {
     pub font_size: f64,
     pub font_weight: u16,
     pub fill: String,
+    pub text_anchor: TextAnchorV1,
 }
 
 #[derive(Debug, Clone, PartialEq, Error, Serialize)]
@@ -415,6 +440,10 @@ pub enum EngineErrorV1 {
     },
     #[error("invalid render profile")]
     InvalidRenderProfile,
+    #[error("invalid element style for {element_id}")]
+    InvalidElementStyle { element_id: ElementId },
+    #[error("style patch kind does not match element {element_id}")]
+    ElementStyleKindMismatch { element_id: ElementId },
     #[error("invalid text measurement fixture")]
     InvalidTextFixture,
     #[error("text metrics fingerprint does not match the request")]
@@ -543,7 +572,11 @@ impl Engine {
             .into_iter()
             .map(DiagramOperationV1::into_command)
             .collect();
-        let (candidate, affected_by_operation) = self.prepare_transaction(commands)?;
+        let (candidate, effects) = self.prepare_transaction(commands)?;
+        let affected_by_operation = effects
+            .iter()
+            .map(|effect| effect.changed_element_ids.clone())
+            .collect::<Vec<_>>();
         let status = match mode {
             DiagramOperationModeV1::Apply => DiagramOperationStatusV1::Applied,
             DiagramOperationModeV1::DryRun => DiagramOperationStatusV1::Planned,
@@ -578,7 +611,7 @@ impl Engine {
                     self.scene_revision + 1,
                     None,
                     None,
-                    &RenderProfileV1::clean(),
+                    &candidate.render_profile,
                     &self.text_metrics,
                 ),
             ),
@@ -729,7 +762,14 @@ impl Engine {
     ) -> Result<EngineUpdateV1, EngineErrorV1> {
         self.validate_envelope(&envelope)?;
 
-        let (candidate, changed_by_command) = self.prepare_transaction(vec![envelope.command])?;
+        let (candidate, effects) = self.prepare_transaction(vec![envelope.command])?;
+        if effects.iter().all(|effect| !effect.did_change) {
+            return Ok(self.current_update());
+        }
+        let changed_by_command = effects
+            .iter()
+            .map(|effect| effect.changed_element_ids.clone())
+            .collect::<Vec<_>>();
         Ok(self.commit_transaction(
             envelope.command_id,
             candidate,
@@ -741,15 +781,17 @@ impl Engine {
     fn prepare_transaction(
         &self,
         commands: Vec<CommandV1>,
-    ) -> Result<(NodeInkDocumentV1, Vec<Vec<ElementId>>), EngineErrorV1> {
+    ) -> Result<(NodeInkDocumentV1, Vec<CommandEffect>), EngineErrorV1> {
         let mut candidate = self.document.clone();
-        let mut changed_by_command = Vec::with_capacity(commands.len());
+        let mut effects = Vec::with_capacity(commands.len());
         for command in commands {
-            changed_by_command.push(apply_command(&mut candidate, command)?);
+            effects.push(apply_command(&mut candidate, command)?);
         }
-        candidate.revision = self.document.revision + 1;
+        if effects.iter().any(|effect| effect.did_change) {
+            candidate.revision = self.document.revision + 1;
+        }
         validate_document(&candidate)?;
-        Ok((candidate, changed_by_command))
+        Ok((candidate, effects))
     }
 
     fn commit_transaction(
@@ -990,7 +1032,7 @@ impl Engine {
                 self.scene_revision,
                 pointer_preview,
                 stroke_preview,
-                &RenderProfileV1::clean(),
+                &self.document.render_profile,
                 &self.text_metrics,
             ),
             history: HistoryStateV1 {
@@ -1047,6 +1089,10 @@ fn selection_after_command(
         CommandV1::UpdateRectangle { element_id, .. } => {
             SelectionAfterCommand::Set(Some(element_id.clone()))
         }
+        CommandV1::UpdateElementStyle { element_id, .. } => {
+            SelectionAfterCommand::Set(Some(element_id.clone()))
+        }
+        CommandV1::SetRenderProfile { .. } => SelectionAfterCommand::Preserve,
         CommandV1::DeleteElements { element_ids } => {
             if selection
                 .selected_element_id()
@@ -1060,10 +1106,32 @@ fn selection_after_command(
     }
 }
 
+#[derive(Debug, Clone, PartialEq)]
+struct CommandEffect {
+    changed_element_ids: Vec<ElementId>,
+    did_change: bool,
+}
+
+impl CommandEffect {
+    fn changed(changed_element_ids: Vec<ElementId>) -> Self {
+        Self {
+            changed_element_ids,
+            did_change: true,
+        }
+    }
+
+    fn unchanged() -> Self {
+        Self {
+            changed_element_ids: Vec::new(),
+            did_change: false,
+        }
+    }
+}
+
 fn apply_command(
     document: &mut NodeInkDocumentV1,
     command: CommandV1,
-) -> Result<Vec<ElementId>, EngineErrorV1> {
+) -> Result<CommandEffect, EngineErrorV1> {
     match command {
         CommandV1::CreateRectangle { rectangle } => {
             validate_rectangle(&rectangle)?;
@@ -1077,7 +1145,7 @@ fn apply_command(
             document
                 .elements
                 .insert(element_id.clone(), ElementRecordV1::Rect(rectangle));
-            Ok(vec![element_id])
+            Ok(CommandEffect::changed(vec![element_id]))
         }
         CommandV1::MoveElements { element_ids, delta } => {
             if !delta.x.is_finite() || !delta.y.is_finite() {
@@ -1097,7 +1165,7 @@ fn apply_command(
                     .expect("element existence was validated before mutation");
                 element.translate(delta);
             }
-            Ok(element_ids)
+            Ok(CommandEffect::changed(element_ids))
         }
         CommandV1::CreateStroke { stroke } => {
             validate_stroke(&stroke)?;
@@ -1111,7 +1179,7 @@ fn apply_command(
             document
                 .elements
                 .insert(element_id.clone(), ElementRecordV1::Stroke(stroke));
-            Ok(vec![element_id])
+            Ok(CommandEffect::changed(vec![element_id]))
         }
         CommandV1::CreateText { text } => {
             validate_text(&text)?;
@@ -1125,7 +1193,7 @@ fn apply_command(
             document
                 .elements
                 .insert(element_id.clone(), ElementRecordV1::Text(text));
-            Ok(vec![element_id])
+            Ok(CommandEffect::changed(vec![element_id]))
         }
         CommandV1::UpdateText { element_id, patch } => {
             if patch.is_empty() {
@@ -1146,7 +1214,7 @@ fn apply_command(
                 document
                     .root_order
                     .retain(|candidate| candidate != &element_id);
-                return Ok(vec![element_id]);
+                return Ok(CommandEffect::changed(vec![element_id]));
             }
             if let Some(value) = patch.text {
                 text.text = value;
@@ -1155,7 +1223,7 @@ fn apply_command(
                 text.max_width = value;
             }
             validate_text(text)?;
-            Ok(vec![element_id])
+            Ok(CommandEffect::changed(vec![element_id]))
         }
         CommandV1::UpdateRectangle { element_id, patch } => {
             let element = document.elements.get_mut(&element_id).ok_or_else(|| {
@@ -1179,7 +1247,20 @@ fn apply_command(
                 rectangle.height = height;
             }
             validate_rectangle(rectangle)?;
-            Ok(vec![element_id])
+            Ok(CommandEffect::changed(vec![element_id]))
+        }
+        CommandV1::UpdateElementStyle { element_id, patch } => {
+            apply_element_style_patch(document, element_id, patch)
+        }
+        CommandV1::SetRenderProfile { render_profile } => {
+            if !render_profile.validate() {
+                return Err(EngineErrorV1::InvalidRenderProfile);
+            }
+            if document.render_profile == render_profile {
+                return Ok(CommandEffect::unchanged());
+            }
+            document.render_profile = render_profile;
+            Ok(CommandEffect::changed(document.root_order.clone()))
         }
         CommandV1::DeleteElements { element_ids } => {
             for element_id in &element_ids {
@@ -1195,8 +1276,110 @@ fn apply_command(
             document
                 .root_order
                 .retain(|element_id| !element_ids.contains(element_id));
-            Ok(element_ids)
+            Ok(CommandEffect::changed(element_ids))
         }
+    }
+}
+
+fn apply_element_style_patch(
+    document: &mut NodeInkDocumentV1,
+    element_id: ElementId,
+    patch: ElementStylePatchV1,
+) -> Result<CommandEffect, EngineErrorV1> {
+    if patch.is_empty() {
+        return Err(EngineErrorV1::InvalidElementStyle { element_id });
+    }
+    let element =
+        document
+            .elements
+            .get_mut(&element_id)
+            .ok_or_else(|| EngineErrorV1::ElementNotFound {
+                element_id: element_id.clone(),
+            })?;
+    let previous = element.clone();
+    match patch {
+        ElementStylePatchV1::Rect {
+            fill,
+            stroke,
+            stroke_width,
+        } => {
+            let ElementRecordV1::Rect(rectangle) = element else {
+                return Err(EngineErrorV1::ElementStyleKindMismatch { element_id });
+            };
+            if fill.as_ref().is_some_and(|value| !value.validate())
+                || stroke
+                    .as_deref()
+                    .is_some_and(|value| !is_canonical_color(value))
+                || stroke_width.is_some_and(|value| !is_valid_stroke_width(value))
+            {
+                return Err(EngineErrorV1::InvalidElementStyle { element_id });
+            }
+            if let Some(value) = fill {
+                rectangle.fill = value;
+            }
+            if let Some(value) = stroke {
+                rectangle.stroke = value;
+            }
+            if let Some(value) = stroke_width {
+                rectangle.stroke_width = value;
+            }
+        }
+        ElementStylePatchV1::Stroke {
+            stroke,
+            stroke_width,
+        } => {
+            let ElementRecordV1::Stroke(ink) = element else {
+                return Err(EngineErrorV1::ElementStyleKindMismatch { element_id });
+            };
+            if stroke
+                .as_deref()
+                .is_some_and(|value| !is_canonical_color(value))
+                || stroke_width.is_some_and(|value| !is_valid_stroke_width(value))
+            {
+                return Err(EngineErrorV1::InvalidElementStyle { element_id });
+            }
+            if let Some(value) = stroke {
+                ink.stroke = value;
+            }
+            if let Some(value) = stroke_width {
+                ink.stroke_width = value;
+            }
+        }
+        ElementStylePatchV1::Text {
+            color,
+            text_align,
+            font_size,
+            font_weight,
+        } => {
+            let ElementRecordV1::Text(text) = element else {
+                return Err(EngineErrorV1::ElementStyleKindMismatch { element_id });
+            };
+            if color
+                .as_deref()
+                .is_some_and(|value| !is_canonical_color(value))
+                || font_size.is_some_and(|value| !is_valid_font_size(value))
+                || font_weight.is_some_and(|value| !matches!(value, 400 | 500))
+            {
+                return Err(EngineErrorV1::InvalidElementStyle { element_id });
+            }
+            if let Some(value) = color {
+                text.color = value;
+            }
+            if let Some(value) = text_align {
+                text.text_align = value;
+            }
+            if let Some(value) = font_size {
+                text.font_size = value;
+            }
+            if let Some(value) = font_weight {
+                text.font_weight = value;
+            }
+        }
+    }
+    if *element == previous {
+        Ok(CommandEffect::unchanged())
+    } else {
+        Ok(CommandEffect::changed(vec![element_id]))
     }
 }
 
@@ -1221,6 +1404,9 @@ fn validate_document(document: &NodeInkDocumentV1) -> Result<(), EngineErrorV1> 
         return Err(EngineErrorV1::InvalidDocument {
             reason: "documentId must not be empty".to_string(),
         });
+    }
+    if !document.render_profile.validate() {
+        return Err(EngineErrorV1::InvalidRenderProfile);
     }
     if document.root_order.len() != document.elements.len() {
         return Err(EngineErrorV1::InvalidDocument {
@@ -1284,7 +1470,12 @@ fn element_content_bounds(
             )
         }
         ElementRecordV1::Text(text) => text_metrics.metric_for(text).map(|metric| {
-            CameraContentBounds::from_rect(text.x, text.y, metric.width, metric.height)
+            CameraContentBounds::from_rect(
+                aligned_text_x(text.x, metric.width, text.text_align),
+                text.y,
+                metric.width,
+                metric.height,
+            )
         }),
     }
 }
@@ -1296,7 +1487,10 @@ fn validate_rectangle(rectangle: &RectElementV1) -> Result<(), EngineErrorV1> {
         && rectangle.width.is_finite()
         && rectangle.height.is_finite()
         && rectangle.width > 0.0
-        && rectangle.height > 0.0;
+        && rectangle.height > 0.0
+        && rectangle.fill.validate()
+        && is_canonical_color(&rectangle.stroke)
+        && is_valid_stroke_width(rectangle.stroke_width);
     if !is_valid {
         return Err(EngineErrorV1::InvalidRectangle {
             element_id: rectangle.id.clone(),
@@ -1312,8 +1506,8 @@ fn validate_stroke(stroke: &StrokeElementV1) -> Result<(), EngineErrorV1> {
             .points
             .iter()
             .all(|point| point.x.is_finite() && point.y.is_finite())
-        && stroke.stroke_width.is_finite()
-        && stroke.stroke_width > 0.0;
+        && is_canonical_color(&stroke.stroke)
+        && is_valid_stroke_width(stroke.stroke_width);
     if !is_valid {
         return Err(EngineErrorV1::InvalidStroke {
             element_id: stroke.id.clone(),
@@ -1329,9 +1523,9 @@ fn validate_text(text: &TextElementV1) -> Result<(), EngineErrorV1> {
         && !text.text.is_empty()
         && text.text.chars().count() <= 65_536
         && text.font_family == CANVAS_FONT_FAMILY
-        && text.font_size.is_finite()
-        && text.font_size > 0.0
+        && is_valid_font_size(text.font_size)
         && matches!(text.font_weight, 400 | 500)
+        && is_canonical_color(&text.color)
         && text
             .max_width
             .is_none_or(|width| width.is_finite() && width > 0.0)
@@ -1405,9 +1599,9 @@ fn resolve_scene(
                             y: resolved.y,
                             width: resolved.width,
                             height: resolved.height,
-                            fill: "#d1fae5".to_string(),
-                            stroke: "#047857".to_string(),
-                            stroke_width: RECTANGLE_STROKE_WIDTH,
+                            fill: resolved.fill.scene_paint().to_string(),
+                            stroke: resolved.stroke.clone(),
+                            stroke_width: resolved.stroke_width,
                         }),
                     );
                 } else {
@@ -1446,6 +1640,7 @@ fn resolve_scene(
         document_id: document.document_id.clone(),
         document_revision: document.revision,
         scene_revision,
+        render_profile: profile.clone(),
         root_node_ids,
         nodes,
     }
@@ -1464,7 +1659,7 @@ fn insert_stroke_scene_node(
             source_element_id: stroke.id.clone(),
             path_data: stroke_path_data(&stroke.points),
             fill: "none".to_string(),
-            stroke: "#0f172a".to_string(),
+            stroke: stroke.stroke.clone(),
             stroke_width: stroke.stroke_width,
         }
     } else {
@@ -1548,6 +1743,9 @@ mod tests {
             y: 50.0,
             width: 200.0,
             height: 100.0,
+            fill: FillV1::default_rectangle(),
+            stroke: DEFAULT_RECTANGLE_STROKE_COLOR.to_string(),
+            stroke_width: DEFAULT_RECTANGLE_STROKE_WIDTH,
         };
         document.root_order.push(rectangle.id.clone());
         document
@@ -1559,6 +1757,9 @@ mod tests {
             y: 75.0,
             width: 50.0,
             height: 25.0,
+            fill: FillV1::default_rectangle(),
+            stroke: DEFAULT_RECTANGLE_STROKE_COLOR.to_string(),
+            stroke_width: DEFAULT_RECTANGLE_STROKE_WIDTH,
         };
         document.root_order.push(nested_rectangle.id.clone());
         document.elements.insert(
@@ -1612,6 +1813,7 @@ mod tests {
         let stroke = StrokeElementV1 {
             id: "stroke-1".to_string(),
             points: vec![Vec2 { x: 0.0, y: 0.0 }, Vec2 { x: 100.0, y: 0.0 }],
+            stroke: DEFAULT_INK_COLOR.to_string(),
             stroke_width: 20.0,
         };
         document.root_order.push(stroke.id.clone());
@@ -1717,6 +1919,9 @@ mod tests {
             y: 40.0,
             width: 160.0,
             height: 96.0,
+            fill: FillV1::default_rectangle(),
+            stroke: DEFAULT_RECTANGLE_STROKE_COLOR.to_string(),
+            stroke_width: DEFAULT_RECTANGLE_STROKE_WIDTH,
         }
     }
 
@@ -1883,6 +2088,7 @@ mod tests {
         let stroke = StrokeElementV1 {
             id: "stroke-1".to_string(),
             points: vec![Vec2 { x: 0.0, y: 0.0 }, Vec2 { x: 1.0, y: 1.0 }],
+            stroke: DEFAULT_INK_COLOR.to_string(),
             stroke_width: 2.0,
         };
         document.root_order.push(stroke.id.clone());
@@ -2113,6 +2319,7 @@ mod tests {
                 font_size: 20.0,
                 font_weight: 400,
                 fill: "#0f172a".to_string(),
+                text_anchor: TextAnchorV1::Start,
             }],
         });
 
@@ -2263,10 +2470,10 @@ mod tests {
     #[test]
     fn opening_invalid_documents_reports_the_broken_invariant() {
         let mut unsupported_schema = NodeInkDocumentV1::blank("doc-1");
-        unsupported_schema.schema_version = 2;
+        unsupported_schema.schema_version = 3;
         assert_eq!(
             Engine::open(unsupported_schema).unwrap_err(),
-            EngineErrorV1::UnsupportedSchema { actual: 2 }
+            EngineErrorV1::UnsupportedSchema { actual: 3 }
         );
 
         assert_eq!(
@@ -2338,7 +2545,7 @@ mod tests {
         assert_eq!(engine.current_update().active_tool, EditorToolV1::Select);
         assert_eq!(
             engine.serialize_document().unwrap(),
-            r#"{"schemaVersion":1,"documentId":"doc-1","revision":0,"rootOrder":[],"elements":{}}"#
+            r#"{"schemaVersion":2,"documentId":"doc-1","revision":0,"renderProfile":{"kind":"clean","version":1},"rootOrder":[],"elements":{}}"#
         );
     }
 
@@ -2594,6 +2801,9 @@ mod tests {
             y: 30.0,
             width: 120.0,
             height: 80.0,
+            fill: FillV1::default_rectangle(),
+            stroke: DEFAULT_RECTANGLE_STROKE_COLOR.to_string(),
+            stroke_width: DEFAULT_RECTANGLE_STROKE_WIDTH,
         };
         document.root_order.push(top.id.clone());
         document
@@ -2881,6 +3091,7 @@ mod tests {
                 stroke: StrokeElementV1 {
                     id: "stroke-1".to_string(),
                     points: vec![Vec2 { x: 0.0, y: 0.0 }],
+                    stroke: DEFAULT_INK_COLOR.to_string(),
                     stroke_width: 3.0,
                 },
             },
@@ -2904,6 +3115,7 @@ mod tests {
                 stroke: StrokeElementV1 {
                     id: "stroke-1".to_string(),
                     points: vec![Vec2 { x: 1.0, y: 2.0 }, Vec2 { x: 3.0, y: 4.0 }],
+                    stroke: DEFAULT_INK_COLOR.to_string(),
                     stroke_width: 2.0,
                 },
             },
@@ -2986,6 +3198,295 @@ mod tests {
             engine.resolve_scene_profile(sketch_profile(42, f64::NAN, SketchFillStyleV1::Hachure,)),
             Err(EngineErrorV1::InvalidRenderProfile)
         );
+        assert_eq!(
+            engine.resolve_scene_profile(sketch_profile(42, 16.1, SketchFillStyleV1::Hachure,)),
+            Err(EngineErrorV1::InvalidRenderProfile)
+        );
+    }
+
+    #[test]
+    fn persistent_styles_are_atomic_undoable_and_noops_do_not_create_history() {
+        let mut engine = Engine::open(document_with_three_elements()).unwrap();
+
+        let rectangle_update = engine
+            .execute_command(envelope(
+                engine.document(),
+                "style-rect",
+                CommandV1::UpdateElementStyle {
+                    element_id: "rect-1".to_string(),
+                    patch: ElementStylePatchV1::Rect {
+                        fill: Some(FillV1::None),
+                        stroke: Some("#2563eb".to_string()),
+                        stroke_width: Some(4.0),
+                    },
+                },
+            ))
+            .unwrap();
+        assert_eq!(rectangle_update.scene.document_revision, 1);
+        assert_eq!(
+            rectangle_update.selection.style,
+            Some(SelectionStyleV1::Rect {
+                fill: FillV1::None,
+                stroke: "#2563eb".to_string(),
+                stroke_width: 4.0,
+            })
+        );
+
+        let no_op = engine
+            .execute_command(envelope(
+                engine.document(),
+                "style-rect-noop",
+                CommandV1::UpdateElementStyle {
+                    element_id: "rect-1".to_string(),
+                    patch: ElementStylePatchV1::Rect {
+                        fill: Some(FillV1::None),
+                        stroke: Some("#2563eb".to_string()),
+                        stroke_width: Some(4.0),
+                    },
+                },
+            ))
+            .unwrap();
+        assert_eq!(no_op.scene.document_revision, 1);
+        assert!(no_op.operation.is_none());
+
+        let undone_rectangle = engine.undo().unwrap();
+        assert_eq!(undone_rectangle.scene.document_revision, 2);
+        let ElementRecordV1::Rect(rectangle) = &engine.document().elements["rect-1"] else {
+            panic!("fixture element must remain a rectangle");
+        };
+        assert_eq!(rectangle.fill, FillV1::default_rectangle());
+        assert_eq!(engine.undo(), Err(EngineErrorV1::UndoUnavailable));
+
+        let stroke_update = engine
+            .execute_command(envelope(
+                engine.document(),
+                "style-stroke",
+                CommandV1::UpdateElementStyle {
+                    element_id: "stroke-1".to_string(),
+                    patch: ElementStylePatchV1::Stroke {
+                        stroke: Some("#dc2626".to_string()),
+                        stroke_width: Some(6.0),
+                    },
+                },
+            ))
+            .unwrap();
+        assert_eq!(stroke_update.scene.document_revision, 3);
+        assert_eq!(
+            stroke_update.selection.style,
+            Some(SelectionStyleV1::Stroke {
+                stroke: "#dc2626".to_string(),
+                stroke_width: 6.0,
+            })
+        );
+        engine.undo().unwrap();
+
+        let text_update = engine
+            .execute_command(envelope(
+                engine.document(),
+                "style-text",
+                CommandV1::UpdateElementStyle {
+                    element_id: "text-1".to_string(),
+                    patch: ElementStylePatchV1::Text {
+                        color: Some("#7c3aed".to_string()),
+                        text_align: Some(TextAlignV1::End),
+                        font_size: Some(32.0),
+                        font_weight: Some(500),
+                    },
+                },
+            ))
+            .unwrap();
+        assert_eq!(text_update.scene.document_revision, 5);
+        assert_eq!(
+            text_update.selection.style,
+            Some(SelectionStyleV1::Text {
+                color: "#7c3aed".to_string(),
+                text_align: TextAlignV1::End,
+                font_size: 32.0,
+                font_weight: 500,
+            })
+        );
+        engine.undo().unwrap();
+
+        let before_invalid = engine.document().clone();
+        for command in [
+            CommandV1::UpdateElementStyle {
+                element_id: "rect-1".to_string(),
+                patch: ElementStylePatchV1::Rect {
+                    fill: None,
+                    stroke: None,
+                    stroke_width: None,
+                },
+            },
+            CommandV1::UpdateElementStyle {
+                element_id: "rect-1".to_string(),
+                patch: ElementStylePatchV1::Stroke {
+                    stroke: Some("#2563eb".to_string()),
+                    stroke_width: None,
+                },
+            },
+            CommandV1::UpdateElementStyle {
+                element_id: "rect-1".to_string(),
+                patch: ElementStylePatchV1::Rect {
+                    fill: None,
+                    stroke: Some("#2563EB".to_string()),
+                    stroke_width: Some(129.0),
+                },
+            },
+        ] {
+            assert!(
+                engine
+                    .execute_command(envelope(engine.document(), "invalid-style", command))
+                    .is_err()
+            );
+            assert_eq!(engine.document(), &before_invalid);
+        }
+    }
+
+    #[test]
+    fn persistent_profile_switch_is_undoable_deterministic_and_semantic_preserving() {
+        let mut engine = Engine::open(document_with_rectangle_and_stroke()).unwrap();
+        let semantic_elements = engine.document().elements.clone();
+        let profile = sketch_profile(1_313_817_669, 1.2, SketchFillStyleV1::Hachure);
+        let wire = serde_json::to_value(envelope(
+            engine.document(),
+            "profile-wire",
+            CommandV1::SetRenderProfile {
+                render_profile: profile.clone(),
+            },
+        ))
+        .unwrap();
+        assert_eq!(wire["command"]["type"], "set_render_profile");
+        assert_eq!(wire["command"]["renderProfile"]["kind"], "sketch");
+        assert!(wire["command"].get("profile").is_none());
+
+        let switched = engine
+            .execute_command(envelope(
+                engine.document(),
+                "profile-sketch",
+                CommandV1::SetRenderProfile {
+                    render_profile: profile.clone(),
+                },
+            ))
+            .unwrap();
+        assert_eq!(switched.scene.document_revision, 1);
+        assert_eq!(switched.scene.render_profile, profile);
+        assert_eq!(engine.document().elements, semantic_elements);
+        let first_nodes = switched.scene.nodes.clone();
+        for _ in 0..1_000 {
+            assert_eq!(engine.current_update().scene.nodes, first_nodes);
+        }
+
+        let no_op = engine
+            .execute_command(envelope(
+                engine.document(),
+                "profile-noop",
+                CommandV1::SetRenderProfile {
+                    render_profile: engine.document().render_profile.clone(),
+                },
+            ))
+            .unwrap();
+        assert_eq!(no_op.scene.document_revision, 1);
+        assert!(no_op.operation.is_none());
+
+        let undone = engine.undo().unwrap();
+        assert_eq!(undone.scene.document_revision, 2);
+        assert_eq!(undone.scene.render_profile, RenderProfileV1::clean());
+        assert_eq!(engine.document().elements, semantic_elements);
+        assert_eq!(engine.undo(), Err(EngineErrorV1::UndoUnavailable));
+    }
+
+    #[test]
+    fn scene_uses_persistent_paint_text_anchor_and_aligned_bounds() {
+        let mut document = document_with_three_elements();
+        let ElementRecordV1::Rect(rectangle) = document.elements.get_mut("rect-1").unwrap() else {
+            panic!("fixture element must be a rectangle");
+        };
+        rectangle.fill = FillV1::Solid {
+            color: "#fef3c7".to_string(),
+        };
+        rectangle.stroke = "#b45309".to_string();
+        rectangle.stroke_width = 5.0;
+        let ElementRecordV1::Stroke(stroke) = document.elements.get_mut("stroke-1").unwrap() else {
+            panic!("fixture element must be a stroke");
+        };
+        stroke.stroke = "#dc2626".to_string();
+        stroke.stroke_width = 7.0;
+        let ElementRecordV1::Text(text) = document.elements.get_mut("text-1").unwrap() else {
+            panic!("fixture element must be text");
+        };
+        text.color = "#7c3aed".to_string();
+        text.text_align = TextAlignV1::Center;
+
+        let mut engine = Engine::open(document).unwrap();
+        let pending = engine.current_update();
+        let request = pending
+            .text_measure_request
+            .expect("text fixture must request metrics");
+        let resolved = engine
+            .provide_text_metrics(product_metrics(&request, 80.0, 30.0, vec![]))
+            .unwrap();
+
+        let SceneNodeV1::Rect(rectangle) = &resolved.scene.nodes["rect-1:shape"] else {
+            panic!("clean rectangle must resolve to a rectangle node");
+        };
+        assert_eq!(rectangle.fill, "#fef3c7");
+        assert_eq!(rectangle.stroke, "#b45309");
+        assert_eq!(rectangle.stroke_width, 5.0);
+        let SceneNodeV1::Path(stroke) = &resolved.scene.nodes["stroke-1:path"] else {
+            panic!("clean stroke must resolve to a path node");
+        };
+        assert_eq!(stroke.stroke, "#dc2626");
+        assert_eq!(stroke.stroke_width, 7.0);
+        let SceneNodeV1::Text(text) = &resolved.scene.nodes["text-1:text"] else {
+            panic!("measured text must resolve to a text node");
+        };
+        assert_eq!(text.runs[0].fill, "#7c3aed");
+        assert_eq!(text.runs[0].text_anchor, TextAnchorV1::Middle);
+        assert_eq!(text.runs[0].x, 40.0);
+
+        let selected = engine.set_selection(Some("text-1".to_string())).unwrap();
+        assert_eq!(selected.selection.bounds.unwrap().x, 0.0);
+        assert_eq!(
+            selected.selection.style,
+            Some(SelectionStyleV1::Text {
+                color: "#7c3aed".to_string(),
+                text_align: TextAlignV1::Center,
+                font_size: 24.0,
+                font_weight: 400,
+            })
+        );
+
+        let sketch = engine
+            .resolve_scene_profile(sketch_profile(7, 1.2, SketchFillStyleV1::Hachure))
+            .unwrap();
+        let SceneNodeV1::Path(outline) = &sketch.scene.nodes["rect-1:sketch:outline:v1"] else {
+            panic!("sketch rectangle must resolve to an outline");
+        };
+        assert_eq!(outline.stroke, "#b45309");
+        assert_eq!(outline.stroke_width, 5.0);
+        let SceneNodeV1::Path(hatch) = &sketch.scene.nodes["rect-1:sketch:fill:v1"] else {
+            panic!("filled sketch rectangle must resolve to hatch paint");
+        };
+        assert_eq!(hatch.stroke, "#fef3c7");
+
+        engine
+            .execute_command(envelope(
+                engine.document(),
+                "remove-fill",
+                CommandV1::UpdateElementStyle {
+                    element_id: "rect-1".to_string(),
+                    patch: ElementStylePatchV1::Rect {
+                        fill: Some(FillV1::None),
+                        stroke: None,
+                        stroke_width: None,
+                    },
+                },
+            ))
+            .unwrap();
+        let no_fill = engine
+            .resolve_scene_profile(sketch_profile(7, 1.2, SketchFillStyleV1::Hachure))
+            .unwrap();
+        assert!(!no_fill.scene.nodes.contains_key("rect-1:sketch:fill:v1"));
     }
 
     #[test]
@@ -3046,7 +3547,19 @@ mod tests {
         assert_eq!(created.scene.document_revision, 1);
         assert_eq!(created.scene.scene_revision, 1);
         assert!(created.scene.root_node_ids.is_empty());
-        assert_eq!(created.selection, SelectionStateV1::default());
+        assert_eq!(
+            created.selection,
+            SelectionStateV1 {
+                selected_element_id: Some("text-1".to_string()),
+                bounds: None,
+                style: Some(SelectionStyleV1::Text {
+                    color: DEFAULT_INK_COLOR.to_string(),
+                    text_align: TextAlignV1::Start,
+                    font_size: DEFAULT_TEXT_FONT_SIZE,
+                    font_weight: DEFAULT_TEXT_FONT_WEIGHT,
+                }),
+            }
+        );
         let request = created
             .text_measure_request
             .expect("new text must request metrics");
@@ -3081,6 +3594,12 @@ mod tests {
                     y: 52.0,
                     width: 112.0,
                     height: 72.0,
+                }),
+                style: Some(SelectionStyleV1::Text {
+                    color: DEFAULT_INK_COLOR.to_string(),
+                    text_align: TextAlignV1::Start,
+                    font_size: DEFAULT_TEXT_FONT_SIZE,
+                    font_weight: DEFAULT_TEXT_FONT_WEIGHT,
                 }),
             }
         );
@@ -3422,12 +3941,23 @@ mod tests {
                 Vec2 { x: 24.0, y: 28.0 },
                 Vec2 { x: 48.0, y: 16.0 },
             ],
+            stroke: DEFAULT_INK_COLOR.to_string(),
             stroke_width: 3.0,
         };
         document.root_order.push(stroke.id.clone());
         document
             .elements
             .insert(stroke.id.clone(), ElementRecordV1::Stroke(stroke));
+        document
+    }
+
+    fn document_with_three_elements() -> NodeInkDocumentV1 {
+        let mut document = document_with_rectangle_and_stroke();
+        let text = product_text("text-1", "NodeInk");
+        document.root_order.push(text.id.clone());
+        document
+            .elements
+            .insert(text.id.clone(), ElementRecordV1::Text(text));
         document
     }
 

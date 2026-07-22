@@ -1,8 +1,8 @@
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    ElementId, ElementRecordV1, EngineErrorV1, NodeInkDocumentV1, RECTANGLE_STROKE_WIDTH, Vec2,
-    text::TextMetricsCache,
+    ElementId, ElementRecordV1, EngineErrorV1, NodeInkDocumentV1, SelectionStyleV1, Vec2,
+    aligned_text_x, text::TextMetricsCache,
 };
 
 const SCREEN_HIT_TOLERANCE: f64 = 6.0;
@@ -30,6 +30,7 @@ impl SelectionBoundsV1 {
 pub struct SelectionStateV1 {
     pub selected_element_id: Option<ElementId>,
     pub bounds: Option<SelectionBoundsV1>,
+    pub style: Option<SelectionStyleV1>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -91,12 +92,11 @@ impl SelectionModel {
         let preview_delta = preview
             .filter(|(preview_element_id, _)| *preview_element_id == element_id)
             .map_or(Vec2 { x: 0.0, y: 0.0 }, |(_, delta)| delta);
-        let Some(bounds) = element_bounds(element, text_metrics) else {
-            return SelectionStateV1::default();
-        };
         SelectionStateV1 {
             selected_element_id: Some(element_id.clone()),
-            bounds: Some(bounds.translated(preview_delta)),
+            bounds: element_bounds(element, text_metrics)
+                .map(|bounds| bounds.translated(preview_delta)),
+            style: Some(selection_style(element)),
         }
     }
 }
@@ -173,12 +173,12 @@ fn element_bounds(
 ) -> Option<SelectionBoundsV1> {
     match element {
         ElementRecordV1::Rect(rectangle) => {
-            let half_width = RECTANGLE_STROKE_WIDTH / 2.0;
+            let half_width = rectangle.stroke_width / 2.0;
             Some(SelectionBoundsV1 {
                 x: rectangle.x - half_width,
                 y: rectangle.y - half_width,
-                width: rectangle.width + RECTANGLE_STROKE_WIDTH,
-                height: rectangle.height + RECTANGLE_STROKE_WIDTH,
+                width: rectangle.width + rectangle.stroke_width,
+                height: rectangle.height + rectangle.stroke_width,
             })
         }
         ElementRecordV1::Stroke(stroke) => {
@@ -207,11 +207,31 @@ fn element_bounds(
             text_metrics
                 .metric_for(text)
                 .map(|metric| SelectionBoundsV1 {
-                    x: text.x,
+                    x: aligned_text_x(text.x, metric.width, text.text_align),
                     y: text.y,
                     width: metric.width,
                     height: metric.height,
                 })
         }
+    }
+}
+
+fn selection_style(element: &ElementRecordV1) -> SelectionStyleV1 {
+    match element {
+        ElementRecordV1::Rect(rectangle) => SelectionStyleV1::Rect {
+            fill: rectangle.fill.clone(),
+            stroke: rectangle.stroke.clone(),
+            stroke_width: rectangle.stroke_width,
+        },
+        ElementRecordV1::Stroke(stroke) => SelectionStyleV1::Stroke {
+            stroke: stroke.stroke.clone(),
+            stroke_width: stroke.stroke_width,
+        },
+        ElementRecordV1::Text(text) => SelectionStyleV1::Text {
+            color: text.color.clone(),
+            text_align: text.text_align,
+            font_size: text.font_size,
+            font_weight: text.font_weight,
+        },
     }
 }

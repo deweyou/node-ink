@@ -1,8 +1,15 @@
 import {
+  NODEINK_COLOR_PRESETS,
+  NODEINK_FILL_PRESETS,
+  NODEINK_STROKE_WIDTH_PRESETS,
+  NODEINK_TEXT_ALIGN_PRESETS,
+  NODEINK_TEXT_SIZE_PRESETS,
+  fillPresetMatches,
   getEditorCameraPresentation,
   getEditorPersistencePresentation,
   type EditorWebControllerV1,
 } from '@nodeink-internal/editor-web';
+import type { ElementStylePatchV1, FillV1, SelectionStyleV1 } from '@nodeink-internal/protocol';
 
 import {
   exposePointerBenchmark,
@@ -34,7 +41,13 @@ rootElement.innerHTML = `
         <span class="nodeink-kicker">NodeInk · Phase 1A</span>
         <h1>Framework-neutral canvas</h1>
       </div>
-      <span class="nodeink-host-badge">Vanilla TypeScript</span>
+      <div class="nodeink-topbar-actions">
+        <nav class="nodeink-profile-toggle" aria-label="Rendering profile">
+          <button type="button" data-action="set_render_profile" data-profile="clean">Clean</button>
+          <button type="button" data-action="set_render_profile" data-profile="sketch">Sketch</button>
+        </nav>
+        <span class="nodeink-host-badge">Vanilla TypeScript</span>
+      </div>
     </header>
     <aside class="nodeink-toolbar" aria-label="Canvas actions">
       <button type="button" data-action="set_tool_select" data-tool="select" title="Select tool (V)">Select</button>
@@ -48,6 +61,7 @@ rootElement.innerHTML = `
     </aside>
     <section class="nodeink-stage" aria-label="Infinite canvas proof">
       <div class="nodeink-canvas" data-canvas></div>
+      <aside class="nodeink-style-panel" aria-label="Selection style" data-style-panel hidden></aside>
       <nav class="nodeink-zoom-controls" aria-label="Canvas view controls">
         <button type="button" data-action="zoom_out" aria-label="Zoom out" title="缩小">−</button>
         <button type="button" data-action="reset_camera" data-zoom title="回正并适应全部内容">100%</button>
@@ -168,6 +182,16 @@ rootElement.addEventListener('click', (event) => {
     void controller.dispatch({ type: 'undo' });
   } else if (action === 'redo') {
     void controller.dispatch({ type: 'redo' });
+  } else if (action === 'set_render_profile') {
+    const profile = button.dataset.profile;
+    if (profile === 'clean' || profile === 'sketch') {
+      void controller.dispatch({ type: 'set_render_profile', profile });
+    }
+  } else if (action === 'update_selection_style') {
+    const patch = stylePatchFromButton(button, controller.getSnapshot().selectionStyle);
+    if (patch) {
+      void controller.dispatch({ type: 'update_selection_style', patch });
+    }
   } else if (action === 'retry_save') {
     void controller.dispatch({ type: 'retry_save' });
   } else if (action === 'retry_camera_save') {
@@ -238,6 +262,17 @@ function renderSnapshot(
   setDisabled(root, 'delete_selection', !isEditable || !snapshot.activeElementId);
   setDisabled(root, 'undo', !isEditable || !snapshot.canUndo);
   setDisabled(root, 'redo', !isEditable || !snapshot.canRedo);
+  root.querySelectorAll<HTMLButtonElement>('[data-profile]').forEach((button) => {
+    button.disabled = !isEditable;
+    button.setAttribute(
+      'aria-pressed',
+      String(button.dataset.profile === snapshot.renderProfile.kind),
+    );
+  });
+  renderStylePanel(
+    requireElement<HTMLElement>(root, '[data-style-panel]'),
+    isEditable ? snapshot.selectionStyle : null,
+  );
   setDisabled(root, 'zoom_out', snapshot.status !== 'ready');
   setDisabled(root, 'reset_camera', snapshot.status !== 'ready');
   setDisabled(root, 'zoom_in', snapshot.status !== 'ready');
@@ -248,6 +283,138 @@ function renderSnapshot(
     zoom.ariaLabel = camera.fitContentAriaLabel;
     zoom.dataset.cameraSaveStatus = snapshot.cameraSaveStatus;
   }
+}
+
+function renderStylePanel(panel: HTMLElement, style: SelectionStyleV1 | null): void {
+  panel.hidden = !style;
+  if (!style) {
+    panel.replaceChildren();
+    return;
+  }
+  const kindLabel =
+    style.kind === 'rect' ? 'Rectangle' : style.kind === 'stroke' ? 'Stroke' : 'Text';
+  const groups =
+    style.kind === 'rect'
+      ? [
+          styleGroupMarkup(
+            'Fill',
+            NODEINK_FILL_PRESETS.map((preset) =>
+              swatchMarkup(
+                `Fill ${preset.label}`,
+                preset.value,
+                fillPresetMatches(style.fill, preset.value),
+                'fill',
+                preset.id,
+              ),
+            ).join(''),
+          ),
+          colorGroupMarkup('Stroke', style.stroke, 'stroke'),
+          widthGroupMarkup(style.strokeWidth),
+        ]
+      : style.kind === 'stroke'
+        ? [colorGroupMarkup('Color', style.stroke, 'stroke'), widthGroupMarkup(style.strokeWidth)]
+        : [
+            colorGroupMarkup('Color', style.color, 'color'),
+            styleGroupMarkup(
+              'Size',
+              NODEINK_TEXT_SIZE_PRESETS.map(
+                (fontSize) =>
+                  `<button type="button" data-action="update_selection_style" data-style-property="fontSize" data-style-value="${fontSize}" aria-pressed="${String(style.fontSize === fontSize)}">${fontSize}</button>`,
+              ).join(''),
+            ),
+            styleGroupMarkup(
+              'Align',
+              NODEINK_TEXT_ALIGN_PRESETS.map(
+                (preset) =>
+                  `<button type="button" data-action="update_selection_style" data-style-property="textAlign" data-style-value="${preset.value}" aria-pressed="${String(style.textAlign === preset.value)}">${preset.label}</button>`,
+              ).join(''),
+            ),
+          ];
+  panel.innerHTML = `<h2 class="nodeink-style-title">Style <span>${kindLabel}</span></h2>${groups.join('')}`;
+}
+
+function colorGroupMarkup(label: string, value: string, property: 'stroke' | 'color'): string {
+  return styleGroupMarkup(
+    label,
+    NODEINK_COLOR_PRESETS.map((preset) =>
+      swatchMarkup(
+        `${label} ${preset.label}`,
+        { kind: 'solid', color: preset.value },
+        value === preset.value,
+        property,
+        preset.id,
+      ),
+    ).join(''),
+  );
+}
+
+function widthGroupMarkup(value: number): string {
+  return styleGroupMarkup(
+    'Width',
+    NODEINK_STROKE_WIDTH_PRESETS.map(
+      (strokeWidth) =>
+        `<button type="button" data-action="update_selection_style" data-style-property="strokeWidth" data-style-value="${strokeWidth}" aria-pressed="${String(value === strokeWidth)}">${strokeWidth}px</button>`,
+    ).join(''),
+  );
+}
+
+function styleGroupMarkup(label: string, options: string): string {
+  return `<fieldset class="nodeink-style-group"><legend>${label}</legend><div class="nodeink-style-options">${options}</div></fieldset>`;
+}
+
+function swatchMarkup(
+  label: string,
+  fill: FillV1,
+  pressed: boolean,
+  property: 'fill' | 'stroke' | 'color',
+  value: string,
+): string {
+  const style = fill.kind === 'solid' ? ` style="--swatch-color:${fill.color}"` : '';
+  const none = fill.kind === 'none' ? ' data-none="true"' : '';
+  return `<button type="button" class="nodeink-swatch" data-action="update_selection_style" data-style-property="${property}" data-style-value="${value}" aria-label="${label}" title="${label}" aria-pressed="${String(pressed)}"${none}${style}></button>`;
+}
+
+function stylePatchFromButton(
+  button: HTMLButtonElement,
+  style: SelectionStyleV1 | null,
+): ElementStylePatchV1 | null {
+  if (!style) {
+    return null;
+  }
+  const property = button.dataset.styleProperty;
+  const value = button.dataset.styleValue;
+  if (!property || !value) {
+    return null;
+  }
+  if (style.kind === 'rect' && property === 'fill') {
+    const fill = NODEINK_FILL_PRESETS.find((preset) => preset.id === value)?.value;
+    return fill ? { kind: 'rect', fill } : null;
+  }
+  if ((style.kind === 'rect' || style.kind === 'stroke') && property === 'stroke') {
+    const stroke = NODEINK_COLOR_PRESETS.find((preset) => preset.id === value)?.value;
+    return stroke ? { kind: style.kind, stroke } : null;
+  }
+  if ((style.kind === 'rect' || style.kind === 'stroke') && property === 'strokeWidth') {
+    const strokeWidth = Number(value);
+    return NODEINK_STROKE_WIDTH_PRESETS.includes(strokeWidth as 1 | 2 | 4)
+      ? { kind: style.kind, strokeWidth }
+      : null;
+  }
+  if (style.kind === 'text' && property === 'color') {
+    const color = NODEINK_COLOR_PRESETS.find((preset) => preset.id === value)?.value;
+    return color ? { kind: 'text', color } : null;
+  }
+  if (style.kind === 'text' && property === 'fontSize') {
+    const fontSize = Number(value);
+    return NODEINK_TEXT_SIZE_PRESETS.includes(fontSize as 18 | 24 | 32)
+      ? { kind: 'text', fontSize }
+      : null;
+  }
+  if (style.kind === 'text' && property === 'textAlign') {
+    const textAlign = NODEINK_TEXT_ALIGN_PRESETS.find((preset) => preset.value === value)?.value;
+    return textAlign ? { kind: 'text', textAlign } : null;
+  }
+  return null;
 }
 
 function setPressed(root: HTMLElement, tool: string, pressed: boolean): void {

@@ -1,8 +1,9 @@
 use serde::{Deserialize, Serialize};
 
-use crate::{RECTANGLE_STROKE_WIDTH, RectElementV1, ScenePathV1, StrokeElementV1, Vec2};
+use crate::{RectElementV1, ScenePathV1, StrokeElementV1, Vec2};
 
-pub const ENGINE_ALGORITHM_VERSION: &str = "nodeink-scene-v1";
+pub const ENGINE_ALGORITHM_VERSION: &str = "nodeink-scene-v2";
+const MAX_SKETCH_PARAMETER: f64 = 16.0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -46,9 +47,9 @@ impl RenderProfileV1 {
             } => {
                 *version == 1
                     && roughness.is_finite()
-                    && *roughness >= 0.0
+                    && (0.0..=MAX_SKETCH_PARAMETER).contains(roughness)
                     && bowing.is_finite()
-                    && *bowing >= 0.0
+                    && (0.0..=MAX_SKETCH_PARAMETER).contains(bowing)
             }
         }
     }
@@ -98,20 +99,22 @@ pub(crate) fn sketch_rectangle(
         source_element_id: rectangle.id.clone(),
         path_data: path_data(&outline_points),
         fill: if *fill_style == SketchFillStyleV1::Solid {
-            "#d1fae5".to_string()
+            rectangle.fill.scene_paint().to_string()
         } else {
             "none".to_string()
         },
-        stroke: "#047857".to_string(),
-        stroke_width: RECTANGLE_STROKE_WIDTH,
+        stroke: rectangle.stroke.clone(),
+        stroke_width: rectangle.stroke_width,
     }];
-    if *fill_style == SketchFillStyleV1::Hachure {
+    if *fill_style == SketchFillStyleV1::Hachure
+        && let Some(fill_color) = rectangle.fill.solid_color()
+    {
         paths.push(ScenePathV1 {
             id: format!("{}:sketch:fill:v1", rectangle.id),
             source_element_id: rectangle.id.clone(),
             path_data: hachure_path(rectangle, amplitude, &mut random),
             fill: "none".to_string(),
-            stroke: "#6ee7b7".to_string(),
+            stroke: fill_color.to_string(),
             stroke_width: 1.0,
         });
     }
@@ -136,7 +139,7 @@ pub(crate) fn sketch_stroke(stroke: &StrokeElementV1, profile: &RenderProfileV1)
         source_element_id: stroke.id.clone(),
         path_data: path_data(&points),
         fill: "none".to_string(),
-        stroke: "#0f172a".to_string(),
+        stroke: stroke.stroke.clone(),
         stroke_width: stroke.stroke_width,
     }
 }

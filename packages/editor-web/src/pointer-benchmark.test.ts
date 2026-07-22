@@ -11,6 +11,13 @@ const readySnapshot: EditorUiSnapshotV1 = {
   activeElementId: 'rect-1',
   activeTool: 'select',
   selectionBounds: { x: 0, y: 0, width: 100, height: 80 },
+  selectionStyle: {
+    kind: 'rect',
+    fill: { kind: 'solid', color: '#d1fae5' },
+    stroke: '#047857',
+    strokeWidth: 2,
+  },
+  renderProfile: { kind: 'clean', version: 1 },
   canUndo: false,
   canRedo: false,
   errorMessage: null,

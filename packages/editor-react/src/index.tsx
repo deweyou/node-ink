@@ -1,9 +1,17 @@
-import { useEffect, useRef, useSyncExternalStore } from 'react';
+import { useEffect, useRef, useSyncExternalStore, type CSSProperties, type ReactNode } from 'react';
 
 import {
+  NODEINK_COLOR_PRESETS,
+  NODEINK_FILL_PRESETS,
+  NODEINK_STROKE_WIDTH_PRESETS,
+  NODEINK_TEXT_ALIGN_PRESETS,
+  NODEINK_TEXT_SIZE_PRESETS,
+  fillPresetMatches,
   getEditorCameraPresentation,
   getEditorPersistencePresentation,
+  type ElementStylePatchV1,
   type EditorWebControllerV1,
+  type SelectionStyleV1,
 } from '@nodeink-internal/editor-web';
 
 export interface NodeInkEditorProps {
@@ -47,7 +55,22 @@ export function NodeInkEditor({ controller, hostLabel = 'React adapter' }: NodeI
           <span className="nodeink-kicker">NodeInk · Phase 1A</span>
           <h1>Framework-neutral canvas</h1>
         </div>
-        <span className="nodeink-host-badge">{hostLabel}</span>
+        <div className="nodeink-topbar-actions">
+          <nav className="nodeink-profile-toggle" aria-label="Rendering profile">
+            {(['clean', 'sketch'] as const).map((profile) => (
+              <button
+                key={profile}
+                type="button"
+                aria-pressed={snapshot.renderProfile.kind === profile}
+                disabled={!isEditable}
+                onClick={() => void controller.dispatch({ type: 'set_render_profile', profile })}
+              >
+                {profile === 'clean' ? 'Clean' : 'Sketch'}
+              </button>
+            ))}
+          </nav>
+          <span className="nodeink-host-badge">{hostLabel}</span>
+        </div>
       </header>
       <aside className="nodeink-toolbar" aria-label="Canvas actions">
         <button
@@ -124,6 +147,14 @@ export function NodeInkEditor({ controller, hostLabel = 'React adapter' }: NodeI
       </aside>
       <section className="nodeink-stage" aria-label="Infinite canvas proof">
         <div ref={canvasRef} className="nodeink-canvas" />
+        {isEditable && snapshot.selectionStyle ? (
+          <SelectionStylePanel
+            style={snapshot.selectionStyle}
+            dispatch={(patch) =>
+              void controller.dispatch({ type: 'update_selection_style', patch })
+            }
+          />
+        ) : null}
         <nav className="nodeink-zoom-controls" aria-label="Canvas view controls">
           <button
             type="button"
@@ -185,5 +216,167 @@ export function NodeInkEditor({ controller, hostLabel = 'React adapter' }: NodeI
         ) : null}
       </section>
     </main>
+  );
+}
+
+function SelectionStylePanel({
+  style,
+  dispatch,
+}: {
+  style: SelectionStyleV1;
+  dispatch: (patch: ElementStylePatchV1) => void;
+}) {
+  return (
+    <aside className="nodeink-style-panel" aria-label="Selection style">
+      <h2 className="nodeink-style-title">
+        Style{' '}
+        <span>
+          {style.kind === 'rect' ? 'Rectangle' : style.kind === 'stroke' ? 'Stroke' : 'Text'}
+        </span>
+      </h2>
+      {style.kind === 'rect' ? (
+        <>
+          <StyleGroup label="Fill">
+            {NODEINK_FILL_PRESETS.map((preset) => (
+              <SwatchButton
+                key={preset.id}
+                label={`Fill ${preset.label}`}
+                color={preset.value.kind === 'solid' ? preset.value.color : null}
+                pressed={fillPresetMatches(style.fill, preset.value)}
+                onClick={() => dispatch({ kind: 'rect', fill: preset.value })}
+              />
+            ))}
+          </StyleGroup>
+          <ColorGroup
+            label="Stroke"
+            value={style.stroke}
+            onChange={(stroke) => dispatch({ kind: 'rect', stroke })}
+          />
+          <WidthGroup
+            value={style.strokeWidth}
+            onChange={(strokeWidth) => dispatch({ kind: 'rect', strokeWidth })}
+          />
+        </>
+      ) : style.kind === 'stroke' ? (
+        <>
+          <ColorGroup
+            label="Color"
+            value={style.stroke}
+            onChange={(stroke) => dispatch({ kind: 'stroke', stroke })}
+          />
+          <WidthGroup
+            value={style.strokeWidth}
+            onChange={(strokeWidth) => dispatch({ kind: 'stroke', strokeWidth })}
+          />
+        </>
+      ) : (
+        <>
+          <ColorGroup
+            label="Color"
+            value={style.color}
+            onChange={(color) => dispatch({ kind: 'text', color })}
+          />
+          <StyleGroup label="Size">
+            {NODEINK_TEXT_SIZE_PRESETS.map((fontSize) => (
+              <button
+                key={fontSize}
+                type="button"
+                aria-pressed={style.fontSize === fontSize}
+                onClick={() => dispatch({ kind: 'text', fontSize })}
+              >
+                {fontSize}
+              </button>
+            ))}
+          </StyleGroup>
+          <StyleGroup label="Align">
+            {NODEINK_TEXT_ALIGN_PRESETS.map((preset) => (
+              <button
+                key={preset.value}
+                type="button"
+                aria-pressed={style.textAlign === preset.value}
+                onClick={() => dispatch({ kind: 'text', textAlign: preset.value })}
+              >
+                {preset.label}
+              </button>
+            ))}
+          </StyleGroup>
+        </>
+      )}
+    </aside>
+  );
+}
+
+function ColorGroup({
+  label,
+  value,
+  onChange,
+}: {
+  label: string;
+  value: string | null;
+  onChange: (color: string) => void;
+}) {
+  return (
+    <StyleGroup label={label}>
+      {NODEINK_COLOR_PRESETS.map((preset) => (
+        <SwatchButton
+          key={preset.id}
+          label={`${label} ${preset.label}`}
+          color={preset.value}
+          pressed={value === preset.value}
+          onClick={() => onChange(preset.value)}
+        />
+      ))}
+    </StyleGroup>
+  );
+}
+
+function WidthGroup({ value, onChange }: { value: number; onChange: (value: number) => void }) {
+  return (
+    <StyleGroup label="Width">
+      {NODEINK_STROKE_WIDTH_PRESETS.map((strokeWidth) => (
+        <button
+          key={strokeWidth}
+          type="button"
+          aria-pressed={value === strokeWidth}
+          onClick={() => onChange(strokeWidth)}
+        >
+          {strokeWidth}px
+        </button>
+      ))}
+    </StyleGroup>
+  );
+}
+
+function StyleGroup({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <fieldset className="nodeink-style-group">
+      <legend>{label}</legend>
+      <div className="nodeink-style-options">{children}</div>
+    </fieldset>
+  );
+}
+
+function SwatchButton({
+  label,
+  color,
+  pressed,
+  onClick,
+}: {
+  label: string;
+  color: string | null;
+  pressed: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      className="nodeink-swatch"
+      data-none={color === null ? 'true' : undefined}
+      aria-label={label}
+      title={label}
+      aria-pressed={pressed}
+      style={color ? ({ '--swatch-color': color } as CSSProperties) : undefined}
+      onClick={onClick}
+    />
   );
 }

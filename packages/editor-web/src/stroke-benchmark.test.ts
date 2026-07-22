@@ -174,6 +174,8 @@ function success(): EditorActionResultV1 {
       activeElementId: null,
       activeTool: 'select',
       selectionBounds: null,
+      selectionStyle: null,
+      renderProfile: { kind: 'clean', version: 1 },
       canUndo: false,
       canRedo: false,
       errorMessage: null,

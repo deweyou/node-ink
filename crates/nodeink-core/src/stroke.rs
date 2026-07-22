@@ -1,8 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::{ElementId, StrokeElementV1, Vec2};
-
-const DEFAULT_STROKE_WIDTH: f64 = 3.0;
+use crate::{DEFAULT_INK_COLOR, DEFAULT_STROKE_WIDTH, ElementId, StrokeElementV1, Vec2};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -221,6 +219,7 @@ fn stroke_element(id: ElementId, points: &[Vec2]) -> StrokeElementV1 {
     StrokeElementV1 {
         id,
         points: normalized_points,
+        stroke: DEFAULT_INK_COLOR.to_string(),
         stroke_width: DEFAULT_STROKE_WIDTH,
     }
 }

@@ -62,7 +62,7 @@ export interface PlaygroundStrokeBenchmarkReport {
 
 export interface PlaygroundSketchBenchmarkReport {
   build: 'release-wasm-dev-host';
-  engineAlgorithmVersion: 'nodeink-scene-v1';
+  engineAlgorithmVersion: 'nodeink-scene-v2';
   browser: string;
   os: string;
   hardware: PlaygroundBenchmarkHardware;
@@ -431,10 +431,10 @@ export async function runPlaygroundSketchBenchmark(): Promise<PlaygroundSketchBe
     sketchRoughness2: sketchProfile(42, 2),
   };
   const nativeExpectedHashes = {
-    clean: 'fnv1a64:161767abbb52ac49',
-    sketchRoughness2: 'fnv1a64:b52452b806f9f8f5',
-    sketchSeed42: 'fnv1a64:ddce7e37dbe5a687',
-    sketchSeed43: 'fnv1a64:9c7c25290e150686',
+    clean: 'fnv1a64:5b2061b1f75e7c2c',
+    sketchRoughness2: 'fnv1a64:739072c8fe33ca8c',
+    sketchSeed42: 'fnv1a64:f12e0a0336d64e6b',
+    sketchSeed43: 'fnv1a64:8bcf6f600f48a03f',
   };
   try {
     const resolutions = await Promise.all(
@@ -479,9 +479,10 @@ export async function runPlaygroundSketchBenchmark(): Promise<PlaygroundSketchBe
 
 export async function runPlaygroundTextBenchmark(): Promise<PlaygroundTextBenchmarkReport> {
   const engine = await createWasmEngine({
-    schemaVersion: 1,
+    schemaVersion: 2,
     documentId: 'text-fixture',
     revision: 0,
+    renderProfile: { kind: 'clean', version: 1 },
     rootOrder: [],
     elements: {},
   });
@@ -590,9 +591,10 @@ export async function runPlaygroundTextBenchmark(): Promise<PlaygroundTextBenchm
 
 export async function runPlaygroundScenePatchBenchmark(): Promise<PlaygroundScenePatchBenchmarkReport> {
   const engine = await createWasmEngine({
-    schemaVersion: 1,
+    schemaVersion: 2,
     documentId: 'scene-patch-benchmark',
     revision: 0,
+    renderProfile: { kind: 'clean', version: 1 },
     rootOrder: [],
     elements: {},
   });
@@ -790,9 +792,10 @@ export async function runPlaygroundPersistenceBenchmark(): Promise<PlaygroundPer
 
 export async function runPlaygroundMigrationBenchmark(): Promise<PlaygroundMigrationBenchmarkReport> {
   const engine = await createWasmEngine({
-    schemaVersion: 1,
+    schemaVersion: 2,
     documentId: 'migration-runner',
     revision: 0,
+    renderProfile: { kind: 'clean', version: 1 },
     rootOrder: [],
     elements: {},
   });
@@ -1085,9 +1088,10 @@ export async function runPlaygroundOperationBenchmark(): Promise<PlaygroundOpera
 
 function operationDocument(documentId: string): NodeInkDocumentV1 {
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     documentId,
     revision: 0,
+    renderProfile: { kind: 'clean', version: 1 },
     rootOrder: [],
     elements: {},
   };
@@ -1105,12 +1109,32 @@ function operationBatch(mode: 'apply' | 'dry_run'): DiagramOperationBatchV1 {
       {
         type: 'create_rectangle',
         opId: 'create-a',
-        rectangle: { kind: 'rect', id: 'rect-a', x: 10, y: 40, width: 160, height: 96 },
+        rectangle: {
+          kind: 'rect',
+          id: 'rect-a',
+          x: 10,
+          y: 40,
+          width: 160,
+          height: 96,
+          fill: { kind: 'solid', color: '#d1fae5' },
+          stroke: '#047857',
+          strokeWidth: 2,
+        },
       },
       {
         type: 'create_rectangle',
         opId: 'create-b',
-        rectangle: { kind: 'rect', id: 'rect-b', x: 100, y: 40, width: 160, height: 96 },
+        rectangle: {
+          kind: 'rect',
+          id: 'rect-b',
+          x: 100,
+          y: 40,
+          width: 160,
+          height: 96,
+          fill: { kind: 'solid', color: '#d1fae5' },
+          stroke: '#047857',
+          strokeWidth: 2,
+        },
       },
       {
         type: 'move_elements',
@@ -1141,7 +1165,17 @@ function atomicFailureBatch(): DiagramOperationBatchV1 {
       {
         type: 'create_rectangle',
         opId: 'create-before-failure',
-        rectangle: { kind: 'rect', id: 'rect-before-failure', x: 0, y: 0, width: 10, height: 10 },
+        rectangle: {
+          kind: 'rect',
+          id: 'rect-before-failure',
+          x: 0,
+          y: 0,
+          width: 10,
+          height: 10,
+          fill: { kind: 'solid', color: '#d1fae5' },
+          stroke: '#047857',
+          strokeWidth: 2,
+        },
       },
       {
         type: 'move_elements',
@@ -1636,6 +1670,7 @@ function svgScaleScene(
             fontSize: 12,
             fontWeight: 400,
             fill: '#0f172a',
+            textAnchor: 'start',
           },
         ],
       };
@@ -1661,6 +1696,7 @@ function svgScaleScene(
     documentId: `svg-scale-${kind}-${sourceElementCount}`,
     documentRevision: sceneRevision,
     sceneRevision,
+    renderProfile: { kind: 'clean', version: 1 },
     rootNodeIds,
     nodes,
   };
@@ -1822,9 +1858,10 @@ function benchmarkEnvironment() {
 
 function sketchFixtureDocument(): NodeInkDocumentV1 {
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     documentId: 'sketch-fixture',
     revision: 0,
+    renderProfile: { kind: 'clean', version: 1 },
     rootOrder: ['rect-1', 'stroke-1'],
     elements: {
       'rect-1': {
@@ -1834,6 +1871,9 @@ function sketchFixtureDocument(): NodeInkDocumentV1 {
         y: 40,
         width: 160,
         height: 96,
+        fill: { kind: 'solid', color: '#d1fae5' },
+        stroke: '#047857',
+        strokeWidth: 2,
       },
       'stroke-1': {
         kind: 'stroke',
@@ -1844,6 +1884,7 @@ function sketchFixtureDocument(): NodeInkDocumentV1 {
           { x: 48, y: 16 },
         ],
         strokeWidth: 3,
+        stroke: '#0f172a',
       },
     },
   };
@@ -1860,8 +1901,8 @@ function sketchProfile(seed: number, roughness: number): RenderProfileV1 {
   };
 }
 
-function assertAlgorithmVersion(resolution: SceneResolutionV1 | undefined): 'nodeink-scene-v1' {
-  if (resolution?.engineAlgorithmVersion !== 'nodeink-scene-v1') {
+function assertAlgorithmVersion(resolution: SceneResolutionV1 | undefined): 'nodeink-scene-v2' {
+  if (resolution?.engineAlgorithmVersion !== 'nodeink-scene-v2') {
     throw new Error(`unexpected engine algorithm version: ${resolution?.engineAlgorithmVersion}`);
   }
   return resolution.engineAlgorithmVersion;

@@ -1,4 +1,4 @@
-import type { CameraV1, Vec2 } from '@nodeink-internal/protocol';
+import type { CameraV1, TextAlignV1, Vec2 } from '@nodeink-internal/protocol';
 
 import { attachImeComposition } from './ime-input';
 import { NODEINK_CANVAS_FONT_FAMILY, NODEINK_DEFAULT_TEXT_SIZE } from './text-font';
@@ -12,6 +12,7 @@ export interface TextEditorOverlayOptionsV1 {
   camera: CameraV1;
   fontSize?: number;
   fontWeight?: 400 | 500;
+  textAlign?: TextAlignV1;
   onCommit: (value: string) => void;
   onCancel: () => void;
 }
@@ -31,6 +32,7 @@ export function attachTextEditorOverlay({
   camera,
   fontSize = NODEINK_DEFAULT_TEXT_SIZE,
   fontWeight = 400,
+  textAlign = 'start',
   onCommit,
   onCancel,
 }: TextEditorOverlayOptionsV1): TextEditorOverlayV1 {
@@ -43,6 +45,7 @@ export function attachTextEditorOverlay({
   input.wrap = 'off';
   input.style.fontFamily = `'${NODEINK_CANVAS_FONT_FAMILY}', sans-serif`;
   input.style.fontWeight = String(fontWeight);
+  input.style.textAlign = textAlign === 'start' ? 'left' : textAlign === 'end' ? 'right' : 'center';
   let currentCamera = camera;
   let closed = false;
   let buffer = initialValue;

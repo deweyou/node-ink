@@ -73,7 +73,7 @@ pub fn benchmark_scene_snapshot(
                 height: 10.0,
                 fill: "#d1fae5".to_string(),
                 stroke: "#047857".to_string(),
-                stroke_width: crate::RECTANGLE_STROKE_WIDTH,
+                stroke_width: crate::DEFAULT_RECTANGLE_STROKE_WIDTH,
             }),
         );
     }
@@ -82,6 +82,7 @@ pub fn benchmark_scene_snapshot(
         document_id: "scene-patch-fixture".to_string(),
         document_revision: scene_revision,
         scene_revision,
+        render_profile: crate::RenderProfileV1::clean(),
         root_node_ids,
         nodes,
     })
@@ -130,7 +131,7 @@ mod tests {
                 height: 10.0,
                 fill: "#d1fae5".to_string(),
                 stroke: "#047857".to_string(),
-                stroke_width: crate::RECTANGLE_STROKE_WIDTH,
+                stroke_width: crate::DEFAULT_RECTANGLE_STROKE_WIDTH,
             })
         );
     }
@@ -150,7 +151,7 @@ mod tests {
             height: 16.0,
             fill: "none".to_string(),
             stroke: "black".to_string(),
-            stroke_width: crate::RECTANGLE_STROKE_WIDTH,
+            stroke_width: crate::DEFAULT_RECTANGLE_STROKE_WIDTH,
         });
         after
             .nodes

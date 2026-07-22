@@ -13,6 +13,7 @@ import type {
   PointerUpdateV1,
   RendererV1,
   RenderProfileV1,
+  SelectionStyleV1,
   SceneBenchmarkPayloadV1,
   ScenePatchV1,
   SceneResolutionV1,
@@ -277,6 +278,137 @@ describe('EditorWebController', () => {
     expect(renderer.snapshots.at(-1)?.documentRevision).toBe(2);
   });
 
+  it('commits rectangle style and Render Profile changes as one revision each', async () => {
+    const engine = new StubEngine();
+    const persistence = new StubPersistence();
+    const ids = ['create-command', 'rect-1', 'style-command', 'profile-command'];
+    const controller = new EditorWebController({
+      engine,
+      renderer: new StubRenderer(),
+      persistence,
+      createId: () => ids.shift() ?? 'fallback',
+    });
+    await controller.mount(document.createElement('div'));
+
+    await controller.dispatch({ type: 'create_rectangle' });
+    const styled = await controller.dispatch({
+      type: 'update_selection_style',
+      patch: { kind: 'rect', fill: { kind: 'solid', color: '#dbeafe' } },
+    });
+    const profiled = await controller.dispatch({ type: 'set_render_profile', profile: 'sketch' });
+
+    expect(styled.snapshot).toMatchObject({
+      documentRevision: 2,
+      sceneRevision: 2,
+      selectionStyle: {
+        kind: 'rect',
+        fill: { kind: 'solid', color: '#dbeafe' },
+      },
+    });
+    expect(profiled.snapshot).toMatchObject({
+      documentRevision: 3,
+      sceneRevision: 3,
+      renderProfile: {
+        kind: 'sketch',
+        version: 1,
+        seed: 1_313_817_669,
+        fillStyle: 'hachure',
+      },
+    });
+    expect(engine.commands.slice(1).map((command) => command.command)).toEqual([
+      {
+        type: 'update_element_style',
+        elementId: 'rect-1',
+        patch: { kind: 'rect', fill: { kind: 'solid', color: '#dbeafe' } },
+      },
+      {
+        type: 'set_render_profile',
+        renderProfile: {
+          kind: 'sketch',
+          version: 1,
+          seed: 1_313_817_669,
+          roughness: 1.2,
+          bowing: 0.8,
+          fillStyle: 'hachure',
+        },
+      },
+    ]);
+    expect(persistence.committedRevisions).toEqual([1, 2, 3]);
+  });
+
+  it('keeps Document revision stable for same-value style and profile commands', async () => {
+    const engine = new StubEngine();
+    const persistence = new StubPersistence();
+    const ids = ['create-command', 'rect-1', 'style-command', 'profile-command'];
+    const controller = new EditorWebController({
+      engine,
+      renderer: new StubRenderer(),
+      persistence,
+      createId: () => ids.shift() ?? 'fallback',
+    });
+    await controller.mount(document.createElement('div'));
+    await controller.dispatch({ type: 'create_rectangle' });
+
+    const styled = await controller.dispatch({
+      type: 'update_selection_style',
+      patch: { kind: 'rect', fill: { kind: 'solid', color: '#d1fae5' } },
+    });
+    const profiled = await controller.dispatch({ type: 'set_render_profile', profile: 'clean' });
+
+    expect(styled.snapshot).toMatchObject({ documentRevision: 1, sceneRevision: 1 });
+    expect(profiled.snapshot).toMatchObject({ documentRevision: 1, sceneRevision: 1 });
+    expect(persistence.committedRevisions).toEqual([1]);
+  });
+
+  it('commits text font size once and resolves metrics with a scene-only revision', async () => {
+    const engine = new StubEngine();
+    engine.textEditElement = textElement('text-1', 'NodeInk');
+    const persistence = new StubPersistence();
+    const measure = vi.fn((request: TextMeasureRequestV1) => ({
+      snapshot: {
+        fontFingerprint: request.fontFingerprint,
+        metrics: request.runs.map((run) => ({
+          key: run.key,
+          width: 160,
+          height: 40,
+          baseline: 28,
+          lineBreaks: [],
+        })),
+      },
+    }));
+    const controller = new EditorWebController({
+      engine,
+      renderer: new StubRenderer(),
+      persistence,
+      textMetrics: { fingerprint: () => 'font-ready-v1', measure },
+      createId: () => 'style-command',
+    });
+    await controller.mount(document.createElement('div'));
+    await controller.dispatch({ type: 'begin_text_edit', point: { x: 40, y: 52 } });
+    await controller.dispatch({ type: 'cancel_text_edit' });
+
+    const result = await controller.dispatch({
+      type: 'update_selection_style',
+      patch: { kind: 'text', fontSize: 32 },
+    });
+
+    expect(engine.commands).toHaveLength(1);
+    expect(engine.commands[0]?.command).toEqual({
+      type: 'update_element_style',
+      elementId: 'text-1',
+      patch: { kind: 'text', fontSize: 32 },
+    });
+    expect(measure).toHaveBeenCalledOnce();
+    expect(measure.mock.calls[0]?.[0].runs[0]?.fontSize).toBe(32);
+    expect(engine.providedTextMetrics).toHaveLength(1);
+    expect(result.snapshot).toMatchObject({
+      documentRevision: 1,
+      sceneRevision: 2,
+      selectionStyle: { kind: 'text', fontSize: 32 },
+    });
+    expect(persistence.committedRevisions).toEqual([1]);
+  });
+
   it('clears and deletes the Rust-owned selection through shared editor actions', async () => {
     const engine = new StubEngine();
     const renderer = new StubRenderer();
@@ -462,7 +594,7 @@ describe('EditorWebController', () => {
     expect(persistence.committedRevisions).toEqual([1]);
     expect(controller.getSnapshot()).toMatchObject({
       documentRevision: 1,
-      sceneRevision: 1,
+      sceneRevision: 2,
       elementCount: 1,
     });
   });
@@ -965,7 +1097,14 @@ class StubEngine implements EnginePortV1 {
   cameraError: Error | null = null;
   #camera: CameraV1 = { x: 0, y: 0, zoom: 1 };
   #revision = 0;
+  #sceneRevision = 0;
   #rectangleId: string | null;
+  #rectangleStyle: Omit<Extract<SelectionStyleV1, { kind: 'rect' }>, 'kind'> = {
+    fill: { kind: 'solid' as const, color: '#d1fae5' },
+    stroke: '#047857',
+    strokeWidth: 2,
+  };
+  #renderProfile: RenderProfileV1 = { kind: 'clean', version: 1 };
   #textElement: TextElementV1 | null = null;
   #textMeasured = false;
   #selectedElementId: string | null = null;
@@ -1029,28 +1168,92 @@ class StubEngine implements EnginePortV1 {
       throw this.executeError;
     }
     this.commands.push(command);
-    this.#revision += 1;
-    this.#canRedo = false;
+    let changedElementIds: string[] = [];
+    let didChange = false;
     if (command.command.type === 'create_rectangle') {
       this.#rectangleId = command.command.rectangle.id;
       this.#selectedElementId = this.#rectangleId;
+      this.#rectangleStyle = {
+        fill: command.command.rectangle.fill,
+        stroke: command.command.rectangle.stroke,
+        strokeWidth: command.command.rectangle.strokeWidth,
+      };
+      changedElementIds = [command.command.rectangle.id];
+      didChange = true;
     } else if (command.command.type === 'create_text') {
       this.#textElement = command.command.text;
       this.textEditElement = command.command.text;
       this.#selectedElementId = command.command.text.id;
       this.requestTextMeasurement(command.command.text);
+      changedElementIds = [command.command.text.id];
+      didChange = true;
     } else if (command.command.type === 'update_text') {
       const current = this.textEditElement;
       if (current && current.id === command.command.elementId) {
         const updated = { ...current, ...command.command.patch };
-        this.#textElement = updated;
-        this.textEditElement = updated;
-        this.#selectedElementId = updated.id;
-        this.requestTextMeasurement(updated);
+        if (!sameValue(current, updated)) {
+          this.#textElement = updated;
+          this.textEditElement = updated;
+          this.#selectedElementId = updated.id;
+          this.requestTextMeasurement(updated);
+          changedElementIds = [updated.id];
+          didChange = true;
+        }
       }
     } else if (command.command.type === 'move_elements') {
       this.#selectedElementId = command.command.elementIds[0] ?? this.#selectedElementId;
+      changedElementIds = [...command.command.elementIds];
+      didChange = command.command.elementIds.length > 0;
+    } else if (command.command.type === 'update_element_style') {
+      if (
+        command.command.elementId === this.#rectangleId &&
+        command.command.patch.kind === 'rect'
+      ) {
+        const nextStyle = { ...this.#rectangleStyle, ...command.command.patch };
+        delete (nextStyle as { kind?: unknown }).kind;
+        if (!sameValue(this.#rectangleStyle, nextStyle)) {
+          this.#rectangleStyle = nextStyle;
+          changedElementIds = [command.command.elementId];
+          didChange = true;
+        }
+      } else if (command.command.patch.kind === 'text') {
+        const current = this.#textElement ?? this.textEditElement;
+        if (current?.id === command.command.elementId) {
+          const { kind: _kind, ...patch } = command.command.patch;
+          const updated = { ...current, ...patch };
+          if (!sameValue(current, updated)) {
+            this.#textElement = updated;
+            this.textEditElement = updated;
+            this.#selectedElementId = updated.id;
+            if (
+              updated.fontSize !== current.fontSize ||
+              updated.fontWeight !== current.fontWeight
+            ) {
+              this.requestTextMeasurement(updated);
+            }
+            changedElementIds = [updated.id];
+            didChange = true;
+          }
+        }
+      }
+    } else if (command.command.type === 'set_render_profile') {
+      if (!sameValue(this.#renderProfile, command.command.renderProfile)) {
+        this.#renderProfile = command.command.renderProfile;
+        didChange = true;
+        changedElementIds = [
+          ...[this.#rectangleId, this.#textElement?.id].filter(
+            (elementId): elementId is string => elementId !== null && elementId !== undefined,
+          ),
+        ];
+      }
     } else if (command.command.type === 'delete_elements') {
+      const existingElementIds = [this.#rectangleId, this.#textElement?.id].filter(
+        (elementId): elementId is string => elementId !== null && elementId !== undefined,
+      );
+      changedElementIds = command.command.elementIds.filter((elementId) =>
+        existingElementIds.includes(elementId),
+      );
+      didChange = changedElementIds.length > 0;
       if (this.#selectedElementId && command.command.elementIds.includes(this.#selectedElementId)) {
         this.#selectedElementId = null;
       }
@@ -1064,14 +1267,11 @@ class StubEngine implements EnginePortV1 {
         this.#textMeasured = false;
       }
     }
-    const changedElementIds =
-      command.command.type === 'delete_elements'
-        ? []
-        : command.command.type === 'create_text'
-          ? [command.command.text.id]
-          : command.command.type === 'update_text'
-            ? [command.command.elementId]
-            : [this.#rectangleId ?? 'rect-1'];
+    if (didChange) {
+      this.#revision += 1;
+      this.#sceneRevision += 1;
+      this.#canRedo = false;
+    }
     return this.update(changedElementIds);
   }
 
@@ -1098,6 +1298,7 @@ class StubEngine implements EnginePortV1 {
     this.providedTextMetrics.push(snapshot);
     this.textMeasureRequest = null;
     this.#textMeasured = true;
+    this.#sceneRevision += 1;
     return this.update();
   }
 
@@ -1150,7 +1351,7 @@ class StubEngine implements EnginePortV1 {
       engineAlgorithmVersion: 'nodeink-scene-v1',
       renderProfile: profile,
       canonicalHash: 'fnv1a64:test',
-      scene: this.update().scene,
+      scene: { ...this.update().scene, renderProfile: profile },
     };
   }
 
@@ -1181,8 +1382,8 @@ class StubEngine implements EnginePortV1 {
       value: {
         protocolVersion: 1,
         documentRevision: this.#revision,
-        baseSceneRevision: this.#revision,
-        sceneRevision: this.#revision + 1,
+        baseSceneRevision: this.#sceneRevision,
+        sceneRevision: this.#sceneRevision + 1,
         addedNodes: {},
         updatedNodes: {},
         removedNodeIds: [],
@@ -1198,12 +1399,13 @@ class StubEngine implements EnginePortV1 {
     return {
       result: {
         sourceSchemaVersion: 1,
-        targetSchemaVersion: 1,
-        migrated: false,
+        targetSchemaVersion: 2,
+        migrated: true,
         document: {
-          schemaVersion: 1 as const,
+          schemaVersion: 2 as const,
           documentId: 'doc-1',
           revision: 0,
+          renderProfile: { kind: 'clean' as const, version: 1 as const },
           rootOrder: [],
           elements: {},
         },
@@ -1219,9 +1421,10 @@ class StubEngine implements EnginePortV1 {
 
   serializeDocument() {
     const document = {
-      schemaVersion: 1 as const,
+      schemaVersion: 2 as const,
       documentId: 'doc-1',
       revision: this.#revision,
+      renderProfile: this.#renderProfile,
       rootOrder: this.#rectangleId ? [this.#rectangleId] : [],
       elements: {},
     };
@@ -1251,9 +1454,31 @@ class StubEngine implements EnginePortV1 {
   private update(changedElementIds: string[] = []): EngineUpdateV1 {
     const scene = stubScene(
       this.#revision,
+      this.#sceneRevision,
       this.#rectangleId,
       this.#textMeasured ? this.#textElement : null,
+      this.#rectangleStyle,
+      this.#renderProfile,
     );
+    const selectedText = this.#textElement ?? this.textEditElement;
+    const selectionStyle: SelectionStyleV1 | null =
+      this.#selectedElementId === this.#rectangleId && this.#rectangleId
+        ? { kind: 'rect', ...this.#rectangleStyle }
+        : this.#selectedElementId === selectedText?.id
+          ? {
+              kind: 'text',
+              color: selectedText.color,
+              fontSize: selectedText.fontSize,
+              fontWeight: selectedText.fontWeight,
+              textAlign: selectedText.textAlign,
+            }
+          : null;
+    const selectionBounds =
+      this.#selectedElementId === this.#rectangleId && this.#rectangleId
+        ? { x: 80, y: 72, width: 176, height: 104 }
+        : this.#selectedElementId === selectedText?.id && this.#textMeasured
+          ? { x: 80, y: 72, width: 176, height: 104 }
+          : null;
     return {
       activeTool: this.#activeTool,
       textMeasureRequest: this.textMeasureRequest,
@@ -1263,14 +1488,15 @@ class StubEngine implements EnginePortV1 {
             previousRevision: this.#revision - 1,
             revision: this.#revision,
             changedElementIds,
-            sceneRevision: this.#revision,
+            sceneRevision: this.#sceneRevision,
           }
         : null,
       scene,
       history: { canUndo: this.#revision > 0, canRedo: this.#canRedo },
       selection: {
         selectedElementId: this.#selectedElementId,
-        bounds: this.#selectedElementId ? { x: 80, y: 72, width: 176, height: 104 } : null,
+        bounds: selectionBounds,
+        style: selectionStyle,
       },
     };
   }
@@ -1355,9 +1581,16 @@ class StubCameraPersistence implements EditorCameraPersistencePortV1 {
 }
 
 function stubScene(
-  revision: number,
+  documentRevision: number,
+  sceneRevision: number,
   rectangleId: string | null,
   text: TextElementV1 | null = null,
+  rectangleStyle: Omit<Extract<SelectionStyleV1, { kind: 'rect' }>, 'kind'> = {
+    fill: { kind: 'solid', color: '#d1fae5' },
+    stroke: '#047857',
+    strokeWidth: 2,
+  },
+  renderProfile: RenderProfileV1 = { kind: 'clean', version: 1 },
 ): SceneSnapshotV1 {
   const sceneNodeId = rectangleId ? `${rectangleId}:shape` : null;
   const rectangleNodes =
@@ -1371,9 +1604,10 @@ function stubScene(
             y: 72,
             width: 176,
             height: 104,
-            fill: '#d1fae5',
-            stroke: '#047857',
-            strokeWidth: 2,
+            fill:
+              rectangleStyle.fill.kind === 'solid' ? rectangleStyle.fill.color : ('none' as const),
+            stroke: rectangleStyle.stroke,
+            strokeWidth: rectangleStyle.strokeWidth,
           },
         }
       : {};
@@ -1393,7 +1627,13 @@ function stubScene(
                 fontFamily: text.fontFamily,
                 fontSize: text.fontSize,
                 fontWeight: text.fontWeight,
-                fill: '#0f172a',
+                fill: text.color,
+                textAnchor:
+                  text.textAlign === 'center'
+                    ? ('middle' as const)
+                    : text.textAlign === 'end'
+                      ? ('end' as const)
+                      : ('start' as const),
               },
             ],
           },
@@ -1402,8 +1642,9 @@ function stubScene(
   return {
     protocolVersion: 1,
     documentId: 'doc-1',
-    documentRevision: revision,
-    sceneRevision: revision,
+    documentRevision,
+    sceneRevision,
+    renderProfile,
     rootNodeIds: [sceneNodeId, textNodeId].filter((id): id is string => id !== null),
     nodes: { ...rectangleNodes, ...textNodes },
   };
@@ -1421,7 +1662,13 @@ function textElement(id: string, text: string): TextElementV1 {
     fontWeight: 400,
     maxWidth: null,
     fontFingerprint: 'font-ready-v1',
+    color: '#0f172a',
+    textAlign: 'start',
   };
+}
+
+function sameValue(first: unknown, second: unknown): boolean {
+  return JSON.stringify(first) === JSON.stringify(second);
 }
 
 function pointerEvent(
