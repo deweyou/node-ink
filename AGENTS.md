@@ -24,6 +24,7 @@ NodeInk is a local-first, desktop Web canvas whose persistent semantics live in 
 - Cargo remains the Rust truth source even when Vite+ orchestrates it. Preserve the task-specific temporary target-dir workaround in `scripts/` unless the macOS provenance issue is revalidated.
 - Root `.npmrc` must stay on `https://registry.npmjs.org/` and must never contain credentials.
 - `.harness_local/` is local runtime state: keep it ignored and do not modify or commit it.
+- DDev is global personal tooling: do not commit repository-local DDev copies, manifests, links, or lockfiles solely to activate it.
 - Phase 0 packages are private and unstable. Do not promise public SDK compatibility or choose a public npm scope early.
 
 ## Task Routing
