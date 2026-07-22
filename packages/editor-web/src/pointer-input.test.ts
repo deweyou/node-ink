@@ -5,6 +5,34 @@ import type { NormalizedPointerEventV1 } from '@nodeink-internal/protocol';
 import { attachPointerInput } from './pointer-input';
 
 describe('attachPointerInput', () => {
+  it('maps client coordinates through the rendered SVG coordinate system', () => {
+    const target = document.createElement('div');
+    const canvas = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    canvas.dataset.nodeinkCanvas = 'true';
+    const rectangle = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+    rectangle.dataset.sourceElementId = 'rect-1';
+    canvas.append(rectangle);
+    target.append(canvas);
+    mockBounds(target);
+    Object.assign(canvas, {
+      getScreenCTM: () => ({ a: 2, b: 0, c: 0, d: 2, e: 100, f: 50 }),
+    });
+    Object.assign(target, {
+      setPointerCapture: vi.fn(),
+      hasPointerCapture: () => false,
+    });
+    const batches: NormalizedPointerEventV1[][] = [];
+    attachPointerInput(target, (events) => batches.push(events));
+
+    rectangle.dispatchEvent(pointerEvent('pointerdown', { clientX: 140, clientY: 110 }));
+    rectangle.dispatchEvent(pointerEvent('pointermove', { clientX: 180, clientY: 150 }));
+
+    expect(batches).toMatchObject([
+      [{ phase: 'down', point: { x: 20, y: 30 }, targetElementId: 'rect-1' }],
+      [{ phase: 'move', point: { x: 40, y: 50 }, targetElementId: null }],
+    ]);
+  });
+
   it('normalizes single and coalesced events with monotonic per-pointer sequences', () => {
     const target = document.createElement('div');
     const rectangle = document.createElementNS('http://www.w3.org/2000/svg', 'rect');

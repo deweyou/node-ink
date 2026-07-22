@@ -237,6 +237,41 @@ describe('EditorWebController', () => {
     expect(engine.disposeCalls).toBe(1);
     expect(renderer.unmountCalls).toBe(1);
   });
+
+  it('routes available history shortcuts and removes the document listener on dispose', async () => {
+    const ownerDocument = document.implementation.createHTMLDocument();
+    const target = ownerDocument.createElement('div');
+    ownerDocument.body.append(target);
+    const engine = new StubEngine();
+    const controller = new EditorWebController({
+      engine,
+      renderer: new StubRenderer(),
+      createId: () => 'rect-1',
+    });
+    await controller.mount(target);
+    const unavailableUndo = keyboardEvent({ key: 'z', metaKey: true });
+
+    ownerDocument.dispatchEvent(unavailableUndo);
+
+    expect(unavailableUndo.defaultPrevented).toBe(false);
+    expect(engine.undoCalls).toBe(0);
+
+    await controller.dispatch({ type: 'create_rectangle' });
+    const undo = keyboardEvent({ key: 'z', metaKey: true });
+    ownerDocument.dispatchEvent(undo);
+    await vi.waitFor(() => expect(engine.undoCalls).toBe(1));
+    expect(undo.defaultPrevented).toBe(true);
+
+    const redo = keyboardEvent({ key: 'z', metaKey: true, shiftKey: true });
+    ownerDocument.dispatchEvent(redo);
+    await vi.waitFor(() => expect(engine.redoCalls).toBe(1));
+    expect(redo.defaultPrevented).toBe(true);
+
+    controller.dispose();
+    ownerDocument.dispatchEvent(keyboardEvent({ key: 'z', metaKey: true }));
+    await Promise.resolve();
+    expect(engine.undoCalls).toBe(1);
+  });
 });
 
 class StubEngine implements EnginePortV1 {
@@ -248,6 +283,7 @@ class StubEngine implements EnginePortV1 {
   disposeCalls = 0;
   #revision = 0;
   #rectangleId: string | null;
+  #canRedo = false;
 
   constructor(rectangleId: string | null = null) {
     this.#rectangleId = rectangleId;
@@ -266,6 +302,7 @@ class StubEngine implements EnginePortV1 {
     }
     this.commands.push(command);
     this.#revision += 1;
+    this.#canRedo = false;
     if (command.command.type === 'create_rectangle') {
       this.#rectangleId = command.command.rectangle.id;
     }
@@ -384,11 +421,13 @@ class StubEngine implements EnginePortV1 {
 
   async undo(): Promise<EngineUpdateV1> {
     this.undoCalls += 1;
+    this.#canRedo = true;
     return this.update();
   }
 
   async redo(): Promise<EngineUpdateV1> {
     this.redoCalls += 1;
+    this.#canRedo = false;
     return this.update();
   }
 
@@ -409,7 +448,7 @@ class StubEngine implements EnginePortV1 {
           }
         : null,
       scene,
-      history: { canUndo: this.#revision > 0, canRedo: false },
+      history: { canUndo: this.#revision > 0, canRedo: this.#canRedo },
     };
   }
 }
@@ -484,4 +523,22 @@ function pointerEvent(
     point: { x: 10, y: 20 },
     targetElementId: phase === 'down' ? 'rect-1' : null,
   };
+}
+
+function keyboardEvent({
+  key,
+  metaKey = false,
+  shiftKey = false,
+}: {
+  key: string;
+  metaKey?: boolean;
+  shiftKey?: boolean;
+}): KeyboardEvent {
+  return new KeyboardEvent('keydown', {
+    bubbles: true,
+    cancelable: true,
+    key,
+    metaKey,
+    shiftKey,
+  });
 }

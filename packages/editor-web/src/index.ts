@@ -15,6 +15,7 @@ import {
 } from '@nodeink-internal/protocol';
 
 import { attachPointerInput } from './pointer-input';
+import { attachHistoryShortcuts } from './keyboard-input';
 
 export type EditorActionV1 =
   | {
@@ -87,6 +88,7 @@ export class EditorWebController implements EditorWebControllerV1 {
   #snapshot = initialSnapshot;
   #documentId: string | null = null;
   #detachPointerInput: (() => void) | null = null;
+  #detachHistoryShortcuts: (() => void) | null = null;
   #queue = Promise.resolve();
   #isDisposed = false;
 
@@ -102,6 +104,15 @@ export class EditorWebController implements EditorWebControllerV1 {
     this.#detachPointerInput?.();
     this.#detachPointerInput = attachPointerInput(target, (events) => {
       void this.dispatch({ type: 'pointer_events', events });
+    });
+    this.#detachHistoryShortcuts?.();
+    this.#detachHistoryShortcuts = attachHistoryShortcuts(target.ownerDocument, (action) => {
+      const isAvailable = action === 'undo' ? this.#snapshot.canUndo : this.#snapshot.canRedo;
+      if (this.#snapshot.status !== 'ready' || !isAvailable) {
+        return false;
+      }
+      void this.dispatch({ type: action });
+      return true;
     });
     try {
       this.applyUpdate(await this.#engine.currentUpdate());
@@ -136,6 +147,8 @@ export class EditorWebController implements EditorWebControllerV1 {
     this.#isDisposed = true;
     this.#detachPointerInput?.();
     this.#detachPointerInput = null;
+    this.#detachHistoryShortcuts?.();
+    this.#detachHistoryShortcuts = null;
     this.#listeners.clear();
     this.#renderer.unmount();
     this.#engine.dispose();

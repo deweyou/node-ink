@@ -54,7 +54,7 @@ function normalizeEvents(
   phase: PointerPhaseV1,
   sequences: Map<number, number>,
 ): NormalizedPointerEventV1[] {
-  const bounds = target.getBoundingClientRect();
+  const toCanvasPoint = createScreenToCanvasPoint(target);
   return events.map((event) => {
     const sequence = (sequences.get(event.pointerId) ?? 0) + 1;
     sequences.set(event.pointerId, sequence);
@@ -62,10 +62,37 @@ function normalizeEvents(
       pointerId: event.pointerId,
       sequence,
       phase,
-      point: { x: event.clientX - bounds.left, y: event.clientY - bounds.top },
+      point: toCanvasPoint(event.clientX, event.clientY),
       targetElementId: phase === 'down' ? sourceElementId(event.target) : null,
     };
   });
+}
+
+function createScreenToCanvasPoint(
+  target: HTMLElement,
+): (clientX: number, clientY: number) => { x: number; y: number } {
+  const canvas = target.querySelector<SVGSVGElement>('svg[data-nodeink-canvas]');
+  const matrix = canvas?.getScreenCTM?.();
+  if (matrix) {
+    const determinant = matrix.a * matrix.d - matrix.b * matrix.c;
+    if (
+      Number.isFinite(determinant) &&
+      Math.abs(determinant) > Number.EPSILON &&
+      [matrix.a, matrix.b, matrix.c, matrix.d, matrix.e, matrix.f].every(Number.isFinite)
+    ) {
+      return (clientX, clientY) => {
+        const translatedX = clientX - matrix.e;
+        const translatedY = clientY - matrix.f;
+        return {
+          x: (matrix.d * translatedX - matrix.c * translatedY) / determinant,
+          y: (-matrix.b * translatedX + matrix.a * translatedY) / determinant,
+        };
+      };
+    }
+  }
+
+  const bounds = target.getBoundingClientRect();
+  return (clientX, clientY) => ({ x: clientX - bounds.left, y: clientY - bounds.top });
 }
 
 function sourceElementId(target: EventTarget | null): string | null {
