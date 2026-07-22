@@ -7,6 +7,7 @@ import {
   IndexedDbSnapshotStoreV1,
   PersistenceErrorV1,
   sha256Hex,
+  recoverCopyOnWriteV1,
   type SaveInterruptionV1,
   type SnapshotRecordV1,
   type SnapshotStoreV1,
@@ -223,6 +224,92 @@ describe('sha256Hex', () => {
   });
 });
 
+describe('recoverCopyOnWriteV1', () => {
+  it('opens a valid V1 snapshot without requesting a persisted copy', async () => {
+    const candidate = migrationCandidate('head', 1, currentPayload());
+
+    const recovered = await recoverCopyOnWriteV1({
+      candidates: [candidate],
+      migrationPort: migrationPort(),
+      digestPayload: testDigest,
+    });
+
+    expect(recovered).toMatchObject({
+      ok: true,
+      source: 'head',
+      migrated: false,
+      requiresPersistedCopy: false,
+      diagnostics: [],
+    });
+  });
+
+  it('migrates a copy while preserving the exact source payload', async () => {
+    const legacy = new TextEncoder().encode('{"schemaVersion":0,"documentId":"doc-1"}');
+    const original = [...legacy];
+    const candidate = migrationCandidate('head', 0, legacy);
+
+    const recovered = await recoverCopyOnWriteV1({
+      candidates: [candidate],
+      migrationPort: migrationPort(),
+      digestPayload: testDigest,
+    });
+
+    expect(recovered).toMatchObject({ ok: true, migrated: true, requiresPersistedCopy: true });
+    expect([...legacy]).toEqual(original);
+    if (recovered.ok) {
+      expect(JSON.parse(new TextDecoder().decode(recovered.canonicalPayload))).toMatchObject({
+        schemaVersion: 1,
+      });
+    }
+  });
+
+  it('records a hash mismatch and deterministically falls back to stable', async () => {
+    const corruptHead = migrationCandidate('head', 1, currentPayload());
+    corruptHead.snapshot.integrity.digest = 'wrong';
+    const stable = migrationCandidate('stable', 1, currentPayload());
+
+    const recovered = await recoverCopyOnWriteV1({
+      candidates: [corruptHead, stable],
+      migrationPort: migrationPort(),
+      digestPayload: testDigest,
+    });
+
+    expect(recovered).toMatchObject({
+      ok: true,
+      source: 'stable',
+      diagnostics: [{ snapshotKey: 'doc-1@1', report: { code: 'integrity_mismatch' } }],
+    });
+  });
+
+  it('returns readonly diagnostics when unknown schema and migration failures exhaust fallbacks', async () => {
+    const unknown = migrationCandidate(
+      'head',
+      99,
+      new TextEncoder().encode('{"schemaVersion":99}'),
+    );
+    const failedLegacy = migrationCandidate(
+      'stable',
+      0,
+      new TextEncoder().encode('{"schemaVersion":0,"failMigration":true}'),
+    );
+
+    const recovered = await recoverCopyOnWriteV1({
+      candidates: [unknown, failedLegacy],
+      migrationPort: migrationPort(),
+      digestPayload: testDigest,
+    });
+
+    expect(recovered).toEqual({
+      ok: false,
+      recovery: 'readonly_diagnostic',
+      diagnostics: [
+        expect.objectContaining({ report: expect.objectContaining({ code: 'unknown_schema' }) }),
+        expect.objectContaining({ report: expect.objectContaining({ code: 'migration_failed' }) }),
+      ],
+    });
+  });
+});
+
 async function fixture() {
   const factory = new IDBFactory();
   const store = await IndexedDbSnapshotStoreV1.open(`fixture-${Math.random()}`, factory);
@@ -284,6 +371,81 @@ function delegateStore(store: SnapshotStoreV1): SnapshotStoreV1 {
     markRejected: (...args) => store.markRejected(...args),
     getCatalog: (...args) => store.getCatalog(...args),
     getSnapshot: (...args) => store.getSnapshot(...args),
+  };
+}
+
+function currentPayload(): Uint8Array {
+  return new TextEncoder().encode(
+    JSON.stringify({
+      schemaVersion: 1,
+      documentId: 'doc-1',
+      revision: 0,
+      rootOrder: [],
+      elements: {},
+    }),
+  );
+}
+
+function migrationCandidate(
+  source: 'head' | 'stable' | 'previous_stable',
+  schemaVersion: number,
+  bytes: Uint8Array,
+) {
+  return {
+    source,
+    snapshot: {
+      ...snapshot(1),
+      schemaVersion,
+      payload: bytes,
+      integrity: { algorithm: 'sha-256' as const, digest: [...bytes].join('-') },
+      status: 'stable' as const,
+    },
+  };
+}
+
+function migrationPort() {
+  return {
+    async migrateDocumentPayload(payloadJson: string) {
+      const parsed = JSON.parse(payloadJson) as { schemaVersion?: number; failMigration?: boolean };
+      if (parsed.schemaVersion === 99) {
+        return failedMigrationAttempt('schema', 'unknown_schema', 99);
+      }
+      if (parsed.failMigration) {
+        return failedMigrationAttempt('migration', 'migration_failed', 0);
+      }
+      const migrated = parsed.schemaVersion === 0;
+      const document = {
+        schemaVersion: 1 as const,
+        documentId: 'doc-1',
+        revision: 0,
+        rootOrder: [],
+        elements: {},
+      };
+      return {
+        result: {
+          sourceSchemaVersion: parsed.schemaVersion ?? 1,
+          targetSchemaVersion: 1,
+          migrated,
+          document,
+          canonicalPayload: JSON.stringify(document),
+        },
+        report: null,
+      };
+    },
+  };
+}
+
+function failedMigrationAttempt(stage: string, code: string, sourceSchemaVersion: number) {
+  return {
+    result: null,
+    report: {
+      stage,
+      code,
+      sourceSchemaVersion,
+      targetSchemaVersion: 1,
+      message: code,
+      recovery: 'try_next_snapshot_then_readonly_diagnostic' as const,
+    },
   };
 }
 

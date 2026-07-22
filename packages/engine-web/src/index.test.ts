@@ -14,6 +14,7 @@ const wasm = vi.hoisted(() => {
     resolveTextFixture: vi.fn(),
     benchmarkSceneSnapshot: vi.fn(),
     benchmarkScenePatch: vi.fn(),
+    migrateDocumentPayload: vi.fn(),
     undo: vi.fn(),
     redo: vi.fn(),
     free: vi.fn(),
@@ -45,6 +46,7 @@ describe('createWasmEngine', () => {
     wasm.handle.resolveTextFixture.mockReturnValue(textResolution());
     wasm.handle.benchmarkSceneSnapshot.mockReturnValue(sceneSnapshot());
     wasm.handle.benchmarkScenePatch.mockReturnValue(scenePatch());
+    wasm.handle.migrateDocumentPayload.mockReturnValue(migrationAttempt());
     wasm.handle.undo.mockReturnValue(update);
     wasm.handle.redo.mockReturnValue(update);
   });
@@ -125,6 +127,9 @@ describe('createWasmEngine', () => {
       value: { baseSceneRevision: 1, sceneRevision: 2 },
       payloadBytes: expect.any(Number),
     });
+    await expect(engine.migrateDocumentPayload('{"schemaVersion":0}')).resolves.toMatchObject({
+      result: { sourceSchemaVersion: 0, migrated: true },
+    });
     await expect(engine.undo()).resolves.toBeDefined();
     await expect(engine.redo()).resolves.toBeDefined();
 
@@ -158,6 +163,7 @@ describe('createWasmEngine', () => {
     );
     expect(wasm.handle.benchmarkSceneSnapshot).toHaveBeenCalledWith(1_000, 1, true);
     expect(wasm.handle.benchmarkScenePatch).toHaveBeenCalledWith(1_000, 1);
+    expect(wasm.handle.migrateDocumentPayload).toHaveBeenCalledWith('{"schemaVersion":0}');
   });
 
   it('normalizes structured and plain engine failures', async () => {
@@ -219,6 +225,11 @@ describe('createWasmEngine', () => {
       throw new Error(JSON.stringify({ message: 'fixture rejected' }));
     });
     await expect(engine.benchmarkScenePatch(0, 0)).rejects.toThrow('fixture rejected');
+
+    wasm.handle.migrateDocumentPayload.mockImplementation(() => {
+      throw new Error(JSON.stringify({ message: 'migration unavailable' }));
+    });
+    await expect(engine.migrateDocumentPayload('{}')).rejects.toThrow('migration unavailable');
   });
 
   it('frees the handle once and rejects use after disposal', async () => {
@@ -310,5 +321,18 @@ function scenePatch(): string {
     updatedNodes: {},
     removedNodeIds: [],
     rootNodeIds: null,
+  });
+}
+
+function migrationAttempt(): string {
+  return JSON.stringify({
+    result: {
+      sourceSchemaVersion: 0,
+      targetSchemaVersion: 1,
+      migrated: true,
+      document: createBlankDocument('doc-1'),
+      canonicalPayload: JSON.stringify(createBlankDocument('doc-1')),
+    },
+    report: null,
   });
 }

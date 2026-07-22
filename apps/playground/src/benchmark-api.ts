@@ -12,7 +12,10 @@ import {
   AtomicSnapshotPersistenceV1,
   deleteNodeInkDatabase,
   IndexedDbSnapshotStoreV1,
+  recoverCopyOnWriteV1,
+  sha256Hex,
   type SaveInterruptionV1,
+  type SnapshotRecordV1,
 } from '@nodeink-internal/persistence-web';
 import type {
   NodeInkDocumentV1,
@@ -155,6 +158,36 @@ export interface PlaygroundPersistenceBenchmarkReport {
   };
 }
 
+export interface PlaygroundMigrationBenchmarkReport {
+  build: 'release-wasm-dev-host';
+  engineAlgorithmVersion: 'phase0-s8';
+  browser: string;
+  os: string;
+  hardware: PlaygroundBenchmarkHardware;
+  fixtures: Array<{
+    name: 'valid_v1' | 'legacy_v0' | 'unknown_schema' | 'corrupt_field' | 'migration_failure';
+    migrated: boolean | null;
+    reportCode: string | null;
+    elapsedMs: number;
+  }>;
+  copyOnWrite: {
+    sourceBytesUnchanged: boolean;
+    requiresPersistedCopy: boolean;
+    migratedSchemaVersion: number;
+  };
+  fallback: {
+    hashMismatchRecoveredFrom: 'stable';
+    schemaFailureRecoveredFrom: 'stable';
+    exhaustedRecovery: 'readonly_diagnostic';
+    exhaustedReportCodes: string[];
+  };
+  decision: {
+    sourcePayloadNeverOverwritten: boolean;
+    everyFailureHasStructuredReport: boolean;
+    everyFixtureHasDeterministicRecovery: boolean;
+  };
+}
+
 interface PersistenceSizeScenarioReport {
   payloadBytes: 1_048_576 | 10_485_760;
   iterations: 5;
@@ -229,6 +262,7 @@ declare global {
     nodeInkRunScenePatchBenchmark?: () => Promise<PlaygroundScenePatchBenchmarkReport>;
     nodeInkRunSvgScaleBenchmark?: () => Promise<PlaygroundSvgScaleBenchmarkReport>;
     nodeInkRunPersistenceBenchmark?: () => Promise<PlaygroundPersistenceBenchmarkReport>;
+    nodeInkRunMigrationBenchmark?: () => Promise<PlaygroundMigrationBenchmarkReport>;
   }
 }
 
@@ -240,6 +274,7 @@ export function exposePointerBenchmark(controller: EditorWebControllerV1): void 
   window.nodeInkRunScenePatchBenchmark = () => runPlaygroundScenePatchBenchmark();
   window.nodeInkRunSvgScaleBenchmark = () => runPlaygroundSvgScaleBenchmark();
   window.nodeInkRunPersistenceBenchmark = () => runPlaygroundPersistenceBenchmark();
+  window.nodeInkRunMigrationBenchmark = () => runPlaygroundMigrationBenchmark();
 }
 
 export async function runPlaygroundPointerBenchmark(
@@ -642,6 +677,172 @@ export async function runPlaygroundPersistenceBenchmark(): Promise<PlaygroundPer
     store.close();
     await deleteNodeInkDatabase(databaseName);
   }
+}
+
+export async function runPlaygroundMigrationBenchmark(): Promise<PlaygroundMigrationBenchmarkReport> {
+  const engine = await createWasmEngine({
+    schemaVersion: 1,
+    documentId: 'migration-runner',
+    revision: 0,
+    rootOrder: [],
+    elements: {},
+  });
+  const fixturePayloads = {
+    valid_v1: validMigrationPayload(),
+    legacy_v0: legacyMigrationPayload(),
+    unknown_schema: '{"schemaVersion":99}',
+    corrupt_field:
+      '{"schemaVersion":1,"documentId":"doc-1","revision":"bad","rootOrder":[],"elements":{}}',
+    migration_failure:
+      '{"schemaVersion":0,"documentId":"doc-1","revision":0,"rootOrder":["plugin-1"],"elements":{"plugin-1":{"kind":"legacy_plugin","id":"plugin-1"}}}',
+  } as const;
+  try {
+    const fixtures: PlaygroundMigrationBenchmarkReport['fixtures'] = [];
+    for (const [name, payloadJson] of Object.entries(fixturePayloads) as Array<
+      [keyof typeof fixturePayloads, string]
+    >) {
+      const startedAt = performance.now();
+      const attempt = await engine.migrateDocumentPayload(payloadJson);
+      fixtures.push({
+        name,
+        migrated: attempt.result?.migrated ?? null,
+        reportCode: attempt.report?.code ?? null,
+        elapsedMs: round(performance.now() - startedAt),
+      });
+    }
+
+    const legacyBytes = new TextEncoder().encode(fixturePayloads.legacy_v0);
+    const sourceCopy = [...legacyBytes];
+    const legacySnapshot = await migrationSnapshot('legacy@0', 0, legacyBytes);
+    const migrated = await recoverCopyOnWriteV1({
+      candidates: [{ source: 'head', snapshot: legacySnapshot }],
+      migrationPort: engine,
+    });
+    if (!migrated.ok) throw new Error('valid legacy fixture did not migrate');
+    const migratedDocument = JSON.parse(new TextDecoder().decode(migrated.canonicalPayload)) as {
+      schemaVersion?: number;
+    };
+
+    const corruptHead = await migrationSnapshot(
+      'corrupt@2',
+      1,
+      new TextEncoder().encode(validMigrationPayload()),
+    );
+    corruptHead.integrity.digest = 'corrupt-digest';
+    const stable = await migrationSnapshot(
+      'stable@1',
+      1,
+      new TextEncoder().encode(validMigrationPayload()),
+    );
+    const hashFallback = await recoverCopyOnWriteV1({
+      candidates: [
+        { source: 'head', snapshot: corruptHead },
+        { source: 'stable', snapshot: stable },
+      ],
+      migrationPort: engine,
+    });
+    if (!hashFallback.ok) throw new Error('hash fallback did not recover stable fixture');
+
+    const unknown = await migrationSnapshot(
+      'unknown@2',
+      99,
+      new TextEncoder().encode(fixturePayloads.unknown_schema),
+    );
+    const schemaFallback = await recoverCopyOnWriteV1({
+      candidates: [
+        { source: 'head', snapshot: unknown },
+        { source: 'stable', snapshot: stable },
+      ],
+      migrationPort: engine,
+    });
+    if (!schemaFallback.ok) throw new Error('schema fallback did not recover stable fixture');
+
+    const migrationFailure = await migrationSnapshot(
+      'migration-failure@1',
+      0,
+      new TextEncoder().encode(fixturePayloads.migration_failure),
+    );
+    const exhausted = await recoverCopyOnWriteV1({
+      candidates: [
+        { source: 'head', snapshot: unknown },
+        { source: 'stable', snapshot: migrationFailure },
+      ],
+      migrationPort: engine,
+    });
+    if (exhausted.ok) throw new Error('invalid migration fixtures unexpectedly recovered');
+
+    const sourceBytesUnchanged = sourceCopy.every((byte, index) => legacyBytes[index] === byte);
+    const everyFailureHasStructuredReport = fixtures
+      .filter((fixture) => fixture.migrated === null)
+      .every((fixture) => typeof fixture.reportCode === 'string');
+    return {
+      build: 'release-wasm-dev-host',
+      engineAlgorithmVersion: 'phase0-s8',
+      ...benchmarkEnvironment(),
+      fixtures,
+      copyOnWrite: {
+        sourceBytesUnchanged,
+        requiresPersistedCopy: migrated.requiresPersistedCopy,
+        migratedSchemaVersion: migratedDocument.schemaVersion ?? -1,
+      },
+      fallback: {
+        hashMismatchRecoveredFrom: hashFallback.source as 'stable',
+        schemaFailureRecoveredFrom: schemaFallback.source as 'stable',
+        exhaustedRecovery: exhausted.recovery,
+        exhaustedReportCodes: exhausted.diagnostics.map((diagnostic) => diagnostic.report.code),
+      },
+      decision: {
+        sourcePayloadNeverOverwritten: sourceBytesUnchanged,
+        everyFailureHasStructuredReport,
+        everyFixtureHasDeterministicRecovery:
+          hashFallback.source === 'stable' &&
+          schemaFallback.source === 'stable' &&
+          exhausted.recovery === 'readonly_diagnostic',
+      },
+    };
+  } finally {
+    engine.dispose();
+  }
+}
+
+async function migrationSnapshot(
+  snapshotKey: string,
+  schemaVersion: number,
+  payload: Uint8Array,
+): Promise<SnapshotRecordV1> {
+  return {
+    snapshotKey,
+    documentId: 'doc-1',
+    revision: 1,
+    schemaVersion,
+    engineAlgorithmVersion: 'nodeink-scene-v1',
+    payload,
+    integrity: { algorithm: 'sha-256', digest: await sha256Hex(payload) },
+    status: 'stable',
+    createdAt: '2026-07-22T00:00:00.000Z',
+  };
+}
+
+function validMigrationPayload(): string {
+  return JSON.stringify({
+    schemaVersion: 1,
+    documentId: 'doc-1',
+    revision: 0,
+    rootOrder: [],
+    elements: {},
+  });
+}
+
+function legacyMigrationPayload(): string {
+  return JSON.stringify({
+    schemaVersion: 0,
+    documentId: 'doc-1',
+    revision: 4,
+    rootOrder: ['rect-1'],
+    elements: {
+      'rect-1': { kind: 'rect', id: 'rect-1', x: 1, y: 2, width: 3, height: 4 },
+    },
+  });
 }
 
 async function measurePersistenceSize(

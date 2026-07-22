@@ -301,6 +301,25 @@ class StubEngine implements EnginePortV1 {
     };
   }
 
+  async migrateDocumentPayload() {
+    return {
+      result: {
+        sourceSchemaVersion: 1,
+        targetSchemaVersion: 1,
+        migrated: false,
+        document: {
+          schemaVersion: 1 as const,
+          documentId: 'doc-1',
+          revision: 0,
+          rootOrder: [],
+          elements: {},
+        },
+        canonicalPayload: '{}',
+      },
+      report: null,
+    };
+  }
+
   async undo(): Promise<EngineUpdateV1> {
     this.undoCalls += 1;
     return this.update();

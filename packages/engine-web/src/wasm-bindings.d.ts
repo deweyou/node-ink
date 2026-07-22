@@ -21,6 +21,7 @@ declare module '*nodeink_engine.js' {
     ): string;
     benchmarkSceneSnapshot(elementCount: number, movedCount: number, afterMove: boolean): string;
     benchmarkScenePatch(elementCount: number, movedCount: number): string;
+    migrateDocumentPayload(payloadJson: string): string;
     undo(): string;
     redo(): string;
     serializeDocument(): string;

@@ -105,7 +105,11 @@ importers:
         specifier: workspace:*
         version: link:../protocol
 
-  packages/persistence-web: {}
+  packages/persistence-web:
+    dependencies:
+      '@nodeink-internal/protocol':
+        specifier: workspace:*
+        version: link:../protocol
 
   packages/protocol: {}
 

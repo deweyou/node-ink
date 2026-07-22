@@ -1,5 +1,6 @@
 import {
   parseEngineUpdate,
+  parseMigrationAttempt,
   parsePointerUpdate,
   parseScenePatch,
   parseSceneResolution,
@@ -9,6 +10,7 @@ import {
   type CommandEnvelopeV1,
   type EnginePortV1,
   type EngineUpdateV1,
+  type MigrationAttemptV1,
   type NodeInkDocumentV1,
   type NormalizedPointerEventV1,
   type PointerUpdateV1,
@@ -47,6 +49,7 @@ interface WasmEngineHandle {
   ): string;
   benchmarkSceneSnapshot(elementCount: number, movedCount: number, afterMove: boolean): string;
   benchmarkScenePatch(elementCount: number, movedCount: number): string;
+  migrateDocumentPayload(payloadJson: string): string;
   undo(): string;
   redo(): string;
   free(): void;
@@ -170,6 +173,14 @@ class WasmEnginePort implements EnginePortV1 {
       () => this.requireHandle().benchmarkScenePatch(elementCount, movedCount),
       parseScenePatch,
     );
+  }
+
+  async migrateDocumentPayload(payloadJson: string): Promise<MigrationAttemptV1> {
+    try {
+      return parseMigrationAttempt(this.requireHandle().migrateDocumentPayload(payloadJson));
+    } catch (error) {
+      throw normalizeEngineError(error);
+    }
   }
 
   async undo(): Promise<EngineUpdateV1> {

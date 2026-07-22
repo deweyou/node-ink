@@ -71,6 +71,38 @@ export interface RecoveryResultV1 {
   source: 'stable' | 'previous_stable';
 }
 
+export interface MigrationPortV1 {
+  migrateDocumentPayload(payloadJson: string): Promise<MigrationAttemptV1>;
+}
+
+export interface MigrationRecoveryCandidateV1 {
+  source: 'head' | 'stable' | 'previous_stable';
+  snapshot: SnapshotRecordV1;
+}
+
+export interface MigrationDiagnosticV1 {
+  snapshotKey: string;
+  source: MigrationRecoveryCandidateV1['source'];
+  report: MigrationReportV1;
+}
+
+export type CopyOnWriteRecoveryResultV1 =
+  | {
+      ok: true;
+      source: MigrationRecoveryCandidateV1['source'];
+      sourceSnapshot: SnapshotRecordV1;
+      document: NodeInkDocumentV1;
+      canonicalPayload: Uint8Array;
+      migrated: boolean;
+      requiresPersistedCopy: boolean;
+      diagnostics: MigrationDiagnosticV1[];
+    }
+  | {
+      ok: false;
+      recovery: 'readonly_diagnostic';
+      diagnostics: MigrationDiagnosticV1[];
+    };
+
 export type ValidatePayloadV1 = (
   payload: Uint8Array,
   schemaVersion: number,
@@ -228,6 +260,55 @@ export class AtomicSnapshotPersistenceV1 {
       'no verified stable snapshot is available',
     );
   }
+}
+
+export async function recoverCopyOnWriteV1(options: {
+  candidates: MigrationRecoveryCandidateV1[];
+  migrationPort: MigrationPortV1;
+  digestPayload?: DigestPayloadV1;
+}): Promise<CopyOnWriteRecoveryResultV1> {
+  const digestPayload = options.digestPayload ?? sha256Hex;
+  const diagnostics: MigrationDiagnosticV1[] = [];
+  const decoder = new TextDecoder();
+  const encoder = new TextEncoder();
+  for (const candidate of options.candidates) {
+    const digest = await digestPayload(candidate.snapshot.payload);
+    if (digest !== candidate.snapshot.integrity.digest) {
+      diagnostics.push({
+        snapshotKey: candidate.snapshot.snapshotKey,
+        source: candidate.source,
+        report: migrationReport(
+          'integrity',
+          'integrity_mismatch',
+          candidate.snapshot.schemaVersion,
+          'snapshot digest does not match its payload',
+        ),
+      });
+      continue;
+    }
+    const attempt = await options.migrationPort.migrateDocumentPayload(
+      decoder.decode(candidate.snapshot.payload),
+    );
+    if (!attempt.result) {
+      diagnostics.push({
+        snapshotKey: candidate.snapshot.snapshotKey,
+        source: candidate.source,
+        report: attempt.report,
+      });
+      continue;
+    }
+    return {
+      ok: true,
+      source: candidate.source,
+      sourceSnapshot: candidate.snapshot,
+      document: attempt.result.document,
+      canonicalPayload: encoder.encode(attempt.result.canonicalPayload),
+      migrated: attempt.result.migrated,
+      requiresPersistedCopy: attempt.result.migrated,
+      diagnostics,
+    };
+  }
+  return { ok: false, recovery: 'readonly_diagnostic', diagnostics };
 }
 
 export class IndexedDbSnapshotStoreV1 implements SnapshotStoreV1 {
@@ -411,3 +492,24 @@ function interrupted(phase: string): PersistenceErrorV1 {
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
+
+function migrationReport(
+  stage: string,
+  code: string,
+  sourceSchemaVersion: number,
+  message: string,
+): MigrationReportV1 {
+  return {
+    stage,
+    code,
+    sourceSchemaVersion,
+    targetSchemaVersion: 1,
+    message,
+    recovery: 'try_next_snapshot_then_readonly_diagnostic',
+  };
+}
+import type {
+  MigrationAttemptV1,
+  MigrationReportV1,
+  NodeInkDocumentV1,
+} from '@nodeink-internal/protocol';

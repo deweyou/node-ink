@@ -12,7 +12,7 @@ flowchart LR
 
 > 日期：2026-07-21
 > 状态：已实现并验证
-> 覆盖 Spike：S0、S1、S2、S3、S4、S5、S6、S7、S10 的最小事务边界、S11、S12
+> 覆盖 Spike：S0、S1、S2、S3、S4、S5、S6、S7、S8、S10 的最小事务边界、S11、S12
 
 ## 结论
 
@@ -51,6 +51,7 @@ Rust nodeink-core
 - ScenePatch：Rust 生成带 base revision 的稳定节点增量，Renderer 原地更新 DOM，revision 失配时要求完整 Snapshot。
 - SVG scale：Renderer 支持 TextRun 与独立 viewport；可见集合由 Scene/Host 裁剪后再传入 Renderer。
 - IndexedDB persistence：candidate/head transaction、SHA-256 read-back、stable/previous-stable 恢复均由 framework-neutral adapter 编排。
+- Migration：Rust 验证/迁移版本化 payload，Web 仅做 hash、候选顺序和 copy-on-write 持久化编排。
 
 这不是日常可用的编辑器，也不包含持久化、Camera、选择框、产品级文本编辑、
 Mermaid 导入或公共 SDK；自由笔与 IME 仅覆盖 Spike fixture。
@@ -75,6 +76,7 @@ Mermaid 导入或公共 SDK；自由笔与 IME 仅覆盖 Spike fixture。
 | S5 ScenePatch browser benchmark | 100/1,000/10,000 节点 × move 1/100；1,000 move-1 Patch P95 0.8ms；错序 Patch 返回 `snapshot_required` |
 | S6 SVG scale browser benchmark | simple path/TextRun/Sketch multi-path × 1,000/5,000/10,000；裁剪到 1,000 源元素后首挂 P95 1.3–4.5ms |
 | S7 IndexedDB browser benchmark | 1MB/10MB × 5 次；保存 P95 12.3/34.4ms；4 个中断点均只恢复 verified stable snapshot |
+| S8 migration browser fixture | V1/V0/未知 schema/字段损坏/migration failure/hash mismatch；源 bytes 不变，fallback/只读诊断确定 |
 | `git diff --check` | 通过 |
 
 真实浏览器中分别验证了 React 和 Vanilla 两个入口：
@@ -172,6 +174,18 @@ camera pan 与单节点 Patch 各 20 次。
 - `strict` 仅在 capability probe 成功时请求；无论 hint 是否可用，read-back、digest 和 schema validation 都是硬门。
 - 10MB 总保存超过一帧但主要为异步事务；Phase 1A 自动保存仍需 debounce，不能在 UI 上同步宣称“已保存”。
 
+## S8 Migration 与损坏恢复决策
+
+跨 Rust/WASM/Web 证据见 [`phase0-s8-migration.json`](../benchmarks/phase0-s8-migration.json)，测试源代码
+锚定提交 `7176979`。Rust fixture 覆盖 V1、V0、未知 schema、字段损坏、非法旧元素和迁移后 invariant；
+Web fixture 额外覆盖 hash mismatch、stable fallback 与全部候选失败。
+
+- 合法 V1 直接打开；合法 V0 在 0.6ms 内产生 V1 canonical copy，原始 bytes 逐项未变。
+- `unknown_schema`、`document_invalid`、`migration_failed` 均返回结构化 code；Rust migration 文件覆盖率为 100%。
+- head hash/schema 失败都回退 stable；unknown+migration failure 穷尽候选时返回 `readonly_diagnostic` 和完整 report 列表。
+- Migration 函数不写 IndexedDB；成功 payload 必须作为新 revision 重新经过 S7 candidate/read-back/stable 流程。
+- Phase 1 只承诺向上 migration；未知未来 schema 保持只读诊断，不能尝试降级解释。
+
 ## 工具链说明
 
 - Node：`24.15.0`
@@ -189,10 +203,9 @@ macOS 在仓库内 Cargo `target/` 上触发过扩展属性相关的 `Operation 
 
 按风险顺序继续 Phase 0，而不是直接铺开完整 UI：
 
-1. S8 copy-on-write migration 与损坏诊断 fixture。
-2. S9 多标签页写入权与只读降级。
-3. 补齐 S10/S11/S12 的完整退出证据。
-4. Phase 1A 文本实现前确认 P-02 固定画布字体产品决策。
+1. S9 多标签页写入权与只读降级。
+2. 补齐 S10/S11/S12 的完整退出证据。
+3. Phase 1A 文本实现前确认 P-02 固定画布字体产品决策。
 
 ---
-*Last updated: 2026-07-22 | Reason: record S7 atomic IndexedDB save and recovery evidence*
+*Last updated: 2026-07-22 | Reason: record S8 copy-on-write migration and corruption recovery evidence*

@@ -1,7 +1,7 @@
 use nodeink_core::{
     CommandEnvelopeV1, Engine, EngineErrorV1, NodeInkDocumentV1, NormalizedPointerEventV1,
     RenderProfileV1, StrokeInputBatchV1, StrokePhaseV1, TextMetricsSnapshotV1, TextRunV1, Vec2,
-    benchmark_scene_patch, benchmark_scene_snapshot,
+    benchmark_scene_patch, benchmark_scene_snapshot, migrate_document_payload,
 };
 use wasm_bindgen::prelude::*;
 
@@ -168,6 +168,12 @@ impl EngineHandle {
         let patch = benchmark_scene_patch(element_count as usize, moved_count as usize)
             .map_err(engine_error)?;
         serde_json::to_string(&patch).map_err(|error| js_error("serialization_failed", error))
+    }
+
+    #[wasm_bindgen(js_name = migrateDocumentPayload)]
+    pub fn migrate_document_payload(&self, payload_json: &str) -> Result<String, JsValue> {
+        serde_json::to_string(&migrate_document_payload(payload_json))
+            .map_err(|error| js_error("serialization_failed", error))
     }
 
     #[wasm_bindgen(js_name = serializeDocument)]

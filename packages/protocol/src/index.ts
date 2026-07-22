@@ -148,6 +148,27 @@ export interface TextFixtureResolutionV1 {
   canonicalHash: string | null;
 }
 
+export interface MigrationResultV1 {
+  sourceSchemaVersion: number;
+  targetSchemaVersion: number;
+  migrated: boolean;
+  document: NodeInkDocumentV1;
+  canonicalPayload: string;
+}
+
+export interface MigrationReportV1 {
+  stage: string;
+  code: string;
+  sourceSchemaVersion: number | null;
+  targetSchemaVersion: number;
+  message: string;
+  recovery: 'try_next_snapshot_then_readonly_diagnostic';
+}
+
+export type MigrationAttemptV1 =
+  | { result: MigrationResultV1; report: null }
+  | { result: null; report: MigrationReportV1 };
+
 export type SceneNodeV1 = SceneRectV1 | ScenePathV1 | SceneTextV1;
 
 export interface SceneRectV1 {
@@ -228,6 +249,7 @@ export interface EnginePortV1 {
     elementCount: number,
     movedCount: number,
   ): Promise<SceneBenchmarkPayloadV1<ScenePatchV1>>;
+  migrateDocumentPayload(payloadJson: string): Promise<MigrationAttemptV1>;
   undo(): Promise<EngineUpdateV1>;
   redo(): Promise<EngineUpdateV1>;
   dispose(): void;
@@ -417,6 +439,37 @@ export function parseTextFixtureResolution(value: string): TextFixtureResolution
     throw new Error('Engine returned an invalid text fixture resolution payload');
   }
   return parsed as unknown as TextFixtureResolutionV1;
+}
+
+export function parseMigrationAttempt(value: string): MigrationAttemptV1 {
+  const parsed: unknown = JSON.parse(value);
+  if (!isRecord(parsed)) {
+    throw new Error('Engine returned an invalid migration attempt');
+  }
+  if (isRecord(parsed.result) && parsed.report === null) {
+    if (
+      typeof parsed.result.sourceSchemaVersion === 'number' &&
+      typeof parsed.result.targetSchemaVersion === 'number' &&
+      typeof parsed.result.migrated === 'boolean' &&
+      isRecord(parsed.result.document) &&
+      typeof parsed.result.canonicalPayload === 'string'
+    ) {
+      return parsed as unknown as MigrationAttemptV1;
+    }
+  } else if (parsed.result === null && isRecord(parsed.report)) {
+    if (
+      typeof parsed.report.stage === 'string' &&
+      typeof parsed.report.code === 'string' &&
+      (parsed.report.sourceSchemaVersion === null ||
+        typeof parsed.report.sourceSchemaVersion === 'number') &&
+      typeof parsed.report.targetSchemaVersion === 'number' &&
+      typeof parsed.report.message === 'string' &&
+      parsed.report.recovery === 'try_next_snapshot_then_readonly_diagnostic'
+    ) {
+      return parsed as unknown as MigrationAttemptV1;
+    }
+  }
+  throw new Error('Engine migration attempt does not satisfy protocol V1');
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

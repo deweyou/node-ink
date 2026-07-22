@@ -4,6 +4,7 @@ import {
   exposePointerBenchmark,
   runPlaygroundPointerBenchmark,
   runPlaygroundPersistenceBenchmark,
+  runPlaygroundMigrationBenchmark,
   runPlaygroundSketchBenchmark,
   runPlaygroundScenePatchBenchmark,
   runPlaygroundSvgScaleBenchmark,
@@ -60,7 +61,8 @@ if (
   benchmark === 'text' ||
   benchmark === 'scene-patch' ||
   benchmark === 'svg-scale' ||
-  benchmark === 'persistence'
+  benchmark === 'persistence' ||
+  benchmark === 'migration'
 ) {
   const benchmarkOutput = document.createElement('pre');
   benchmarkOutput.className = 'nodeink-benchmark';
@@ -81,7 +83,9 @@ if (
                 ? await runPlaygroundScenePatchBenchmark()
                 : benchmark === 'svg-scale'
                   ? await runPlaygroundSvgScaleBenchmark()
-                  : await runPlaygroundPersistenceBenchmark(),
+                  : benchmark === 'persistence'
+                    ? await runPlaygroundPersistenceBenchmark()
+                    : await runPlaygroundMigrationBenchmark(),
       null,
       2,
     );

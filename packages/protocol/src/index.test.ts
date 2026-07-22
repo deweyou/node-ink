@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   createBlankDocument,
   parseEngineUpdate,
+  parseMigrationAttempt,
   parsePointerUpdate,
   parseScenePatch,
   parseSceneResolution,
@@ -192,6 +193,43 @@ describe('protocol V1', () => {
 
     expect(parseTextFixtureResolution(JSON.stringify(pending))).toEqual(pending);
     expect(parseTextFixtureResolution(JSON.stringify(resolved))).toEqual(resolved);
+  });
+
+  it('parses successful and failed migration attempts', () => {
+    const success = {
+      result: {
+        sourceSchemaVersion: 0,
+        targetSchemaVersion: 1,
+        migrated: true,
+        document: createBlankDocument('doc-1'),
+        canonicalPayload: '{}',
+      },
+      report: null,
+    };
+    const failure = {
+      result: null,
+      report: {
+        stage: 'schema',
+        code: 'unknown_schema',
+        sourceSchemaVersion: 99,
+        targetSchemaVersion: 1,
+        message: 'unsupported',
+        recovery: 'try_next_snapshot_then_readonly_diagnostic',
+      },
+    };
+
+    expect(parseMigrationAttempt(JSON.stringify(success))).toEqual(success);
+    expect(parseMigrationAttempt(JSON.stringify(failure))).toEqual(failure);
+  });
+
+  it.each([
+    null,
+    {},
+    { result: {}, report: null },
+    { result: null, report: {} },
+    { result: null, report: { stage: 1 } },
+  ])('rejects invalid migration attempts', (value) => {
+    expect(() => parseMigrationAttempt(JSON.stringify(value))).toThrow('migration');
   });
 
   it.each([

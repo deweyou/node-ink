@@ -126,6 +126,14 @@
 - 本机 Chrome 150 中 1MB/10MB 保存 P95 为 12.3/34.4ms，validation 主线程 P95 为 0.6/4.6ms，均未观测到 long task。
 - candidate 前、candidate transaction 中、candidate 后、read-back 后中断均恢复前一稳定 revision；只有 stable transaction 完成后才恢复新 revision。
 
+### D-20 Copy-on-write migration 与损坏诊断
+
+- Schema validation、V0→V1 migration 与 canonical payload 生成由 `nodeink-core` 持有；TypeScript 不复制 Document 迁移规则。
+- `persistence-web` 先验 SHA-256，再按 head→stable→previous stable 顺序调用 Migration Port；迁移成功只返回新 payload，源 Snapshot bytes 永不原地修改。
+- hash mismatch、unknown schema、field corruption、migration failure 都产生 stage/code/source/target/recovery 结构化诊断；失败候选不会被静默跳过或覆盖。
+- 可用 fallback 时确定性打开下一 verified snapshot；全部失败时进入 `readonly_diagnostic`，不构造半迁移文档。
+- Phase 1A 把成功迁移结果作为新 revision 走 S7 原子保存；S8 Spike 本身不在 migration 函数中写 IndexedDB。
+
 ## 22. 需要产品负责人决策的问题
 
 以下问题不阻碍继续评审文档，但会阻碍对应功能进入实现。

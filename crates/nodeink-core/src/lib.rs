@@ -3,12 +3,16 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+mod migration;
 mod pointer;
 mod scene_patch;
 mod sketch;
 mod stroke;
 mod text;
 
+pub use migration::{
+    MigrationAttemptV1, MigrationReportV1, MigrationResultV1, migrate_document_payload,
+};
 pub use pointer::{NormalizedPointerEventV1, PointerPhaseV1};
 use pointer::{PointerMachine, PointerPreview, PointerTransition};
 pub use scene_patch::{ScenePatchV1, benchmark_scene_patch, benchmark_scene_snapshot, diff_scene};

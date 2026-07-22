@@ -42,7 +42,7 @@ docs/                       Product, architecture, decisions, plans, and repo me
 
 ## Ownership Rules
 
-- [crates/nodeink-core/src/lib.rs#L1](../crates/nodeink-core/src/lib.rs#L1) is the current persistent semantic truth source.
+- [crates/nodeink-core/src/lib.rs#L1](../crates/nodeink-core/src/lib.rs#L1) is the current persistent semantic truth source; schema validation and migration remain in the Rust crate.
 - `nodeink-wasm` converts values at the language boundary but does not fork engine behavior.
 - `protocol` defines the TypeScript view of wire contracts; wire casing is camelCase.
 - `editor-web` may depend on browser APIs, but not component frameworks.
