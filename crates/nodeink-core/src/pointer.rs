@@ -113,6 +113,10 @@ impl PointerMachine {
         self.state = PointerState::Idle;
     }
 
+    pub fn is_active(&self) -> bool {
+        matches!(self.state, PointerState::Dragging { .. })
+    }
+
     fn process_event(
         &mut self,
         expected_revision: u64,

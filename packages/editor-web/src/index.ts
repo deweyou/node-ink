@@ -4,6 +4,7 @@ import {
   type CameraV1,
   type CommandEnvelopeV1,
   type EnginePortV1,
+  type EditorToolV1,
   type EngineUpdateV1,
   type NormalizedPointerEventV1,
   type PointerUpdateV1,
@@ -19,6 +20,7 @@ import {
 import { attachPointerInput } from './pointer-input';
 import { attachEditorShortcuts } from './keyboard-input';
 import { attachCameraInput, type CameraInputBindingV1 } from './camera-input';
+import { FreehandInputAdapterV1 } from './freehand-input';
 
 const CAMERA_ZOOM_STEP = 1.5;
 const CAMERA_FIT_PADDING = 64;
@@ -33,6 +35,8 @@ export type EditorActionV1 =
   | { type: 'move_active'; delta: { x: number; y: number } }
   | { type: 'delete_selection' }
   | { type: 'clear_selection' }
+  | { type: 'escape' }
+  | { type: 'set_tool'; tool: EditorToolV1 }
   | { type: 'pointer_events'; events: NormalizedPointerEventV1[] }
   | { type: 'stroke_batch'; batch: StrokeInputBatchV1; transport: StrokeTransportV1 }
   | { type: 'undo' }
@@ -89,6 +93,7 @@ export interface EditorUiSnapshotV1 {
   sceneRevision: number;
   elementCount: number;
   activeElementId: string | null;
+  activeTool: EditorToolV1;
   selectionBounds: SelectionBoundsV1 | null;
   canUndo: boolean;
   canRedo: boolean;
@@ -160,6 +165,7 @@ export class EditorWebController implements EditorWebControllerV1 {
   #pendingCamera: CameraV1 | null = null;
   #cameraSaveTimer: ReturnType<typeof setTimeout> | null = null;
   #cameraSavePromise: Promise<void> | null = null;
+  readonly #freehandInput = new FreehandInputAdapterV1();
   #queue = Promise.resolve();
   #isDisposed = false;
 
@@ -178,6 +184,7 @@ export class EditorWebController implements EditorWebControllerV1 {
       sceneRevision: 0,
       elementCount: 0,
       activeElementId: null,
+      activeTool: 'select',
       selectionBounds: null,
       canUndo: false,
       canRedo: false,
@@ -239,11 +246,19 @@ export class EditorWebController implements EditorWebControllerV1 {
                 ? this.#snapshot.canUndo
                 : action === 'redo'
                   ? this.#snapshot.canRedo
-                  : this.#snapshot.activeElementId !== null;
+                  : action === 'delete_selection'
+                    ? this.#snapshot.activeElementId !== null
+                    : true;
             if (this.#snapshot.status !== 'ready' || !isAvailable) {
               return false;
             }
-            void this.dispatch({ type: action });
+            const editorAction: EditorActionV1 =
+              action === 'select_tool'
+                ? { type: 'set_tool', tool: 'select' }
+                : action === 'freehand_tool'
+                  ? { type: 'set_tool', tool: 'freehand' }
+                  : { type: action };
+            void this.dispatch(editorAction);
             return true;
           })
         : null;
@@ -323,6 +338,7 @@ export class EditorWebController implements EditorWebControllerV1 {
     this.#detachResize?.();
     this.#detachResize = null;
     this.#cameraTarget = null;
+    this.#freehandInput.reset();
     this.#listeners.clear();
     this.#renderer.unmount();
     const persistenceFlush = this.#persistence?.flush() ?? null;
@@ -564,12 +580,40 @@ export class EditorWebController implements EditorWebControllerV1 {
     if (action.type === 'clear_selection') {
       return { update: await this.#engine.setSelection(null) };
     }
+    if (action.type === 'set_tool') {
+      this.#freehandInput.reset();
+      return { update: await this.#engine.setActiveTool(action.tool) };
+    }
+    if (action.type === 'escape') {
+      this.#freehandInput.reset();
+      return {
+        update:
+          this.#snapshot.activeTool === 'freehand'
+            ? await this.#engine.setActiveTool('select')
+            : await this.#engine.setSelection(null),
+      };
+    }
     if (!this.#documentId) {
       throw new Error('Editor must be mounted before dispatching document actions');
     }
 
     const commandId = this.#createId();
     if (action.type === 'pointer_events') {
+      if (this.#snapshot.activeTool === 'freehand') {
+        const batch = this.#freehandInput.convert(action.events, this.#createId);
+        if (!batch) {
+          return { update: await this.#engine.currentUpdate() };
+        }
+        const strokeUpdate = await this.#engine.handleStrokeBatch(batch, commandId, 'typed_array');
+        return {
+          update: strokeUpdate.update,
+          strokeMetrics: {
+            processedPointCount: strokeUpdate.processedPointCount,
+            ignoredPointCount: strokeUpdate.ignoredPointCount,
+            didCommit: strokeUpdate.didCommit,
+          },
+        };
+      }
       const pointerUpdate = await this.#engine.handlePointerEvents(action.events, commandId);
       return {
         update: pointerUpdate.update,
@@ -624,6 +668,10 @@ export class EditorWebController implements EditorWebControllerV1 {
                 elementIds: [this.requireActiveElement()],
               },
     };
+    if (action.type === 'create_rectangle' && this.#snapshot.activeTool !== 'select') {
+      this.#freehandInput.reset();
+      await this.#engine.setActiveTool('select');
+    }
     return { update: await this.#engine.executeCommand(envelope) };
   }
 
@@ -643,12 +691,16 @@ export class EditorWebController implements EditorWebControllerV1 {
       sceneRevision: update.scene.sceneRevision,
       elementCount: update.scene.rootNodeIds.length,
       activeElementId: update.selection.selectedElementId,
+      activeTool: update.activeTool,
       selectionBounds: update.selection.bounds,
       canUndo: update.history.canUndo,
       canRedo: update.history.canRedo,
       errorMessage: null,
     };
     this.applySelectionOverlay();
+    if (this.#cameraTarget) {
+      this.#cameraTarget.dataset.activeTool = update.activeTool;
+    }
     if (emit) {
       this.emit();
     }

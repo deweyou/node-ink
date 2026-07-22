@@ -7,7 +7,7 @@ describe('runStrokeBenchmark', () => {
   it('compares JSON points with multiple TypedArray batch sizes', async () => {
     let clock = 0;
     const dispatch = vi.fn(async (action): Promise<EditorActionResultV1> => {
-      if (action.type === 'undo') {
+      if (action.type === 'undo' || action.type === 'set_tool') {
         return success();
       }
       if (action.type !== 'stroke_batch') {
@@ -58,6 +58,7 @@ describe('runStrokeBenchmark', () => {
     expect(report.cases.typedArray2?.decision.isWithinFrameBudget).toBe(false);
     expect(report.cases.jsonPoint?.metrics.copiedInputBytes).toBeGreaterThan(96);
     expect(dispatch.mock.calls.filter(([action]) => action.type === 'undo')).toHaveLength(1);
+    expect(dispatch.mock.calls.filter(([action]) => action.type === 'set_tool')).toHaveLength(2);
   });
 
   it('normalizes a zero batch size and reports budget or ordering failures', async () => {
@@ -120,6 +121,9 @@ describe('runStrokeBenchmark', () => {
     let isUndo = false;
     const resetFailed = {
       dispatch: vi.fn(async (action): Promise<EditorActionResultV1> => {
+        if (action.type === 'set_tool') {
+          return success();
+        }
         if (action.type === 'undo') {
           isUndo = true;
           return {
@@ -168,6 +172,7 @@ function success(): EditorActionResultV1 {
       sceneRevision: 0,
       elementCount: 0,
       activeElementId: null,
+      activeTool: 'select',
       selectionBounds: null,
       canUndo: false,
       canRedo: false,

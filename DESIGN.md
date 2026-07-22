@@ -62,6 +62,8 @@ The interface should disappear until the user needs it. Content owns the visual 
 
 - UI actions and programmatic actions must converge on the same Controller and Rust Command path.
 - Tool changes are explicit; history availability is reflected immediately in control state.
+- Select and Draw are persistent tools. `V` and `P` activate them, active buttons use `aria-pressed`, Draw uses a crosshair, and creating a rectangle returns to Select.
+- Freehand uses fixed 3px round ink in this slice. Pen pressure, variable-width outlines, mobile touch editing, and style controls are separate capabilities.
 - The Camera percentage is relative to the current fit-content zoom. Clicking it recenters all content with 64px screen padding; content changes may update the percentage but must not move the Camera automatically.
 - A primary click selects the topmost semantic element; an empty-canvas click or `Escape` clears selection. `Delete`, `Backspace`, and the visible Delete button invoke the same undoable element-deletion action.
 - Selection uses a straight solid-blue ring separated from the element's visible painted bounds by a 6px screen-space gap. The overlay keeps constant screen-space stroke and spacing, ignores pointer events, and must not add resize or rotate handles before Phase 1B.
@@ -87,10 +89,10 @@ The interface should disappear until the user needs it. Content owns the visual 
 
 - Do not copy tldraw or Excalidraw branding, iconography, or full feature density.
 - Do not put semantic geometry, layout, or document ownership into React components.
-- Do not invent the final canvas font or mobile behavior before its product decision.
+- Do not invent the final canvas font or infer mobile editing from Pointer Events support.
 - Do not let a framework adapter invent save, recovery, or read-only copy independently of the shared presentation contract.
 - Do not add empty toolbar entries for Mermaid, AI, collaboration, or other future phases.
 
 ---
 
-_Last updated: 2026-07-22 | Reason: align the handle-free selection frame with established whiteboard interaction language_
+_Last updated: 2026-07-23 | Reason: confirm shared Tool State and fixed-width freehand direction_

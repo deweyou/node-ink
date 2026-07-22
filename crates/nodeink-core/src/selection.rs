@@ -61,6 +61,10 @@ impl SelectionModel {
         self.selected_element_id = selected_element_id;
     }
 
+    pub(crate) fn clear(&mut self) {
+        self.selected_element_id = None;
+    }
+
     pub(crate) fn reconcile(&mut self, document: &NodeInkDocumentV1) {
         if self
             .selected_element_id

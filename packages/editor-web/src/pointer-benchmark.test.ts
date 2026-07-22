@@ -9,6 +9,7 @@ const readySnapshot: EditorUiSnapshotV1 = {
   sceneRevision: 0,
   elementCount: 1,
   activeElementId: 'rect-1',
+  activeTool: 'select',
   selectionBounds: { x: 0, y: 0, width: 100, height: 80 },
   canUndo: false,
   canRedo: false,

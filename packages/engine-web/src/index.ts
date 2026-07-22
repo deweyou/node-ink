@@ -15,6 +15,7 @@ import {
   type CameraViewportV1,
   type DiagramOperationBatchResultV1,
   type DiagramOperationBatchV1,
+  type EditorToolV1,
   type EnginePortV1,
   type EngineUpdateV1,
   type MigrationAttemptV1,
@@ -42,6 +43,7 @@ interface WasmEngineHandle {
   fitCamera(viewportWidth: number, viewportHeight: number, padding: number): string;
   applyCameraAction(actionJson: string): string;
   executeCommand(commandJson: string): string;
+  setActiveTool(tool: string): string;
   setSelection(elementId: string | undefined): string;
   executeDiagramOperation(batchJson: string): string;
   handlePointerEvents(eventsJson: string, commandId: string): string;
@@ -130,6 +132,14 @@ class WasmEnginePort implements EnginePortV1 {
   async executeCommand(command: CommandEnvelopeV1): Promise<EngineUpdateV1> {
     try {
       return parseEngineUpdate(this.requireHandle().executeCommand(JSON.stringify(command)));
+    } catch (error) {
+      throw normalizeEngineError(error);
+    }
+  }
+
+  async setActiveTool(tool: EditorToolV1): Promise<EngineUpdateV1> {
+    try {
+      return parseEngineUpdate(this.requireHandle().setActiveTool(tool));
     } catch (error) {
       throw normalizeEngineError(error);
     }

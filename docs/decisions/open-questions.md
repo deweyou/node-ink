@@ -190,6 +190,13 @@
 - 拖动在 PointerUp 时提交一次 `move_elements` Transaction；`Delete`、`Backspace` 和显式工具栏按钮都通过一次 `delete_elements` Transaction 删除当前元素，因此可 Undo/Redo。
 - 此处删除的是当前 Document 内的元素，不决定 P-04 的文档级回收站语义。
 
+### D-28 Phase 1A 自由笔工具状态
+
+- Rust 持有非持久 Tool State，首期工具为 `select | freehand`；状态随 Engine Update 返回，但不进入 Document、序列化、Camera 或 Undo/Redo。
+- React、Vue 与 Vanilla 只通过同一个 Controller 切换工具；`V` 选择、`P` 自由笔，活动按钮使用 `aria-pressed`，创建矩形显式回到 Select。
+- 自由笔复用 S2 的 Float64Array batch-2 传输，PointerUp 形成一个 `create_stroke` Transaction；单击规范化为稳定圆点，取消与失焦只清除 preview。
+- Phase 1 使用 mouse/trackpad/pen 的位置输入和固定 3px 笔宽，不承诺 pressure、可变宽轮廓或移动触摸编辑。这些能力需要独立几何、命中和设备验收。
+
 ## 22. 需要产品负责人决策的问题
 
 以下问题不阻碍继续评审文档，但会阻碍对应功能进入实现。
@@ -252,7 +259,7 @@
 - **替代**：Phase 1 只保证 mouse/trackpad，自由笔忽略 pressure。
 - **影响**：产品“ink”体验、输入 benchmark 和设备测试矩阵。
 - **决策时点**：Phase 0 自由笔 Spike 后。
-- **当前状态**：待确认。
+- **当前状态**：已确认采用替代方案。Phase 1 使用 mouse/trackpad/pen 的位置输入，固定 3px 笔宽并忽略 pressure；移动触摸 UI 和可变宽笔迹另行设计，详见 D-28。
 
 ## 决策模板
 
@@ -276,4 +283,4 @@
 P-01 已确认，Phase 0 可以实施。进入相应产品功能前必须确认其余问题；未到决策时点的问题可以保留待确认，但不能由实现者自行选择用户可见行为。
 
 ---
-*Last updated: 2026-07-22 | Reason: record the confirmed Rust-owned single-selection and element deletion semantics*
+*Last updated: 2026-07-23 | Reason: confirm fixed-width desktop freehand scope*

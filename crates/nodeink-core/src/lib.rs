@@ -12,6 +12,7 @@ mod selection;
 mod sketch;
 mod stroke;
 mod text;
+mod tool;
 
 use camera::CameraContentBounds;
 pub use camera::{CameraActionV1, CameraV1, CameraViewportV1, MAX_CAMERA_ZOOM, MIN_CAMERA_ZOOM};
@@ -38,6 +39,8 @@ pub use text::{
     ResolvedTextRunV1, TextFixtureResolutionV1, TextFixtureSceneV1, TextMeasureRequestV1,
     TextMetricsSnapshotV1, TextMetricsV1, TextRunV1,
 };
+pub use tool::EditorToolV1;
+use tool::ToolState;
 
 pub const PROTOCOL_VERSION: u32 = 1;
 pub const SCHEMA_VERSION: u32 = 1;
@@ -184,6 +187,7 @@ pub struct EngineUpdateV1 {
     pub scene: SceneSnapshotV1,
     pub history: HistoryStateV1,
     pub selection: SelectionStateV1,
+    pub active_tool: EditorToolV1,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -304,6 +308,11 @@ pub enum EngineErrorV1 {
     InvalidStroke { element_id: ElementId },
     #[error("invalid stroke input: {reason}")]
     InvalidStrokeInput { reason: String },
+    #[error("active tool {active_tool:?} cannot handle {required_tool:?} input")]
+    ToolInputMismatch {
+        active_tool: EditorToolV1,
+        required_tool: EditorToolV1,
+    },
     #[error("invalid render profile")]
     InvalidRenderProfile,
     #[error("invalid text measurement fixture")]
@@ -332,6 +341,7 @@ pub struct Engine {
     undo_stack: Vec<NodeInkDocumentV1>,
     redo_stack: Vec<NodeInkDocumentV1>,
     selection: SelectionModel,
+    tool_state: ToolState,
     pointer_machine: PointerMachine,
     stroke_machine: StrokeMachine,
 }
@@ -346,6 +356,7 @@ impl Engine {
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
             selection: SelectionModel::default(),
+            tool_state: ToolState::default(),
             pointer_machine: PointerMachine::default(),
             stroke_machine: StrokeMachine::default(),
         })
@@ -471,6 +482,7 @@ impl Engine {
         command_id: String,
         events: Vec<NormalizedPointerEventV1>,
     ) -> Result<PointerUpdateV1, EngineErrorV1> {
+        self.validate_active_tool(EditorToolV1::Select)?;
         self.stroke_machine.cancel();
         let targeted_events = events
             .into_iter()
@@ -540,6 +552,7 @@ impl Engine {
         command_id: String,
         batch: StrokeInputBatchV1,
     ) -> Result<StrokeUpdateV1, EngineErrorV1> {
+        self.validate_active_tool(EditorToolV1::Freehand)?;
         validate_stroke_input(&batch)?;
         self.pointer_machine.cancel();
         let outcome = self
@@ -680,6 +693,21 @@ impl Engine {
         self.update(None)
     }
 
+    pub fn set_active_tool(&mut self, active_tool: EditorToolV1) -> EngineUpdateV1 {
+        if !self.tool_state.set_active_tool(active_tool) {
+            return self.current_update();
+        }
+        let had_active_gesture =
+            self.pointer_machine.is_active() || self.stroke_machine.is_active();
+        self.pointer_machine.cancel();
+        self.stroke_machine.cancel();
+        self.selection.clear();
+        if had_active_gesture {
+            self.scene_revision += 1;
+        }
+        self.current_update()
+    }
+
     pub fn set_selection(
         &mut self,
         selected_element_id: Option<ElementId>,
@@ -729,6 +757,17 @@ impl Engine {
             });
         }
         self.validate_transaction_header(&envelope.document_id, envelope.expected_revision)
+    }
+
+    fn validate_active_tool(&self, required_tool: EditorToolV1) -> Result<(), EngineErrorV1> {
+        let active_tool = self.tool_state.active_tool();
+        if active_tool != required_tool {
+            return Err(EngineErrorV1::ToolInputMismatch {
+                active_tool,
+                required_tool,
+            });
+        }
+        Ok(())
     }
 
     fn validate_transaction_header(
@@ -783,6 +822,7 @@ impl Engine {
                 &self.document,
                 pointer_preview.map(|preview| (preview.element_id.as_str(), preview.delta)),
             ),
+            active_tool: self.tool_state.active_tool(),
         }
     }
 }
@@ -2008,9 +2048,125 @@ mod tests {
         let engine = Engine::open(NodeInkDocumentV1::blank("doc-1")).unwrap();
 
         assert_eq!(engine.current_update().scene.document_revision, 0);
+        assert_eq!(engine.current_update().active_tool, EditorToolV1::Select);
         assert_eq!(
             engine.serialize_document().unwrap(),
             r#"{"schemaVersion":1,"documentId":"doc-1","revision":0,"rootOrder":[],"elements":{}}"#
+        );
+    }
+
+    #[test]
+    fn tool_state_is_transient_and_switching_tools_clears_selection() {
+        let mut engine = Engine::open(document_with_rectangle()).unwrap();
+        engine
+            .handle_pointer_events(
+                "select".to_string(),
+                vec![pointer_event_at(PointerPhaseV1::Down, 1, 32.0, 48.0)],
+            )
+            .unwrap();
+        let serialized_before = engine.serialize_document().unwrap();
+
+        let freehand = engine.set_active_tool(EditorToolV1::Freehand);
+
+        assert_eq!(freehand.active_tool, EditorToolV1::Freehand);
+        assert_eq!(freehand.selection, SelectionStateV1::default());
+        assert_eq!(freehand.scene.document_revision, 0);
+        assert!(!freehand.history.can_undo);
+        assert_eq!(engine.serialize_document().unwrap(), serialized_before);
+
+        let unchanged = engine.set_active_tool(EditorToolV1::Freehand);
+        assert_eq!(unchanged, freehand);
+        assert_eq!(
+            engine.set_active_tool(EditorToolV1::Select).active_tool,
+            EditorToolV1::Select
+        );
+    }
+
+    #[test]
+    fn tool_handlers_reject_wrong_routes_without_changing_engine_state() {
+        let mut engine = Engine::open(NodeInkDocumentV1::blank("doc-1")).unwrap();
+        let select_state = engine.current_update();
+
+        assert_eq!(
+            engine.handle_stroke_batch(
+                "stroke".to_string(),
+                stroke_batch(StrokePhaseV1::Down, 1, &[(0.0, 0.0)], Some("stroke-1")),
+            ),
+            Err(EngineErrorV1::ToolInputMismatch {
+                active_tool: EditorToolV1::Select,
+                required_tool: EditorToolV1::Freehand,
+            })
+        );
+        assert_eq!(engine.current_update(), select_state);
+
+        engine.set_active_tool(EditorToolV1::Freehand);
+        let freehand_state = engine.current_update();
+        assert_eq!(
+            engine.handle_pointer_events(
+                "pointer".to_string(),
+                vec![pointer_event_at(PointerPhaseV1::Down, 1, 0.0, 0.0)],
+            ),
+            Err(EngineErrorV1::ToolInputMismatch {
+                active_tool: EditorToolV1::Freehand,
+                required_tool: EditorToolV1::Select,
+            })
+        );
+        assert_eq!(engine.current_update(), freehand_state);
+    }
+
+    #[test]
+    fn switching_tools_cancels_pointer_and_stroke_previews() {
+        let mut pointer_engine = Engine::open(document_with_rectangle()).unwrap();
+        pointer_engine
+            .handle_pointer_events(
+                "drag".to_string(),
+                vec![pointer_event(PointerPhaseV1::Down, 1, 24.0)],
+            )
+            .unwrap();
+        let preview = pointer_engine
+            .handle_pointer_events(
+                "drag".to_string(),
+                vec![pointer_event(PointerPhaseV1::Move, 2, 56.0)],
+            )
+            .unwrap();
+        let SceneNodeV1::Rect(preview_rectangle) = &preview.update.scene.nodes["rect-1:shape"]
+        else {
+            panic!("rectangle should resolve to a rectangle scene node");
+        };
+        assert_eq!(preview_rectangle.x, 56.0);
+
+        let switched = pointer_engine.set_active_tool(EditorToolV1::Freehand);
+        let SceneNodeV1::Rect(restored_rectangle) = &switched.scene.nodes["rect-1:shape"] else {
+            panic!("rectangle should resolve to a rectangle scene node");
+        };
+        assert_eq!(restored_rectangle.x, 24.0);
+        assert_eq!(switched.selection, SelectionStateV1::default());
+        assert_eq!(switched.scene.document_revision, 0);
+        assert_eq!(
+            switched.scene.scene_revision,
+            preview.update.scene.scene_revision + 1
+        );
+
+        let mut stroke_engine = Engine::open(NodeInkDocumentV1::blank("doc-1")).unwrap();
+        stroke_engine.set_active_tool(EditorToolV1::Freehand);
+        let stroke_preview = stroke_engine
+            .handle_stroke_batch(
+                "stroke".to_string(),
+                stroke_batch(StrokePhaseV1::Down, 1, &[(8.0, 12.0)], Some("stroke-1")),
+            )
+            .unwrap();
+        assert_eq!(
+            stroke_preview.update.scene.root_node_ids,
+            vec!["stroke-1:path"]
+        );
+
+        let cancelled = stroke_engine.set_active_tool(EditorToolV1::Select);
+        assert!(cancelled.scene.root_node_ids.is_empty());
+        assert_eq!(cancelled.scene.document_revision, 0);
+        assert!(!cancelled.history.can_undo);
+        assert_eq!(
+            cancelled.scene.scene_revision,
+            stroke_preview.update.scene.scene_revision + 1
         );
     }
 
@@ -2260,6 +2416,7 @@ mod tests {
     #[test]
     fn stroke_batches_preview_without_document_mutation_and_commit_once() {
         let mut engine = Engine::open(NodeInkDocumentV1::blank("doc-1")).unwrap();
+        engine.set_active_tool(EditorToolV1::Freehand);
         let down = engine
             .handle_stroke_batch(
                 "stroke-command".to_string(),
@@ -2304,8 +2461,51 @@ mod tests {
     }
 
     #[test]
+    fn single_point_strokes_preview_and_commit_as_stable_round_dots() {
+        let mut engine = Engine::open(NodeInkDocumentV1::blank("doc-1")).unwrap();
+        engine.set_active_tool(EditorToolV1::Freehand);
+
+        let preview = engine
+            .handle_stroke_batch(
+                "dot".to_string(),
+                stroke_batch(StrokePhaseV1::Down, 1, &[(10.0, 20.0)], Some("dot-1")),
+            )
+            .unwrap();
+        let SceneNodeV1::Path(preview_path) = &preview.update.scene.nodes["dot-1:path"] else {
+            panic!("stroke preview should resolve to a path");
+        };
+        assert_eq!(preview_path.path_data, "M 10 20 L 10 20");
+        assert_eq!(preview.update.scene.document_revision, 0);
+
+        let committed = engine
+            .handle_stroke_batch(
+                "dot".to_string(),
+                stroke_batch(StrokePhaseV1::Up, 2, &[(10.0, 20.0)], None),
+            )
+            .unwrap();
+
+        assert!(committed.did_commit);
+        assert_eq!(committed.update.scene.document_revision, 1);
+        let ElementRecordV1::Stroke(dot) = &engine.document().elements["dot-1"] else {
+            panic!("dot should commit as a stroke");
+        };
+        assert_eq!(
+            dot.points,
+            vec![Vec2 { x: 10.0, y: 20.0 }, Vec2 { x: 10.0, y: 20.0 }]
+        );
+        assert_eq!(dot.stroke_width, 3.0);
+        assert_eq!(committed.update.active_tool, EditorToolV1::Freehand);
+        assert_eq!(committed.update.selection, SelectionStateV1::default());
+
+        let undone = engine.undo().unwrap();
+        assert!(undone.scene.nodes.is_empty());
+        assert_eq!(undone.active_tool, EditorToolV1::Freehand);
+    }
+
+    #[test]
     fn stroke_batches_filter_wrong_pointers_and_out_of_order_points() {
         let mut engine = Engine::open(NodeInkDocumentV1::blank("doc-1")).unwrap();
+        engine.set_active_tool(EditorToolV1::Freehand);
         engine
             .handle_stroke_batch(
                 "stroke-command".to_string(),
@@ -2367,6 +2567,7 @@ mod tests {
     #[test]
     fn invalid_stroke_inputs_and_commands_are_atomic() {
         let mut engine = Engine::open(NodeInkDocumentV1::blank("doc-1")).unwrap();
+        engine.set_active_tool(EditorToolV1::Freehand);
         assert_eq!(
             engine.handle_stroke_batch(
                 "missing-id".to_string(),

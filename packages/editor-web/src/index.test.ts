@@ -326,6 +326,74 @@ describe('EditorWebController', () => {
     });
   });
 
+  it('routes canvas input through the Rust-owned active tool and returns to Select for shapes', async () => {
+    const engine = new StubEngine();
+    const controller = new EditorWebController({
+      engine,
+      renderer: new StubRenderer(),
+      createId: (() => {
+        const ids = [
+          'tool-command',
+          'stroke-1',
+          'move-command',
+          'up-command',
+          'rect-command',
+          'rect-1',
+        ];
+        return () => ids.shift() ?? 'fallback';
+      })(),
+    });
+    const target = document.createElement('div');
+    await controller.mount(target);
+
+    await controller.dispatch({ type: 'set_tool', tool: 'freehand' });
+    expect(controller.getSnapshot()).toMatchObject({
+      activeTool: 'freehand',
+      activeElementId: null,
+    });
+    expect(target.dataset.activeTool).toBe('freehand');
+
+    await controller.dispatch({ type: 'pointer_events', events: [pointerEvent('down', 1)] });
+    await controller.dispatch({
+      type: 'pointer_events',
+      events: [pointerEvent('move', 2), pointerEvent('move', 3)],
+    });
+    await controller.dispatch({ type: 'pointer_events', events: [pointerEvent('up', 4)] });
+
+    expect(engine.strokeBatches).toMatchObject([
+      { phase: 'down', sequenceStart: 1, strokeId: 'stroke-1' },
+      {
+        phase: 'move',
+        sequenceStart: 2,
+        strokeId: null,
+        points: [
+          { x: 10, y: 20 },
+          { x: 10, y: 20 },
+        ],
+      },
+      { phase: 'up', sequenceStart: 4, strokeId: null },
+    ]);
+    expect(engine.pointerBatches).toHaveLength(0);
+
+    await controller.dispatch({ type: 'create_rectangle' });
+    expect(controller.getSnapshot().activeTool).toBe('select');
+    expect(engine.commands.at(-1)?.command.type).toBe('create_rectangle');
+  });
+
+  it('uses Select pointer routing and Escape tool semantics', async () => {
+    const engine = new StubEngine('rect-1');
+    await engine.setSelection('rect-1');
+    const controller = new EditorWebController({ engine, renderer: new StubRenderer() });
+    await controller.mount(document.createElement('div'));
+
+    await controller.dispatch({ type: 'pointer_events', events: [pointerEvent('down', 1)] });
+    expect(engine.pointerBatches).toHaveLength(1);
+
+    await controller.dispatch({ type: 'set_tool', tool: 'freehand' });
+    await controller.dispatch({ type: 'escape' });
+    expect(controller.getSnapshot().activeTool).toBe('select');
+  });
+
   it('supports explicit geometry, history, subscriptions, and idempotent disposal', async () => {
     const engine = new StubEngine();
     const renderer = new StubRenderer();
@@ -494,6 +562,7 @@ describe('EditorWebController', () => {
       'pointermove',
       'pointerup',
       'pointercancel',
+      'lostpointercapture',
     ]);
     expect(firstRemove.mock.calls.map(([type]) => type)).toEqual([
       'pointerdown',
@@ -505,8 +574,9 @@ describe('EditorWebController', () => {
       'pointermove',
       'pointerup',
       'pointercancel',
+      'lostpointercapture',
     ]);
-    expect(secondAdd).toHaveBeenCalledTimes(9);
+    expect(secondAdd).toHaveBeenCalledTimes(10);
     expect(secondRemove).not.toHaveBeenCalled();
     expect(renderer.mountCalls).toBe(2);
 
@@ -518,6 +588,7 @@ describe('EditorWebController', () => {
       'pointermove',
       'pointerup',
       'pointercancel',
+      'lostpointercapture',
       'pointerdown',
       'pointermove',
       'pointerup',
@@ -712,6 +783,8 @@ class StubPersistence implements EditorPersistencePortV1 {
 
 class StubEngine implements EnginePortV1 {
   readonly commands: CommandEnvelopeV1[] = [];
+  readonly pointerBatches: NormalizedPointerEventV1[][] = [];
+  readonly strokeBatches: StrokeInputBatchV1[] = [];
   currentError: unknown = null;
   executeError: unknown = null;
   undoCalls = 0;
@@ -729,6 +802,7 @@ class StubEngine implements EnginePortV1 {
   #revision = 0;
   #rectangleId: string | null;
   #selectedElementId: string | null = null;
+  #activeTool: 'select' | 'freehand' = 'select';
   #canRedo = false;
 
   constructor(rectangleId: string | null = null) {
@@ -808,6 +882,12 @@ class StubEngine implements EnginePortV1 {
     );
   }
 
+  async setActiveTool(tool: 'select' | 'freehand'): Promise<EngineUpdateV1> {
+    this.#activeTool = tool;
+    this.#selectedElementId = null;
+    return this.update();
+  }
+
   async setSelection(elementId: string | null): Promise<EngineUpdateV1> {
     if (elementId && elementId !== this.#rectangleId) {
       throw new Error(`element ${elementId} was not found`);
@@ -837,6 +917,7 @@ class StubEngine implements EnginePortV1 {
     events: NormalizedPointerEventV1[],
     _commandId: string,
   ): Promise<PointerUpdateV1> {
+    this.pointerBatches.push(events);
     return {
       update: this.update(),
       processedEventCount: events.length,
@@ -850,6 +931,7 @@ class StubEngine implements EnginePortV1 {
     _commandId: string,
     _transport: StrokeTransportV1,
   ): Promise<StrokeUpdateV1> {
+    this.strokeBatches.push(batch);
     return {
       update: this.update(),
       processedPointCount: batch.points.length,
@@ -964,6 +1046,7 @@ class StubEngine implements EnginePortV1 {
   private update(changedElementIds: string[] = []): EngineUpdateV1 {
     const scene = stubScene(this.#revision, this.#rectangleId);
     return {
+      activeTool: this.#activeTool,
       operation: changedElementIds.length
         ? {
             commandId: `command-${this.#revision}`,

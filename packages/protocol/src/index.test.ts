@@ -56,6 +56,7 @@ describe('protocol V1', () => {
 
   it('parses a valid engine update', () => {
     const update = {
+      activeTool: 'freehand',
       operation: null,
       scene: {
         protocolVersion: 1,
@@ -73,6 +74,22 @@ describe('protocol V1', () => {
     };
 
     expect(parseEngineUpdate(JSON.stringify(update))).toEqual(update);
+  });
+
+  it('defaults legacy engine updates to the select tool', () => {
+    const legacy = updateFixture();
+    delete (legacy as { activeTool?: unknown }).activeTool;
+
+    expect(parseEngineUpdate(JSON.stringify(legacy))).toEqual({
+      ...legacy,
+      activeTool: 'select',
+    });
+  });
+
+  it.each([null, '', 'pen', {}, 1])('rejects an invalid active tool %o', (activeTool) => {
+    expect(() => parseEngineUpdate(JSON.stringify({ ...updateFixture(), activeTool }))).toThrow(
+      'protocol V1',
+    );
   });
 
   it('parses a standalone scene snapshot', () => {
@@ -312,6 +329,7 @@ function updateFixture(
   historyOverride: Record<string, unknown> = {},
 ) {
   return {
+    activeTool: 'select',
     operation: null,
     scene: {
       protocolVersion: 1,

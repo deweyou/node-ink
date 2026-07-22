@@ -700,6 +700,7 @@ interface EditorWebControllerV1 {
 
 - `EditorActionV1` 是 UI 意图，例如切换工具、撤销、删除或设置样式；Controller 再把它映射为 NormalizedInput 或 Command。
 - `EditorUiSnapshotV1` 只包含 UI 需要的只读派生状态，例如 active tool、selection summary、undo/redo availability 和 save status。
+- active tool 由 Rust 非持久 Tool State 持有；Controller 只路由规范化后的 Select pointer 或 Freehand batch，Rust 对错路由显式拒绝。
 - React 与 Vue adapter 把 `subscribe` 映射为框架状态订阅；Vanilla host 使用相同契约，不新增第二套 Engine 或 Renderer API。
 - `dispose` 是唯一宿主销毁入口，负责释放 DOM listener、Text Overlay、Renderer、保存调度器和 Engine handle。
 - UI adapter 不直接调用 Renderer 私有方法，也不直接访问 wasm-bindgen glue 或 IndexedDB。

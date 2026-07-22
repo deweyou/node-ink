@@ -12,30 +12,43 @@ export function attachPointerInput(
   options: PointerInputOptionsV1 = {},
 ): () => void {
   const sequences = new Map<number, number>();
+  const activePointers = new Set<number>();
+  const lastPoints = new Map<number, { x: number; y: number }>();
+  const windowTarget = target.ownerDocument.defaultView;
+
+  const emitNormalized = (events: NormalizedPointerEventV1[]) => {
+    for (const event of events) {
+      lastPoints.set(event.pointerId, event.point);
+    }
+    onPointerBatch(events);
+  };
 
   const handlePointerDown = (event: PointerEvent) => {
     if (event.button !== 0 || options.shouldHandleEvent?.(event) === false) {
       return;
     }
+    activePointers.add(event.pointerId);
     target.setPointerCapture?.(event.pointerId);
     event.preventDefault();
-    onPointerBatch(normalizeEvents(target, [event], 'down', sequences));
+    emitNormalized(normalizeEvents(target, [event], 'down', sequences));
   };
   const handlePointerMove = (event: PointerEvent) => {
-    if (options.shouldHandleEvent?.(event) === false) {
+    if (!activePointers.has(event.pointerId) || options.shouldHandleEvent?.(event) === false) {
       return;
     }
     const coalescedEvents = event.getCoalescedEvents?.() ?? [];
     const events = coalescedEvents.length > 0 ? coalescedEvents : [event];
     event.preventDefault();
-    onPointerBatch(normalizeEvents(target, events, 'move', sequences));
+    emitNormalized(normalizeEvents(target, events, 'move', sequences));
   };
   const handlePointerUp = (event: PointerEvent) => {
-    if (options.shouldHandleEvent?.(event) === false) {
+    if (!activePointers.has(event.pointerId) || options.shouldHandleEvent?.(event) === false) {
       return;
     }
     event.preventDefault();
-    onPointerBatch(normalizeEvents(target, [event], 'up', sequences));
+    emitNormalized(normalizeEvents(target, [event], 'up', sequences));
+    activePointers.delete(event.pointerId);
+    lastPoints.delete(event.pointerId);
     releasePointer(target, event.pointerId);
     sequences.delete(event.pointerId);
   };
@@ -43,21 +56,50 @@ export function attachPointerInput(
     if (options.shouldHandleEvent?.(event) === false) {
       return;
     }
-    onPointerBatch(normalizeEvents(target, [event], 'cancel', sequences));
+    emitNormalized(normalizeEvents(target, [event], 'cancel', sequences));
+    activePointers.delete(event.pointerId);
+    lastPoints.delete(event.pointerId);
     releasePointer(target, event.pointerId);
     sequences.delete(event.pointerId);
+  };
+  const cancelActivePointer = (pointerId: number) => {
+    if (!activePointers.has(pointerId)) {
+      return;
+    }
+    const sequence = (sequences.get(pointerId) ?? 0) + 1;
+    const point = lastPoints.get(pointerId) ?? { x: 0, y: 0 };
+    emitNormalized([{ pointerId, sequence, phase: 'cancel', point }]);
+    activePointers.delete(pointerId);
+    lastPoints.delete(pointerId);
+    sequences.delete(pointerId);
+    releasePointer(target, pointerId);
+  };
+  const handleLostPointerCapture = (event: PointerEvent) => cancelActivePointer(event.pointerId);
+  const handleWindowBlur = () => {
+    for (const pointerId of [...activePointers]) {
+      cancelActivePointer(pointerId);
+    }
   };
 
   target.addEventListener('pointerdown', handlePointerDown);
   target.addEventListener('pointermove', handlePointerMove);
   target.addEventListener('pointerup', handlePointerUp);
   target.addEventListener('pointercancel', handlePointerCancel);
+  target.addEventListener('lostpointercapture', handleLostPointerCapture);
+  windowTarget?.addEventListener('blur', handleWindowBlur);
 
   return () => {
     target.removeEventListener('pointerdown', handlePointerDown);
     target.removeEventListener('pointermove', handlePointerMove);
     target.removeEventListener('pointerup', handlePointerUp);
     target.removeEventListener('pointercancel', handlePointerCancel);
+    target.removeEventListener('lostpointercapture', handleLostPointerCapture);
+    windowTarget?.removeEventListener('blur', handleWindowBlur);
+    for (const pointerId of activePointers) {
+      releasePointer(target, pointerId);
+    }
+    activePointers.clear();
+    lastPoints.clear();
     sequences.clear();
   };
 }

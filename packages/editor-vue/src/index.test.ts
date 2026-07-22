@@ -29,6 +29,8 @@ describe('NodeInkEditor', () => {
     expect(target.querySelector('[data-nodeink-host="vue"]')).not.toBeNull();
     expect(target.querySelector('.nodeink-host-badge')?.textContent).toBe('Vue adapter');
     expect(controller.mountTarget?.className).toBe('nodeink-canvas');
+    expect(button(target, 'Select').ariaPressed).toBe('true');
+    expect(button(target, 'Draw').ariaPressed).toBe('false');
     expect(button(target, 'Rectangle').disabled).toBe(false);
     expect(button(target, 'Move').disabled).toBe(true);
     expect(button(target, 'Delete').disabled).toBe(true);
@@ -44,11 +46,24 @@ describe('NodeInkEditor', () => {
     });
     await nextTick();
 
-    for (const label of ['Rectangle', 'Move', 'Delete', 'Undo', 'Redo', '−', '100%', '+']) {
+    for (const label of [
+      'Select',
+      'Draw',
+      'Rectangle',
+      'Move',
+      'Delete',
+      'Undo',
+      'Redo',
+      '−',
+      '100%',
+      '+',
+    ]) {
       button(target, label).click();
     }
 
     expect(controller.actions.map((action) => action.type)).toEqual([
+      'set_tool',
+      'set_tool',
       'create_rectangle',
       'move_active',
       'delete_selection',
@@ -116,6 +131,8 @@ describe('NodeInkEditor', () => {
     await nextTick();
     expect(target.querySelector('[role="status"]')?.textContent).toContain('上次稳定版本');
     expect(button(target, 'Rectangle').disabled).toBe(true);
+    expect(button(target, 'Select').disabled).toBe(true);
+    expect(button(target, 'Draw').disabled).toBe(true);
     expect(button(target, '100%').disabled).toBe(false);
   });
 
@@ -172,6 +189,7 @@ class StubController implements EditorWebControllerV1 {
     sceneRevision: 0,
     elementCount: 0,
     activeElementId: null,
+    activeTool: 'select',
     selectionBounds: null,
     canUndo: false,
     canRedo: false,

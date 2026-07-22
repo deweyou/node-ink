@@ -1,4 +1,10 @@
-export type EditorShortcutAction = 'undo' | 'redo' | 'delete_selection' | 'clear_selection';
+export type EditorShortcutAction =
+  | 'undo'
+  | 'redo'
+  | 'delete_selection'
+  | 'escape'
+  | 'select_tool'
+  | 'freehand_tool';
 
 export type EditorShortcutListener = (action: EditorShortcutAction) => boolean;
 
@@ -36,7 +42,13 @@ function editorAction(event: KeyboardEvent): EditorShortcutAction | null {
       return 'delete_selection';
     }
     if (key === 'escape') {
-      return 'clear_selection';
+      return 'escape';
+    }
+    if (key === 'v') {
+      return 'select_tool';
+    }
+    if (key === 'p') {
+      return 'freehand_tool';
     }
   }
   return null;

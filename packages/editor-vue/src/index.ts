@@ -106,6 +106,30 @@ export const NodeInkEditor = defineComponent({
             'button',
             {
               type: 'button',
+              'data-tool': 'select',
+              'aria-pressed': currentSnapshot.activeTool === 'select',
+              disabled: !isEditable,
+              title: 'Select tool (V)',
+              onClick: () => dispatch({ type: 'set_tool', tool: 'select' }),
+            },
+            'Select',
+          ),
+          h(
+            'button',
+            {
+              type: 'button',
+              'data-tool': 'freehand',
+              'aria-pressed': currentSnapshot.activeTool === 'freehand',
+              disabled: !isEditable,
+              title: 'Freehand tool (P)',
+              onClick: () => dispatch({ type: 'set_tool', tool: 'freehand' }),
+            },
+            'Draw',
+          ),
+          h(
+            'button',
+            {
+              type: 'button',
               disabled: !isEditable,
               onClick: () => dispatch({ type: 'create_rectangle' }),
             },
@@ -193,6 +217,7 @@ export const NodeInkEditor = defineComponent({
             h('span', `document r${currentSnapshot.documentRevision}`),
             h('span', `${currentSnapshot.elementCount} elements`),
             h('span', currentSnapshot.activeElementId ? '1 selected' : 'No selection'),
+            h('span', `${currentSnapshot.activeTool} tool`),
           ]),
           persistence.notice
             ? h('p', { class: 'nodeink-notice', role: 'status' }, persistence.notice)

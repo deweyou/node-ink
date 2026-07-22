@@ -37,6 +37,8 @@ rootElement.innerHTML = `
       <span class="nodeink-host-badge">Vanilla TypeScript</span>
     </header>
     <aside class="nodeink-toolbar" aria-label="Canvas actions">
+      <button type="button" data-action="set_tool_select" data-tool="select" title="Select tool (V)">Select</button>
+      <button type="button" data-action="set_tool_freehand" data-tool="freehand" title="Freehand tool (P)">Draw</button>
       <button type="button" data-action="create_rectangle">Rectangle</button>
       <button type="button" data-action="move_active">Move</button>
       <button type="button" data-action="delete_selection" data-danger="true">Delete</button>
@@ -151,6 +153,10 @@ rootElement.addEventListener('click', (event) => {
   const action = button.dataset.action;
   if (action === 'create_rectangle') {
     void controller.dispatch({ type: 'create_rectangle' });
+  } else if (action === 'set_tool_select') {
+    void controller.dispatch({ type: 'set_tool', tool: 'select' });
+  } else if (action === 'set_tool_freehand') {
+    void controller.dispatch({ type: 'set_tool', tool: 'freehand' });
   } else if (action === 'move_active') {
     void controller.dispatch({ type: 'move_active', delta: { x: 32, y: 16 } });
   } else if (action === 'delete_selection') {
@@ -185,6 +191,7 @@ function renderSnapshot(
     <span>document r${snapshot.documentRevision}</span>
     <span>${snapshot.elementCount} elements</span>
     <span>${snapshot.activeElementId ? '1 selected' : 'No selection'}</span>
+    <span>${snapshot.activeTool} tool</span>
   `;
   noticeElement.hidden = !persistence.notice;
   noticeElement.textContent = persistence.notice;
@@ -217,6 +224,10 @@ function renderSnapshot(
   }
   const isEditable = snapshot.status === 'ready' && snapshot.documentAccess === 'writer';
   const camera = getEditorCameraPresentation(snapshot);
+  setDisabled(root, 'set_tool_select', !isEditable);
+  setDisabled(root, 'set_tool_freehand', !isEditable);
+  setPressed(root, 'select', snapshot.activeTool === 'select');
+  setPressed(root, 'freehand', snapshot.activeTool === 'freehand');
   setDisabled(root, 'create_rectangle', !isEditable);
   setDisabled(root, 'move_active', !isEditable || !snapshot.activeElementId);
   setDisabled(root, 'delete_selection', !isEditable || !snapshot.activeElementId);
@@ -232,6 +243,11 @@ function renderSnapshot(
     zoom.ariaLabel = camera.fitContentAriaLabel;
     zoom.dataset.cameraSaveStatus = snapshot.cameraSaveStatus;
   }
+}
+
+function setPressed(root: HTMLElement, tool: string, pressed: boolean): void {
+  const button = root.querySelector<HTMLButtonElement>(`[data-tool="${tool}"]`);
+  button?.setAttribute('aria-pressed', String(pressed));
 }
 
 function setDisabled(root: HTMLElement, action: string, disabled: boolean): void {

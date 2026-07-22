@@ -52,6 +52,26 @@ export function NodeInkEditor({ controller, hostLabel = 'React adapter' }: NodeI
       <aside className="nodeink-toolbar" aria-label="Canvas actions">
         <button
           type="button"
+          data-tool="select"
+          aria-pressed={snapshot.activeTool === 'select'}
+          disabled={!isEditable}
+          title="Select tool (V)"
+          onClick={() => void controller.dispatch({ type: 'set_tool', tool: 'select' })}
+        >
+          Select
+        </button>
+        <button
+          type="button"
+          data-tool="freehand"
+          aria-pressed={snapshot.activeTool === 'freehand'}
+          disabled={!isEditable}
+          title="Freehand tool (P)"
+          onClick={() => void controller.dispatch({ type: 'set_tool', tool: 'freehand' })}
+        >
+          Draw
+        </button>
+        <button
+          type="button"
           disabled={!isEditable}
           onClick={() => void controller.dispatch({ type: 'create_rectangle' })}
         >
@@ -130,6 +150,7 @@ export function NodeInkEditor({ controller, hostLabel = 'React adapter' }: NodeI
           <span>document r{snapshot.documentRevision}</span>
           <span>{snapshot.elementCount} elements</span>
           <span>{snapshot.activeElementId ? '1 selected' : 'No selection'}</span>
+          <span>{snapshot.activeTool} tool</span>
         </output>
         {persistence.notice ? (
           <p className="nodeink-notice" role="status">

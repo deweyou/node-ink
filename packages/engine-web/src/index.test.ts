@@ -11,6 +11,7 @@ const wasm = vi.hoisted(() => {
     applyCameraAction: vi.fn(),
     currentUpdate: vi.fn(),
     executeCommand: vi.fn(),
+    setActiveTool: vi.fn(),
     setSelection: vi.fn(),
     executeDiagramOperation: vi.fn(),
     handlePointerEvents: vi.fn(),
@@ -51,6 +52,7 @@ describe('createWasmEngine', () => {
     wasm.handle.applyCameraAction.mockReturnValue('{"x":12,"y":6,"zoom":2}');
     wasm.handle.currentUpdate.mockReturnValue(update);
     wasm.handle.executeCommand.mockReturnValue(update);
+    wasm.handle.setActiveTool.mockReturnValue(validUpdate('freehand'));
     wasm.handle.setSelection.mockReturnValue(update);
     wasm.handle.executeDiagramOperation.mockReturnValue(diagramOperationResult());
     wasm.handle.handlePointerEvents.mockReturnValue(pointerUpdate());
@@ -105,6 +107,9 @@ describe('createWasmEngine', () => {
     ).resolves.toEqual({ x: 12, y: 6, zoom: 2 });
     await expect(engine.executeCommand(command)).resolves.toMatchObject({
       history: { canUndo: false },
+    });
+    await expect(engine.setActiveTool('freehand')).resolves.toMatchObject({
+      activeTool: 'freehand',
     });
     await expect(engine.setSelection('rect-1')).resolves.toMatchObject({
       selection: { selectedElementId: null },
@@ -184,6 +189,7 @@ describe('createWasmEngine', () => {
     expect(wasm.default).toHaveBeenCalledOnce();
     expect(wasm.openDocument).toHaveBeenCalledWith(JSON.stringify(document));
     expect(wasm.handle.executeCommand).toHaveBeenCalledWith(JSON.stringify(command));
+    expect(wasm.handle.setActiveTool).toHaveBeenCalledWith('freehand');
     expect(wasm.handle.setSelection).toHaveBeenCalledWith('rect-1');
     expect(wasm.handle.setCamera).toHaveBeenCalledWith('{"x":24,"y":12,"zoom":1.5}');
     expect(wasm.handle.fitCamera).toHaveBeenCalledWith(500, 300, 50);
@@ -261,6 +267,11 @@ describe('createWasmEngine', () => {
       throw new Error(JSON.stringify({ code: 'revision_conflict', message: 'stale revision' }));
     });
     await expect(engine.executeCommand(command)).rejects.toThrow('stale revision');
+
+    wasm.handle.setActiveTool.mockImplementation(() => {
+      throw new Error(JSON.stringify({ message: 'tool rejected' }));
+    });
+    await expect(engine.setActiveTool('freehand')).rejects.toThrow('tool rejected');
 
     wasm.handle.executeDiagramOperation.mockImplementation(() => {
       throw new Error(JSON.stringify({ message: 'batch rejected' }));
@@ -379,8 +390,9 @@ function diagramOperationResult(): string {
   });
 }
 
-function validUpdate(): string {
+function validUpdate(activeTool: 'select' | 'freehand' = 'select'): string {
   return JSON.stringify({
+    activeTool,
     operation: null,
     scene: {
       protocolVersion: 1,

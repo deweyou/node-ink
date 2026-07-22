@@ -68,22 +68,30 @@ export async function runStrokeBenchmark({
   strokeIdPrefix = 'benchmark-stroke',
   now = () => performance.now(),
 }: StrokeBenchmarkOptionsV1): Promise<StrokeBenchmarkReportV1> {
+  const activate = await controller.dispatch({ type: 'set_tool', tool: 'freehand' });
+  if (!activate.ok) {
+    throw new Error(activate.snapshot.errorMessage ?? 'failed to activate freehand benchmark tool');
+  }
   const results: Record<string, StrokeBenchmarkVariantResultV1> = {};
-  for (const [index, benchmarkCase] of cases.entries()) {
-    results[benchmarkCase.name] = await runVariant({
-      controller,
-      durationSeconds,
-      inputHz,
-      benchmarkCase,
-      strokeId: `${strokeIdPrefix}-${benchmarkCase.name}`,
-      now,
-    });
-    if (index < cases.length - 1) {
-      const undo = await controller.dispatch({ type: 'undo' });
-      if (!undo.ok) {
-        throw new Error(undo.snapshot.errorMessage ?? 'failed to reset stroke benchmark fixture');
+  try {
+    for (const [index, benchmarkCase] of cases.entries()) {
+      results[benchmarkCase.name] = await runVariant({
+        controller,
+        durationSeconds,
+        inputHz,
+        benchmarkCase,
+        strokeId: `${strokeIdPrefix}-${benchmarkCase.name}`,
+        now,
+      });
+      if (index < cases.length - 1) {
+        const undo = await controller.dispatch({ type: 'undo' });
+        if (!undo.ok) {
+          throw new Error(undo.snapshot.errorMessage ?? 'failed to reset stroke benchmark fixture');
+        }
       }
     }
+  } finally {
+    await controller.dispatch({ type: 'set_tool', tool: 'select' });
   }
   return { cases: results };
 }

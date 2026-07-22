@@ -124,7 +124,13 @@ export interface HistoryStateV1 {
   canRedo: boolean;
 }
 
-export interface EngineUpdateV1 {
+export type EditorToolV1 = 'select' | 'freehand';
+
+export interface ToolStateV1 {
+  activeTool: EditorToolV1;
+}
+
+export interface EngineUpdateV1 extends ToolStateV1 {
   operation: OperationResultV1 | null;
   scene: SceneSnapshotV1;
   history: HistoryStateV1;
@@ -314,6 +320,7 @@ export interface EnginePortV1 {
   fitCamera(viewport: CameraViewportV1, padding: number): Promise<CameraV1>;
   applyCameraAction(action: CameraActionV1): Promise<CameraV1>;
   executeCommand(command: CommandEnvelopeV1): Promise<EngineUpdateV1>;
+  setActiveTool(tool: EditorToolV1): Promise<EngineUpdateV1>;
   setSelection(elementId: string | null): Promise<EngineUpdateV1>;
   executeDiagramOperation(batch: DiagramOperationBatchV1): Promise<DiagramOperationBatchResultV1>;
   handlePointerEvents(
@@ -441,7 +448,11 @@ export function parseEngineUpdate(value: string): EngineUpdateV1 {
   ) {
     throw new Error('Engine update does not satisfy protocol V1');
   }
-  return parsed as unknown as EngineUpdateV1;
+  const activeTool = parsed.activeTool === undefined ? 'select' : parsed.activeTool;
+  if (!isEditorTool(activeTool)) {
+    throw new Error('Engine update does not satisfy protocol V1');
+  }
+  return { ...parsed, activeTool } as unknown as EngineUpdateV1;
 }
 
 export function parseCamera(value: string): CameraV1 {
@@ -636,6 +647,10 @@ export function parseMigrationAttempt(value: string): MigrationAttemptV1 {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function isEditorTool(value: unknown): value is EditorToolV1 {
+  return value === 'select' || value === 'freehand';
 }
 
 function isSelectionBounds(value: unknown): boolean {

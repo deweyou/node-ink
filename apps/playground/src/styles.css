@@ -82,6 +82,13 @@ button[data-danger='true']:focus-visible {
   background: var(--ui-color-danger-soft);
 }
 
+button[data-tool][aria-pressed='true'] {
+  border-color: var(--nodeink-selection-color);
+  color: var(--nodeink-selection-color);
+  background: color-mix(in srgb, var(--nodeink-selection-color) 9%, var(--ui-color-surface));
+  box-shadow: inset 3px 0 0 var(--nodeink-selection-color);
+}
+
 .nodeink-shell {
   display: grid;
   grid-template-areas:
@@ -156,6 +163,14 @@ button[data-danger='true']:focus-visible {
 
 .nodeink-canvas {
   touch-action: none;
+}
+
+.nodeink-canvas[data-active-tool='freehand'] {
+  cursor: crosshair;
+}
+
+.nodeink-canvas[data-active-tool='freehand'] [data-source-element-id] {
+  cursor: crosshair;
 }
 
 .nodeink-canvas [data-source-element-id] {

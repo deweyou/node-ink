@@ -1,8 +1,9 @@
 use nodeink_core::{
     CameraActionV1, CameraV1, CameraViewportV1, CommandEnvelopeV1, DiagramOperationBatchV1,
-    ENGINE_ALGORITHM_VERSION, Engine, EngineErrorV1, NodeInkDocumentV1, NormalizedPointerEventV1,
-    RenderProfileV1, StrokeInputBatchV1, StrokePhaseV1, TextMetricsSnapshotV1, TextRunV1, Vec2,
-    benchmark_scene_patch, benchmark_scene_snapshot, migrate_document_payload,
+    ENGINE_ALGORITHM_VERSION, EditorToolV1, Engine, EngineErrorV1, NodeInkDocumentV1,
+    NormalizedPointerEventV1, RenderProfileV1, StrokeInputBatchV1, StrokePhaseV1,
+    TextMetricsSnapshotV1, TextRunV1, Vec2, benchmark_scene_patch, benchmark_scene_snapshot,
+    migrate_document_payload,
 };
 use wasm_bindgen::prelude::*;
 
@@ -79,6 +80,13 @@ impl EngineHandle {
             .engine
             .set_selection(element_id)
             .map_err(engine_error)?;
+        serde_json::to_string(&update).map_err(|error| js_error("serialization_failed", error))
+    }
+
+    #[wasm_bindgen(js_name = setActiveTool)]
+    pub fn set_active_tool(&mut self, active_tool: &str) -> Result<String, JsValue> {
+        let active_tool = parse_editor_tool(active_tool)?;
+        let update = self.engine.set_active_tool(active_tool);
         serde_json::to_string(&update).map_err(|error| js_error("serialization_failed", error))
     }
 
@@ -265,6 +273,14 @@ fn parse_stroke_phase(phase: &str) -> Result<StrokePhaseV1, JsValue> {
         "up" => Ok(StrokePhaseV1::Up),
         "cancel" => Ok(StrokePhaseV1::Cancel),
         _ => Err(js_error("schema_invalid", "unsupported stroke phase")),
+    }
+}
+
+fn parse_editor_tool(active_tool: &str) -> Result<EditorToolV1, JsValue> {
+    match active_tool {
+        "select" => Ok(EditorToolV1::Select),
+        "freehand" => Ok(EditorToolV1::Freehand),
+        _ => Err(js_error("schema_invalid", "unsupported editor tool")),
     }
 }
 
