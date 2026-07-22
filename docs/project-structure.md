@@ -14,6 +14,9 @@ flowchart TD
     Renderer --> Vanilla["Vanilla host"]
     Renderer --> React
     Renderer --> Vue
+    CI["GitHub Actions\nPR + main"] --> Tests["Web + Rust tests"]
+    CI --> Build["Production build"]
+    Build --> Wasm
 ```
 
 NodeInk is a pnpm/Cargo monorepo. Rust owns persistent editor semantics; TypeScript adapts that engine to browser events and DOM rendering; framework hosts remain replaceable leaves.
@@ -22,6 +25,7 @@ NodeInk is a pnpm/Cargo monorepo. Rust owns persistent editor semantics; TypeScr
 
 ```text
 apps/playground/            React, Vue, and Vanilla integration hosts
+.github/workflows/          Pull request and main-branch CI
 crates/nodeink-core/        Document, commands, revisions, history, Scene resolution
 crates/nodeink-wasm/        wasm-bindgen API over nodeink-core
 packages/protocol/          TypeScript wire types and runtime parsing
@@ -56,10 +60,11 @@ docs/                       Product, architecture, decisions, plans, and repo me
 ## Build Boundaries
 
 - [vite.config.ts#L1](../vite.config.ts#L1) is the Vite+ check/test/task entry.
+- [.github/workflows/ci.yml#L1](../.github/workflows/ci.yml#L1) runs Web tests, Rust checks/tests and the real WASM production build for pull requests and `main` pushes.
 - Cargo commands remain directly runnable and authoritative for Rust failures.
 - Web dependencies come from the root official-registry `.npmrc`; exact tool versions live in manifests and lockfiles.
 - Rust task output defaults outside the repository to avoid the observed macOS extended-attribute failure. `NODEINK_CARGO_TARGET_DIR` is the supported override.
 - WASM release build uses wasm-pack for Cargo/wasm-bindgen and lockfile-pinned Binaryen 117 for `-Oz`; optimization writes a fresh sibling file before replacing the generated WASM, avoiding the observed wasm-pack/provenance replacement failure.
 
 ---
-*Last updated: 2026-07-22 | Reason: record the independent Vue adapter and playground host*
+*Last updated: 2026-07-22 | Reason: record the pull request test and production-build CI path*
