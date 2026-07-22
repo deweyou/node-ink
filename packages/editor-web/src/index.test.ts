@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import type {
+  CameraActionV1,
+  CameraV1,
   CommandEnvelopeV1,
   DiagramOperationBatchResultV1,
   DiagramOperationBatchV1,
@@ -22,10 +24,229 @@ import type {
   TextRunV1,
 } from '@nodeink-internal/protocol';
 
-import { EditorWebController } from './index';
-import type { EditorPersistencePortV1, EditorPersistenceSnapshotV1 } from './index';
+import { EditorWebController, getEditorCameraPresentation } from './index';
+import type {
+  EditorCameraPersistencePortV1,
+  EditorPersistencePortV1,
+  EditorPersistenceSnapshotV1,
+} from './index';
 
 describe('EditorWebController', () => {
+  it('restores Camera per document and maps it to the renderer viewport', async () => {
+    const engine = new StubEngine();
+    const renderer = new StubRenderer();
+    const cameraPersistence = new StubCameraPersistence({ x: 10, y: 20, zoom: 2 });
+    const controller = new EditorWebController({ engine, renderer, cameraPersistence });
+    const target = document.createElement('div');
+    target.getBoundingClientRect = vi.fn(
+      () => ({ width: 800, height: 600, left: 0, top: 0 }) as DOMRect,
+    );
+
+    await controller.mount(target);
+
+    expect(engine.setCameras).toEqual([{ x: 10, y: 20, zoom: 2 }]);
+    expect(renderer.viewports.at(-1)).toEqual({ x: 10, y: 20, width: 400, height: 300 });
+    expect(controller.getSnapshot()).toMatchObject({
+      camera: { x: 10, y: 20, zoom: 2 },
+      cameraZoomPercent: 200,
+      cameraSaveStatus: 'saved',
+      documentRevision: 0,
+    });
+  });
+
+  it('updates and persists Camera without changing Document revision or history', async () => {
+    vi.useFakeTimers();
+    try {
+      const engine = new StubEngine();
+      const renderer = new StubRenderer();
+      const cameraPersistence = new StubCameraPersistence();
+      const controller = new EditorWebController({ engine, renderer, cameraPersistence });
+      const target = document.createElement('div');
+      target.getBoundingClientRect = vi.fn(
+        () => ({ width: 960, height: 640, left: 0, top: 0 }) as DOMRect,
+      );
+      await controller.mount(target);
+
+      const result = await controller.dispatch({
+        type: 'camera_action',
+        action: { type: 'pan_by', delta: { x: 48, y: 32 } },
+      });
+
+      expect(result).toMatchObject({
+        ok: true,
+        snapshot: {
+          documentRevision: 0,
+          canUndo: false,
+          canRedo: false,
+          camera: { x: -48, y: -32, zoom: 1 },
+          cameraSaveStatus: 'dirty',
+        },
+      });
+      expect(renderer.viewports.at(-1)).toEqual({
+        x: -48,
+        y: -32,
+        width: 960,
+        height: 640,
+      });
+
+      await vi.advanceTimersByTimeAsync(200);
+      expect(cameraPersistence.saved).toEqual([
+        { documentId: 'doc-1', camera: { x: -48, y: -32, zoom: 1 } },
+      ]);
+      expect(controller.getSnapshot().cameraSaveStatus).toBe('saved');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('allows Camera navigation in readonly mode while rejecting Document commands', async () => {
+    const controller = new EditorWebController({
+      engine: new StubEngine(),
+      renderer: new StubRenderer(),
+      documentAccess: 'readonly',
+      readonlyReason: 'held_elsewhere',
+    });
+    await controller.mount(document.createElement('div'));
+
+    await expect(
+      controller.dispatch({
+        type: 'camera_action',
+        action: { type: 'pan_by', delta: { x: 12, y: 8 } },
+      }),
+    ).resolves.toMatchObject({ ok: true, snapshot: { camera: { x: -12, y: -8 } } });
+    await expect(controller.dispatch({ type: 'create_rectangle' })).resolves.toMatchObject({
+      ok: false,
+      snapshot: { documentRevision: 0 },
+    });
+  });
+
+  it('routes zoom controls through Rust Camera actions around the viewport center', async () => {
+    const engine = new StubEngine();
+    const controller = new EditorWebController({ engine, renderer: new StubRenderer() });
+    const target = document.createElement('div');
+    target.getBoundingClientRect = vi.fn(
+      () => ({ width: 800, height: 600, left: 0, top: 0 }) as DOMRect,
+    );
+    await controller.mount(target);
+
+    await controller.dispatch({ type: 'zoom_in' });
+    await controller.dispatch({ type: 'zoom_out' });
+    await controller.dispatch({ type: 'reset_camera' });
+
+    expect(engine.cameraActions).toEqual([
+      { type: 'zoom_at', factor: 1.5, anchor: { x: 400, y: 300 } },
+      { type: 'zoom_at', factor: 1 / 1.5, anchor: { x: 400, y: 300 } },
+      {
+        type: 'fit_content',
+        viewport: { width: 800, height: 600 },
+        padding: 64,
+      },
+    ]);
+  });
+
+  it('treats fit content as 100% without moving Camera when document bounds change', async () => {
+    const engine = new StubEngine();
+    engine.fitCameraResult = { x: 75, y: 25, zoom: 2 };
+    const controller = new EditorWebController({
+      engine,
+      renderer: new StubRenderer(),
+      createId: () => 'rect-1',
+    });
+    const target = document.createElement('div');
+    target.getBoundingClientRect = vi.fn(
+      () => ({ width: 500, height: 300, left: 0, top: 0 }) as DOMRect,
+    );
+    await controller.mount(target);
+
+    expect(controller.getSnapshot()).toMatchObject({
+      camera: { x: 75, y: 25, zoom: 2 },
+      cameraZoomPercent: 100,
+    });
+    await controller.dispatch({ type: 'zoom_in' });
+    expect(controller.getSnapshot()).toMatchObject({
+      camera: { zoom: 3 },
+      cameraZoomPercent: 150,
+    });
+
+    engine.fitCameraResult = { x: -100, y: -80, zoom: 1 };
+    await controller.dispatch({ type: 'create_rectangle', elementId: 'rect-1' });
+    expect(controller.getSnapshot()).toMatchObject({
+      camera: { zoom: 3 },
+      cameraZoomPercent: 300,
+    });
+
+    await controller.dispatch({ type: 'reset_camera' });
+    expect(controller.getSnapshot()).toMatchObject({
+      camera: { x: -100, y: -80, zoom: 1 },
+      cameraZoomPercent: 100,
+    });
+    expect(getEditorCameraPresentation(controller.getSnapshot())).toEqual({
+      zoomLabel: '100%',
+      fitContentTitle: '回正并适应全部内容',
+      fitContentAriaLabel: '回正并适应全部内容，当前 100%',
+    });
+    expect(engine.fitCameraCalls.at(-1)).toEqual({
+      viewport: { width: 500, height: 300 },
+      padding: 64,
+    });
+  });
+
+  it('keeps the editor usable when Camera restore or Camera actions fail', async () => {
+    const engine = new StubEngine();
+    const cameraPersistence = new StubCameraPersistence();
+    cameraPersistence.loadError = 'camera read unavailable';
+    const controller = new EditorWebController({
+      engine,
+      renderer: new StubRenderer(),
+      cameraPersistence,
+    });
+
+    await controller.mount(document.createElement('div'));
+    expect(controller.getSnapshot()).toMatchObject({
+      status: 'ready',
+      cameraSaveStatus: 'save_failed',
+      cameraSaveErrorMessage: 'camera read unavailable',
+    });
+
+    engine.cameraError = new Error('camera action unavailable');
+    await expect(controller.dispatch({ type: 'reset_camera' })).resolves.toMatchObject({
+      ok: false,
+      snapshot: { status: 'error', errorMessage: 'camera action unavailable' },
+    });
+  });
+
+  it('surfaces Camera persistence failures and retries the pending view state', async () => {
+    vi.useFakeTimers();
+    try {
+      const cameraPersistence = new StubCameraPersistence();
+      cameraPersistence.saveError = new Error('camera storage unavailable');
+      const controller = new EditorWebController({
+        engine: new StubEngine(),
+        renderer: new StubRenderer(),
+        cameraPersistence,
+      });
+      await controller.mount(document.createElement('div'));
+      await controller.dispatch({
+        type: 'camera_action',
+        action: { type: 'pan_by', delta: { x: 16, y: 8 } },
+      });
+
+      await vi.advanceTimersByTimeAsync(200);
+      expect(controller.getSnapshot()).toMatchObject({
+        cameraSaveStatus: 'save_failed',
+        cameraSaveErrorMessage: 'camera storage unavailable',
+      });
+
+      cameraPersistence.saveError = null;
+      await expect(controller.dispatch({ type: 'retry_camera_save' })).resolves.toMatchObject({
+        ok: true,
+        snapshot: { cameraSaveStatus: 'saved', cameraSaveErrorMessage: null },
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('dispatches commands through the engine and updates the renderer', async () => {
     const engine = new StubEngine();
     const renderer = new StubRenderer();
@@ -215,14 +436,24 @@ describe('EditorWebController', () => {
       'pointermove',
       'pointerup',
       'pointercancel',
+      'wheel',
+      'pointerdown',
+      'pointermove',
+      'pointerup',
+      'pointercancel',
     ]);
     expect(firstRemove.mock.calls.map(([type]) => type)).toEqual([
       'pointerdown',
       'pointermove',
       'pointerup',
       'pointercancel',
+      'wheel',
+      'pointerdown',
+      'pointermove',
+      'pointerup',
+      'pointercancel',
     ]);
-    expect(secondAdd).toHaveBeenCalledTimes(4);
+    expect(secondAdd).toHaveBeenCalledTimes(9);
     expect(secondRemove).not.toHaveBeenCalled();
     expect(renderer.mountCalls).toBe(2);
 
@@ -234,6 +465,11 @@ describe('EditorWebController', () => {
       'pointermove',
       'pointerup',
       'pointercancel',
+      'pointerdown',
+      'pointermove',
+      'pointerup',
+      'pointercancel',
+      'wheel',
     ]);
     expect(engine.disposeCalls).toBe(1);
     expect(renderer.unmountCalls).toBe(1);
@@ -428,6 +664,15 @@ class StubEngine implements EnginePortV1 {
   undoCalls = 0;
   redoCalls = 0;
   disposeCalls = 0;
+  readonly cameraActions: CameraActionV1[] = [];
+  readonly setCameras: CameraV1[] = [];
+  readonly fitCameraCalls: Array<{
+    viewport: { width: number; height: number };
+    padding: number;
+  }> = [];
+  fitCameraResult: CameraV1 = { x: 0, y: 0, zoom: 1 };
+  cameraError: Error | null = null;
+  #camera: CameraV1 = { x: 0, y: 0, zoom: 1 };
   #revision = 0;
   #rectangleId: string | null;
   #canRedo = false;
@@ -441,6 +686,47 @@ class StubEngine implements EnginePortV1 {
       throw this.currentError;
     }
     return this.update();
+  }
+
+  async currentCamera(): Promise<CameraV1> {
+    return this.#camera;
+  }
+
+  async setCamera(camera: CameraV1): Promise<CameraV1> {
+    this.setCameras.push(camera);
+    this.#camera = camera;
+    return camera;
+  }
+
+  async fitCamera(viewport: { width: number; height: number }, padding: number): Promise<CameraV1> {
+    this.fitCameraCalls.push({ viewport, padding });
+    return this.fitCameraResult;
+  }
+
+  async applyCameraAction(action: CameraActionV1): Promise<CameraV1> {
+    if (this.cameraError) {
+      throw this.cameraError;
+    }
+    this.cameraActions.push(action);
+    if (action.type === 'fit_content') {
+      this.#camera = this.fitCameraResult;
+    } else if (action.type === 'pan_by') {
+      this.#camera = {
+        ...this.#camera,
+        x: this.#camera.x - action.delta.x / this.#camera.zoom,
+        y: this.#camera.y - action.delta.y / this.#camera.zoom,
+      };
+    } else if (action.type === 'zoom_at') {
+      const zoom = this.#camera.zoom * action.factor;
+      const anchorWorldX = this.#camera.x + action.anchor.x / this.#camera.zoom;
+      const anchorWorldY = this.#camera.y + action.anchor.y / this.#camera.zoom;
+      this.#camera = {
+        x: anchorWorldX - action.anchor.x / zoom,
+        y: anchorWorldY - action.anchor.y / zoom,
+        zoom,
+      };
+    }
+    return this.#camera;
   }
 
   async executeCommand(command: CommandEnvelopeV1): Promise<EngineUpdateV1> {
@@ -621,6 +907,7 @@ class StubEngine implements EnginePortV1 {
 
 class StubRenderer implements RendererV1 {
   readonly snapshots: SceneSnapshotV1[] = [];
+  readonly viewports: Array<{ x: number; y: number; width: number; height: number }> = [];
   shouldReject = false;
   mountCalls = 0;
   unmountCalls = 0;
@@ -629,7 +916,8 @@ class StubRenderer implements RendererV1 {
     this.mountCalls += 1;
   }
 
-  setViewport() {
+  setViewport(viewport: { x: number; y: number; width: number; height: number }) {
+    this.viewports.push(viewport);
     return { durationMs: 0 };
   }
 
@@ -647,6 +935,28 @@ class StubRenderer implements RendererV1 {
 
   unmount(): void {
     this.unmountCalls += 1;
+  }
+}
+
+class StubCameraPersistence implements EditorCameraPersistencePortV1 {
+  readonly saved: Array<{ documentId: string; camera: CameraV1 }> = [];
+  saveError: Error | null = null;
+  loadError: unknown = null;
+
+  constructor(readonly restored: CameraV1 | null = null) {}
+
+  async loadCamera(): Promise<CameraV1 | null> {
+    if (this.loadError) {
+      throw this.loadError;
+    }
+    return this.restored;
+  }
+
+  async saveCamera(documentId: string, camera: CameraV1): Promise<void> {
+    this.saved.push({ documentId, camera });
+    if (this.saveError) {
+      throw this.saveError;
+    }
   }
 }
 

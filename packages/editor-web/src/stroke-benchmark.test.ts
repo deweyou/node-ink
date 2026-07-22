@@ -176,6 +176,10 @@ function success(): EditorActionResultV1 {
       documentAccess: 'writer',
       readonlyReason: null,
       recovery: 'blank',
+      camera: { x: 0, y: 0, zoom: 1 },
+      cameraZoomPercent: 100,
+      cameraSaveStatus: 'saved',
+      cameraSaveErrorMessage: null,
     },
   };
 }

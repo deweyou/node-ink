@@ -31,6 +31,8 @@ describe('NodeInkEditor', () => {
     expect(controller.mountTarget?.className).toBe('nodeink-canvas');
     expect(button(target, 'Rectangle').disabled).toBe(false);
     expect(button(target, 'Move').disabled).toBe(true);
+    expect(button(target, '100%').title).toBe('回正并适应全部内容');
+    expect(button(target, '100%').ariaLabel).toBe('回正并适应全部内容，当前 100%');
 
     controller.setSnapshot({
       ...controller.getSnapshot(),
@@ -41,7 +43,7 @@ describe('NodeInkEditor', () => {
     });
     await nextTick();
 
-    for (const label of ['Rectangle', 'Move', 'Undo', 'Redo']) {
+    for (const label of ['Rectangle', 'Move', 'Undo', 'Redo', '−', '100%', '+']) {
       button(target, label).click();
     }
 
@@ -50,6 +52,9 @@ describe('NodeInkEditor', () => {
       'move_active',
       'undo',
       'redo',
+      'zoom_out',
+      'reset_camera',
+      'zoom_in',
     ]);
     expect(target.querySelector('[role="alert"]')?.textContent).toContain(
       'recoverable engine error',
@@ -87,8 +92,21 @@ describe('NodeInkEditor', () => {
 
     controller.setSnapshot({
       ...controller.getSnapshot(),
+      saveStatus: 'saved',
+      saveErrorMessage: null,
+      cameraSaveStatus: 'save_failed',
+      cameraSaveErrorMessage: 'camera quota exceeded',
+    });
+    await nextTick();
+    button(target, '重试').click();
+    expect(controller.actions.at(-1)).toEqual({ type: 'retry_camera_save' });
+
+    controller.setSnapshot({
+      ...controller.getSnapshot(),
       saveStatus: 'readonly',
       saveErrorMessage: null,
+      cameraSaveStatus: 'saved',
+      cameraSaveErrorMessage: null,
       documentAccess: 'readonly',
       readonlyReason: 'recovered_fallback',
       recovery: 'stable_fallback',
@@ -96,6 +114,7 @@ describe('NodeInkEditor', () => {
     await nextTick();
     expect(target.querySelector('[role="status"]')?.textContent).toContain('上次稳定版本');
     expect(button(target, 'Rectangle').disabled).toBe(true);
+    expect(button(target, '100%').disabled).toBe(false);
   });
 
   it('unsubscribes and disposes the controller once on unmount', async () => {
@@ -159,6 +178,10 @@ class StubController implements EditorWebControllerV1 {
     documentAccess: 'writer',
     readonlyReason: null,
     recovery: 'blank',
+    camera: { x: 0, y: 0, zoom: 1 },
+    cameraZoomPercent: 100,
+    cameraSaveStatus: 'saved',
+    cameraSaveErrorMessage: null,
   };
 
   constructor(mountError: Error | null = null) {

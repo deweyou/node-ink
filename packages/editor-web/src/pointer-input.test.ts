@@ -125,6 +125,27 @@ describe('attachPointerInput', () => {
     expect(listener.mock.calls[0]?.[0]).toMatchObject([{ phase: 'cancel', sequence: 1 }]);
     expect(releasePointerCapture).not.toHaveBeenCalled();
   });
+
+  it('lets the Camera binding exclude an entire pointer gesture', () => {
+    const target = document.createElement('div');
+    mockBounds(target);
+    const setPointerCapture = vi.fn();
+    Object.assign(target, {
+      setPointerCapture,
+      hasPointerCapture: () => true,
+      releasePointerCapture: vi.fn(),
+    });
+    const listener = vi.fn();
+    attachPointerInput(target, listener, { shouldHandleEvent: () => false });
+
+    target.dispatchEvent(pointerEvent('pointerdown'));
+    target.dispatchEvent(pointerEvent('pointermove'));
+    target.dispatchEvent(pointerEvent('pointerup'));
+    target.dispatchEvent(pointerEvent('pointercancel'));
+
+    expect(listener).not.toHaveBeenCalled();
+    expect(setPointerCapture).not.toHaveBeenCalled();
+  });
 });
 
 interface PointerEventOptions {

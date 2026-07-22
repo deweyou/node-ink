@@ -62,6 +62,7 @@ The interface should disappear until the user needs it. Content owns the visual 
 
 - UI actions and programmatic actions must converge on the same Controller and Rust Command path.
 - Tool changes are explicit; history availability is reflected immediately in control state.
+- The Camera percentage is relative to the current fit-content zoom. Clicking it recenters all content with 64px screen padding; content changes may update the percentage but must not move the Camera automatically.
 - Persistence uses five explicit presentation states shared by every host: `未保存`, `保存中`, `已保存`, `保存失败`, and `只读`.
 - A save failure remains visible with an explicit `重试` action. Read-only mode explains why editing is unavailable instead of silently disabling controls.
 - Avoid ornamental transitions. Honor reduced-motion preferences.
@@ -90,4 +91,4 @@ The interface should disappear until the user needs it. Content owns the visual 
 
 ---
 
-_Last updated: 2026-07-22 | Reason: define shared autosave, failure, and read-only presentation states_
+_Last updated: 2026-07-22 | Reason: define shared fit-content Camera percentage and recenter behavior_

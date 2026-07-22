@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import {
   AtomicSnapshotPersistenceV1,
   deleteNodeInkDatabase,
+  IndexedDbCameraStoreV1,
   IndexedDbSnapshotStoreV1,
   PersistenceErrorV1,
   sha256Hex,
@@ -14,7 +15,7 @@ import {
   WebLockDocumentLeaseV1,
 } from './index';
 
-const openStores: IndexedDbSnapshotStoreV1[] = [];
+const openStores: Array<IndexedDbSnapshotStoreV1 | IndexedDbCameraStoreV1> = [];
 
 afterEach(() => {
   for (const store of openStores.splice(0)) store.close();
@@ -172,6 +173,21 @@ describe('AtomicSnapshotPersistenceV1', () => {
 });
 
 describe('IndexedDbSnapshotStoreV1', () => {
+  it('persists Camera separately for each document', async () => {
+    const store = await IndexedDbCameraStoreV1.open(
+      `camera-fixture-${Math.random()}`,
+      new IDBFactory(),
+    );
+    openStores.push(store);
+
+    await store.saveCamera('doc-1', { x: -48, y: 16, zoom: 1.5 });
+    await store.saveCamera('doc-2', { x: 20, y: 40, zoom: 0.75 });
+
+    await expect(store.loadCamera('doc-1')).resolves.toEqual({ x: -48, y: 16, zoom: 1.5 });
+    await expect(store.loadCamera('doc-2')).resolves.toEqual({ x: 20, y: 40, zoom: 0.75 });
+    await expect(store.loadCamera('missing')).resolves.toBeNull();
+  });
+
   it('reports missing snapshots during stabilization and ignores missing rejection targets', async () => {
     const { store } = await fixture();
 

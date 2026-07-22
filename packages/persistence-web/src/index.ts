@@ -1,3 +1,11 @@
+import {
+  parseCamera,
+  type CameraV1,
+  type MigrationAttemptV1,
+  type MigrationReportV1,
+  type NodeInkDocumentV1,
+} from '@nodeink-internal/protocol';
+
 export type SnapshotStatusV1 = 'candidate' | 'stable' | 'rejected';
 export type SaveInterruptionV1 =
   | 'before_candidate'
@@ -39,6 +47,11 @@ export interface SnapshotStoreV1 {
   markRejected(snapshotKey: string): Promise<void>;
   getCatalog(documentId: string): Promise<DocumentCatalogRecordV1 | null>;
   getSnapshot(snapshotKey: string): Promise<SnapshotRecordV1 | null>;
+}
+
+export interface CameraStoreV1 {
+  loadCamera(documentId: string): Promise<CameraV1 | null>;
+  saveCamera(documentId: string, camera: CameraV1): Promise<void>;
 }
 
 export interface SaveSnapshotInputV1 {
@@ -509,6 +522,54 @@ export class IndexedDbSnapshotStoreV1 implements SnapshotStoreV1 {
   }
 }
 
+interface CameraRecordV1 {
+  documentId: string;
+  camera: CameraV1;
+}
+
+export class IndexedDbCameraStoreV1 implements CameraStoreV1 {
+  readonly #database: IDBDatabase;
+
+  private constructor(database: IDBDatabase) {
+    this.#database = database;
+  }
+
+  static async open(
+    databaseName = 'nodeink-camera-v1',
+    factory: IDBFactory = indexedDB,
+  ): Promise<IndexedDbCameraStoreV1> {
+    const request = factory.open(databaseName, 1);
+    request.onupgradeneeded = () => {
+      if (!request.result.objectStoreNames.contains('cameras')) {
+        request.result.createObjectStore('cameras', { keyPath: 'documentId' });
+      }
+    };
+    return new IndexedDbCameraStoreV1(await requestResult(request));
+  }
+
+  async loadCamera(documentId: string): Promise<CameraV1 | null> {
+    const transaction = this.#database.transaction('cameras', 'readonly');
+    const record = (await requestResult(transaction.objectStore('cameras').get(documentId))) as
+      | CameraRecordV1
+      | undefined;
+    return record ? parseCamera(JSON.stringify(record.camera)) : null;
+  }
+
+  async saveCamera(documentId: string, camera: CameraV1): Promise<void> {
+    const validated = parseCamera(JSON.stringify(camera));
+    const transaction = this.#database.transaction('cameras', 'readwrite');
+    const completion = transactionCompletion(transaction);
+    transaction
+      .objectStore('cameras')
+      .put({ documentId, camera: validated } satisfies CameraRecordV1);
+    await completion;
+  }
+
+  close(): void {
+    this.#database.close();
+  }
+}
+
 export async function deleteNodeInkDatabase(
   databaseName: string,
   factory: IDBFactory = indexedDB,
@@ -565,8 +626,3 @@ function migrationReport(
     recovery: 'try_next_snapshot_then_readonly_diagnostic',
   };
 }
-import type {
-  MigrationAttemptV1,
-  MigrationReportV1,
-  NodeInkDocumentV1,
-} from '@nodeink-internal/protocol';

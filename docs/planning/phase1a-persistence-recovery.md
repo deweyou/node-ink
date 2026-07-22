@@ -59,7 +59,7 @@ stateDiagram-v2
 ## 后续边界
 
 - P-02 固定画布字体仍待确认，与本切片分离。
-- Camera 尚未进入当前 Controller；实现时按每文档恢复最后 Camera，不恢复 selection、hover、active transform 或 IME buffer。
+- Camera 已在独立纵向切片进入 Controller，并使用独立 session database；详见 [phase1a-camera-viewport.md](phase1a-camera-viewport.md)。Document snapshot 仍不包含 Camera、selection、hover、active transform 或 IME buffer。
 - Phase 1B 增加显式接管、多文档库、恢复副本/诊断包体验；在此之前不允许写入 fallback 或损坏源。
 
 ---

@@ -1,5 +1,6 @@
 import {
   parseDiagramOperationBatchResult,
+  parseCamera,
   parseEngineUpdate,
   parseMigrationAttempt,
   parsePointerUpdate,
@@ -9,6 +10,9 @@ import {
   parseStrokeUpdate,
   parseTextFixtureResolution,
   type CommandEnvelopeV1,
+  type CameraActionV1,
+  type CameraV1,
+  type CameraViewportV1,
   type DiagramOperationBatchResultV1,
   type DiagramOperationBatchV1,
   type EnginePortV1,
@@ -33,6 +37,10 @@ import {
 
 interface WasmEngineHandle {
   currentUpdate(): string;
+  currentCamera(): string;
+  setCamera(cameraJson: string): string;
+  fitCamera(viewportWidth: number, viewportHeight: number, padding: number): string;
+  applyCameraAction(actionJson: string): string;
   executeCommand(commandJson: string): string;
   executeDiagramOperation(batchJson: string): string;
   handlePointerEvents(eventsJson: string, commandId: string): string;
@@ -84,6 +92,38 @@ class WasmEnginePort implements EnginePortV1 {
 
   async currentUpdate(): Promise<EngineUpdateV1> {
     return parseEngineUpdate(this.requireHandle().currentUpdate());
+  }
+
+  async currentCamera(): Promise<CameraV1> {
+    try {
+      return parseCamera(this.requireHandle().currentCamera());
+    } catch (error) {
+      throw normalizeEngineError(error);
+    }
+  }
+
+  async setCamera(camera: CameraV1): Promise<CameraV1> {
+    try {
+      return parseCamera(this.requireHandle().setCamera(JSON.stringify(camera)));
+    } catch (error) {
+      throw normalizeEngineError(error);
+    }
+  }
+
+  async fitCamera(viewport: CameraViewportV1, padding: number): Promise<CameraV1> {
+    try {
+      return parseCamera(this.requireHandle().fitCamera(viewport.width, viewport.height, padding));
+    } catch (error) {
+      throw normalizeEngineError(error);
+    }
+  }
+
+  async applyCameraAction(action: CameraActionV1): Promise<CameraV1> {
+    try {
+      return parseCamera(this.requireHandle().applyCameraAction(JSON.stringify(action)));
+    } catch (error) {
+      throw normalizeEngineError(error);
+    }
   }
 
   async executeCommand(command: CommandEnvelopeV1): Promise<EngineUpdateV1> {
