@@ -5,6 +5,8 @@ import {
   runPlaygroundPointerBenchmark,
   runPlaygroundPersistenceBenchmark,
   runPlaygroundMigrationBenchmark,
+  releasePlaygroundLeaseBenchmark,
+  runPlaygroundLeaseBenchmark,
   runPlaygroundSketchBenchmark,
   runPlaygroundScenePatchBenchmark,
   runPlaygroundSvgScaleBenchmark,
@@ -62,7 +64,8 @@ if (
   benchmark === 'scene-patch' ||
   benchmark === 'svg-scale' ||
   benchmark === 'persistence' ||
-  benchmark === 'migration'
+  benchmark === 'migration' ||
+  benchmark === 'lease'
 ) {
   const benchmarkOutput = document.createElement('pre');
   benchmarkOutput.className = 'nodeink-benchmark';
@@ -70,7 +73,7 @@ if (
   benchmarkOutput.textContent = `Running ${benchmark} benchmark…`;
   requireElement<HTMLElement>(rootElement, '.nodeink-stage').append(benchmarkOutput);
   try {
-    benchmarkOutput.textContent = JSON.stringify(
+    const benchmarkResult =
       benchmark === 'pointer'
         ? await runPlaygroundPointerBenchmark(controller)
         : benchmark === 'stroke'
@@ -85,10 +88,35 @@ if (
                   ? await runPlaygroundSvgScaleBenchmark()
                   : benchmark === 'persistence'
                     ? await runPlaygroundPersistenceBenchmark()
-                    : await runPlaygroundMigrationBenchmark(),
-      null,
-      2,
-    );
+                    : benchmark === 'migration'
+                      ? await runPlaygroundMigrationBenchmark()
+                      : await runPlaygroundLeaseBenchmark(
+                          new URLSearchParams(window.location.search).get('role') === 'contender'
+                            ? 'contender'
+                            : 'writer',
+                          new URLSearchParams(window.location.search).get('document') ??
+                            'lease-fixture',
+                        );
+    benchmarkOutput.textContent = JSON.stringify(benchmarkResult, null, 2);
+    if (benchmark === 'lease' && benchmarkResult.engineAlgorithmVersion === 'phase0-s9') {
+      const leaseResult = benchmarkResult;
+      if (leaseResult.state === 'held') {
+        const releaseButton = document.createElement('button');
+        releaseButton.type = 'button';
+        releaseButton.dataset.releaseLease = 'true';
+        releaseButton.textContent = 'Release benchmark lease';
+        releaseButton.addEventListener('click', async () => {
+          releaseButton.disabled = true;
+          const releaseMs = await releasePlaygroundLeaseBenchmark();
+          benchmarkOutput.textContent = JSON.stringify(
+            { ...leaseResult, state: 'released', releaseMs },
+            null,
+            2,
+          );
+        });
+        requireElement<HTMLElement>(rootElement, '.nodeink-stage').append(releaseButton);
+      }
+    }
   } catch (benchmarkError) {
     benchmarkOutput.textContent = `${benchmark} benchmark failed: ${String(benchmarkError)}`;
   }

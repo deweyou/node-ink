@@ -118,6 +118,18 @@ export type PersistenceErrorCodeV1 =
   | 'recovery_unavailable'
   | 'crypto_unavailable';
 
+export interface LockManagerPortV1 {
+  request(
+    name: string,
+    options: { mode: 'exclusive'; ifAvailable: true },
+    callback: (lock: object | null) => Promise<void>,
+  ): Promise<void>;
+}
+
+export type DocumentLeaseResultV1 =
+  | { kind: 'writer'; release(): Promise<void> }
+  | { kind: 'readonly'; reason: 'held_elsewhere' | 'unsupported' };
+
 export class PersistenceErrorV1 extends Error {
   constructor(
     readonly code: PersistenceErrorCodeV1,
@@ -259,6 +271,51 @@ export class AtomicSnapshotPersistenceV1 {
       'recovery_unavailable',
       'no verified stable snapshot is available',
     );
+  }
+}
+
+export class WebLockDocumentLeaseV1 {
+  readonly #locks: LockManagerPortV1 | undefined;
+
+  constructor(locks: LockManagerPortV1 | undefined) {
+    this.#locks = locks;
+  }
+
+  async acquire(documentId: string): Promise<DocumentLeaseResultV1> {
+    if (!this.#locks) return { kind: 'readonly', reason: 'unsupported' };
+    let resolveAcquisition!: (result: DocumentLeaseResultV1) => void;
+    const acquisition = new Promise<DocumentLeaseResultV1>((resolve) => {
+      resolveAcquisition = resolve;
+    });
+    let releaseLock!: () => void;
+    const released = new Promise<void>((resolve) => {
+      releaseLock = resolve;
+    });
+    let releasePromise: Promise<void> | null = null;
+    const requestPromise = this.#locks
+      .request(
+        `nodeink:document:${documentId}`,
+        { mode: 'exclusive', ifAvailable: true },
+        async (lock) => {
+          if (!lock) {
+            resolveAcquisition({ kind: 'readonly', reason: 'held_elsewhere' });
+            return;
+          }
+          resolveAcquisition({
+            kind: 'writer',
+            release: () => {
+              releaseLock();
+              releasePromise ??= requestPromise.then(() => undefined);
+              return releasePromise;
+            },
+          });
+          await released;
+        },
+      )
+      .catch(() => {
+        resolveAcquisition({ kind: 'readonly', reason: 'unsupported' });
+      });
+    return acquisition;
   }
 }
 

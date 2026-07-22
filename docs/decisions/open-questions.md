@@ -134,6 +134,14 @@
 - 可用 fallback 时确定性打开下一 verified snapshot；全部失败时进入 `readonly_diagnostic`，不构造半迁移文档。
 - Phase 1A 把成功迁移结果作为新 revision 走 S7 原子保存；S8 Spike 本身不在 migration 函数中写 IndexedDB。
 
+### D-21 多标签页单写者与只读降级
+
+- Web Locks 使用 `nodeink:document:<documentId>` exclusive/ifAvailable lease；同时只允许一个 writer，竞争者立即得到 `readonly/held_elsewhere`。
+- writer 显式 release 或标签页关闭后，竞争者必须重新加载最新 stable revision 再获取 lease；旧内存 Document 不能直接续写。
+- 没有 Web Locks 或 request 失败时返回 `readonly/unsupported`，不以 BroadcastChannel、localStorage 或定时 lease 猜测单写者。
+- IndexedDB expected revision 是最终事务护栏；S9 并发写 fixture 恒为一个成功、一个 `revision_conflict`，不发生 silent last-write-wins。
+- 本机 Chrome 150 中初次获取、释放后接管、关闭标签页后接管分别为 0.4/0.3/0.2ms；这些时延不替代跨设备 capability probe。
+
 ## 22. 需要产品负责人决策的问题
 
 以下问题不阻碍继续评审文档，但会阻碍对应功能进入实现。

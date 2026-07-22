@@ -11,6 +11,7 @@ import {
   type SaveInterruptionV1,
   type SnapshotRecordV1,
   type SnapshotStoreV1,
+  WebLockDocumentLeaseV1,
 } from './index';
 
 const openStores: IndexedDbSnapshotStoreV1[] = [];
@@ -310,6 +311,53 @@ describe('recoverCopyOnWriteV1', () => {
   });
 });
 
+describe('WebLockDocumentLeaseV1', () => {
+  it('grants one writer, rejects a contender, and allows takeover after release', async () => {
+    const locks = new FakeLockManager();
+    const firstCoordinator = new WebLockDocumentLeaseV1(locks);
+    const secondCoordinator = new WebLockDocumentLeaseV1(locks);
+
+    const first = await firstCoordinator.acquire('doc-1');
+    const contender = await secondCoordinator.acquire('doc-1');
+    expect(first.kind).toBe('writer');
+    expect(contender).toEqual({ kind: 'readonly', reason: 'held_elsewhere' });
+    if (first.kind === 'writer') {
+      await first.release();
+      await first.release();
+    }
+
+    await expect(secondCoordinator.acquire('doc-1')).resolves.toMatchObject({ kind: 'writer' });
+  });
+
+  it('uses independent lock names for different documents', async () => {
+    const locks = new FakeLockManager();
+    const coordinator = new WebLockDocumentLeaseV1(locks);
+    const first = await coordinator.acquire('doc-1');
+    const second = await coordinator.acquire('doc-2');
+
+    expect(first.kind).toBe('writer');
+    expect(second.kind).toBe('writer');
+    if (first.kind === 'writer') await first.release();
+    if (second.kind === 'writer') await second.release();
+  });
+
+  it('degrades to readonly when Web Locks are missing or reject requests', async () => {
+    await expect(new WebLockDocumentLeaseV1(undefined).acquire('doc-1')).resolves.toEqual({
+      kind: 'readonly',
+      reason: 'unsupported',
+    });
+    const rejecting = new WebLockDocumentLeaseV1({
+      request: async () => {
+        throw new Error('locks unavailable');
+      },
+    });
+    await expect(rejecting.acquire('doc-1')).resolves.toEqual({
+      kind: 'readonly',
+      reason: 'unsupported',
+    });
+  });
+});
+
 async function fixture() {
   const factory = new IDBFactory();
   const store = await IndexedDbSnapshotStoreV1.open(`fixture-${Math.random()}`, factory);
@@ -447,6 +495,27 @@ function failedMigrationAttempt(stage: string, code: string, sourceSchemaVersion
       recovery: 'try_next_snapshot_then_readonly_diagnostic' as const,
     },
   };
+}
+
+class FakeLockManager {
+  readonly #held = new Set<string>();
+
+  async request(
+    name: string,
+    _options: { mode: 'exclusive'; ifAvailable: true },
+    callback: (lock: object | null) => Promise<void>,
+  ): Promise<void> {
+    if (this.#held.has(name)) {
+      await callback(null);
+      return;
+    }
+    this.#held.add(name);
+    try {
+      await callback({ name });
+    } finally {
+      this.#held.delete(name);
+    }
+  }
 }
 
 void PersistenceErrorV1;

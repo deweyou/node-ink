@@ -14,6 +14,9 @@ import {
   IndexedDbSnapshotStoreV1,
   recoverCopyOnWriteV1,
   sha256Hex,
+  WebLockDocumentLeaseV1,
+  type DocumentLeaseResultV1,
+  type LockManagerPortV1,
   type SaveInterruptionV1,
   type SnapshotRecordV1,
 } from '@nodeink-internal/persistence-web';
@@ -188,6 +191,30 @@ export interface PlaygroundMigrationBenchmarkReport {
   };
 }
 
+export interface PlaygroundLeaseBenchmarkReport {
+  build: 'release-wasm-dev-host';
+  engineAlgorithmVersion: 'phase0-s9';
+  browser: string;
+  os: string;
+  hardware: PlaygroundBenchmarkHardware;
+  role: 'writer' | 'contender';
+  documentId: string;
+  capability: { webLocks: boolean; unsupportedFallback: 'readonly' };
+  acquisition: {
+    kind: 'writer' | 'readonly';
+    reason: 'held_elsewhere' | 'unsupported' | null;
+    durationMs: number;
+  };
+  revisionGuard: {
+    successfulWriters: 1;
+    revisionConflicts: 1;
+    recoveredRevision: 1;
+    silentLastWriteWins: false;
+  };
+  state: 'held' | 'readonly' | 'released';
+  releaseMs: number | null;
+}
+
 interface PersistenceSizeScenarioReport {
   payloadBytes: 1_048_576 | 10_485_760;
   iterations: 5;
@@ -263,6 +290,7 @@ declare global {
     nodeInkRunSvgScaleBenchmark?: () => Promise<PlaygroundSvgScaleBenchmarkReport>;
     nodeInkRunPersistenceBenchmark?: () => Promise<PlaygroundPersistenceBenchmarkReport>;
     nodeInkRunMigrationBenchmark?: () => Promise<PlaygroundMigrationBenchmarkReport>;
+    nodeInkReleaseLeaseBenchmark?: () => Promise<number>;
   }
 }
 
@@ -275,6 +303,7 @@ export function exposePointerBenchmark(controller: EditorWebControllerV1): void 
   window.nodeInkRunSvgScaleBenchmark = () => runPlaygroundSvgScaleBenchmark();
   window.nodeInkRunPersistenceBenchmark = () => runPlaygroundPersistenceBenchmark();
   window.nodeInkRunMigrationBenchmark = () => runPlaygroundMigrationBenchmark();
+  window.nodeInkReleaseLeaseBenchmark = () => releasePlaygroundLeaseBenchmark();
 }
 
 export async function runPlaygroundPointerBenchmark(
@@ -802,6 +831,96 @@ export async function runPlaygroundMigrationBenchmark(): Promise<PlaygroundMigra
     };
   } finally {
     engine.dispose();
+  }
+}
+
+let activePlaygroundLease: Extract<DocumentLeaseResultV1, { kind: 'writer' }> | null = null;
+
+export async function runPlaygroundLeaseBenchmark(
+  role: 'writer' | 'contender',
+  documentId: string,
+): Promise<PlaygroundLeaseBenchmarkReport> {
+  const webLocks = typeof navigator.locks !== 'undefined';
+  const coordinator = new WebLockDocumentLeaseV1(
+    webLocks ? (navigator.locks as unknown as LockManagerPortV1) : undefined,
+  );
+  const startedAt = performance.now();
+  const lease = await coordinator.acquire(documentId);
+  const durationMs = performance.now() - startedAt;
+  if (lease.kind === 'writer') activePlaygroundLease = lease;
+  const unsupported = await new WebLockDocumentLeaseV1(undefined).acquire(documentId);
+  if (unsupported.kind !== 'readonly') throw new Error('unsupported locks did not become readonly');
+  return {
+    build: 'release-wasm-dev-host',
+    engineAlgorithmVersion: 'phase0-s9',
+    ...benchmarkEnvironment(),
+    role,
+    documentId,
+    capability: { webLocks, unsupportedFallback: 'readonly' },
+    acquisition: {
+      kind: lease.kind,
+      reason: lease.kind === 'readonly' ? lease.reason : null,
+      durationMs: round(durationMs),
+    },
+    revisionGuard: await runRevisionGuardProbe(),
+    state: lease.kind === 'writer' ? 'held' : 'readonly',
+    releaseMs: null,
+  };
+}
+
+export async function releasePlaygroundLeaseBenchmark(): Promise<number> {
+  if (!activePlaygroundLease) throw new Error('no writer lease is held by this tab');
+  const startedAt = performance.now();
+  await activePlaygroundLease.release();
+  activePlaygroundLease = null;
+  return round(performance.now() - startedAt);
+}
+
+async function runRevisionGuardProbe(): Promise<PlaygroundLeaseBenchmarkReport['revisionGuard']> {
+  const databaseName = `nodeink-s9-revision-${crypto.randomUUID()}`;
+  const store = await IndexedDbSnapshotStoreV1.open(databaseName);
+  const persistence = new AtomicSnapshotPersistenceV1({
+    store,
+    validatePayload: validateBenchmarkDocument,
+  });
+  const payload = createBenchmarkDocumentPayload(4_096, 'revision-guard', 1);
+  try {
+    const writes = await Promise.allSettled(
+      [0, 1].map(() =>
+        persistence.save({
+          documentId: 'revision-guard',
+          revision: 1,
+          expectedPreviousRevision: 0,
+          schemaVersion: 1,
+          engineAlgorithmVersion: 'nodeink-scene-v1',
+          payload,
+          durability: store.probeStrictDurability() ? 'strict' : 'relaxed',
+          interruptAt: null,
+        }),
+      ),
+    );
+    const successfulWriters = writes.filter((result) => result.status === 'fulfilled').length;
+    const revisionConflicts = writes.filter(
+      (result) =>
+        result.status === 'rejected' &&
+        typeof result.reason === 'object' &&
+        result.reason !== null &&
+        'code' in result.reason &&
+        result.reason.code === 'revision_conflict',
+    ).length;
+    const recovered = await persistence.recover('revision-guard');
+    if (successfulWriters !== 1 || revisionConflicts !== 1 || recovered.snapshot.revision !== 1) {
+      throw new Error('revision guard did not reject the competing writer');
+    }
+    return {
+      successfulWriters: 1,
+      revisionConflicts: 1,
+      recoveredRevision: 1,
+      silentLastWriteWins: false,
+    };
+  } finally {
+    store.close();
+    await deleteNodeInkDatabase(databaseName);
   }
 }
 
