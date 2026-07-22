@@ -118,6 +118,14 @@
 - 源文档可超过上述数量，但可见集合暂限 1,000 源元素；10,000 源元素裁剪后首挂 P95 为 1.3–4.5ms。
 - 可见 SVG DOM 超过 2,000 个节点时进入“降低可见 cap 或评估 Canvas”区间；这是单机 Spike 的保守门，不是自动切换 Renderer 的产品规则。
 
+### D-19 IndexedDB 原子保存与恢复
+
+- 一次 readwrite transaction 原子写入 candidate 并推进 catalog head；expected previous revision 不匹配时整笔 abort，不允许 last-write-wins。
+- candidate 经过 IndexedDB read-back、SHA-256 和 schema validator 后才在第二个 transaction 标记 stable；恢复只打开 verified stable 或 previous stable。
+- 目标浏览器接受 `strict` durability 时请求 strict；durability 始终只是 capability/hint，不能替代 read-back 校验。
+- 本机 Chrome 150 中 1MB/10MB 保存 P95 为 12.3/34.4ms，validation 主线程 P95 为 0.6/4.6ms，均未观测到 long task。
+- candidate 前、candidate transaction 中、candidate 后、read-back 后中断均恢复前一稳定 revision；只有 stable transaction 完成后才恢复新 revision。
+
 ## 22. 需要产品负责人决策的问题
 
 以下问题不阻碍继续评审文档，但会阻碍对应功能进入实现。

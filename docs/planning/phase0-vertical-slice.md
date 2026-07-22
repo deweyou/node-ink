@@ -12,7 +12,7 @@ flowchart LR
 
 > 日期：2026-07-21
 > 状态：已实现并验证
-> 覆盖 Spike：S0、S1、S2、S3、S4、S5、S6、S10 的最小事务边界、S11、S12
+> 覆盖 Spike：S0、S1、S2、S3、S4、S5、S6、S7、S10 的最小事务边界、S11、S12
 
 ## 结论
 
@@ -50,6 +50,7 @@ Rust nodeink-core
 - 文本与 IME：Rust 发出缺失 metrics request；TypeScript 测量固定 fixture 字体并按 fingerprint 缓存；composition buffer 不进入 Command。
 - ScenePatch：Rust 生成带 base revision 的稳定节点增量，Renderer 原地更新 DOM，revision 失配时要求完整 Snapshot。
 - SVG scale：Renderer 支持 TextRun 与独立 viewport；可见集合由 Scene/Host 裁剪后再传入 Renderer。
+- IndexedDB persistence：candidate/head transaction、SHA-256 read-back、stable/previous-stable 恢复均由 framework-neutral adapter 编排。
 
 这不是日常可用的编辑器，也不包含持久化、Camera、选择框、产品级文本编辑、
 Mermaid 导入或公共 SDK；自由笔与 IME 仅覆盖 Spike fixture。
@@ -73,6 +74,7 @@ Mermaid 导入或公共 SDK；自由笔与 IME 仅覆盖 Spike fixture。
 | S4 text/IME browser benchmark | 3 个 run 首次测量、缓存后 3/3 命中；1,000 次 hash 稳定；font/IME 失效与提交边界正确 |
 | S5 ScenePatch browser benchmark | 100/1,000/10,000 节点 × move 1/100；1,000 move-1 Patch P95 0.8ms；错序 Patch 返回 `snapshot_required` |
 | S6 SVG scale browser benchmark | simple path/TextRun/Sketch multi-path × 1,000/5,000/10,000；裁剪到 1,000 源元素后首挂 P95 1.3–4.5ms |
+| S7 IndexedDB browser benchmark | 1MB/10MB × 5 次；保存 P95 12.3/34.4ms；4 个中断点均只恢复 verified stable snapshot |
 | `git diff --check` | 通过 |
 
 真实浏览器中分别验证了 React 和 Vanilla 两个入口：
@@ -158,6 +160,18 @@ camera pan 与单节点 Patch 各 20 次。
 - Phase 1A 采用保守的 2,000 可见 SVG DOM 节点软门：超过时先减少可见 cap，并评估 Canvas；不按源文档总元素数自动切换 Renderer。
 - 这些结论来自单台桌面 Chrome 150 与合成 Scene；低端设备和真实字体/复杂 path 必须重新校准。
 
+## S7 IndexedDB 原子恢复决策
+
+真实浏览器证据见 [`phase0-s7-indexeddb.json`](../benchmarks/phase0-s7-indexeddb.json)，测试源代码
+锚定提交 `785c22e`。浏览器使用原生 IndexedDB、Web Crypto SHA-256 与 strict durability probe；
+单测使用同一事务 API 的兼容实现覆盖 revision conflict、abort、corruption 和 fallback。
+
+- 1MB payload 总保存 P95 为 12.3ms，10MB 为 34.4ms；10MB JSON validation 主线程 P95 4.6ms，0 long task。
+- 保存完成前的四个 fault point 都不会打开 candidate；恢复保持前一稳定 revision，stable transaction 完成后才打开新 revision。
+- Catalog 保留 current stable 与 previous stable 两个指针；head 可以暂时指向 candidate，但 open path 不把 candidate 当稳定文档。
+- `strict` 仅在 capability probe 成功时请求；无论 hint 是否可用，read-back、digest 和 schema validation 都是硬门。
+- 10MB 总保存超过一帧但主要为异步事务；Phase 1A 自动保存仍需 debounce，不能在 UI 上同步宣称“已保存”。
+
 ## 工具链说明
 
 - Node：`24.15.0`
@@ -175,10 +189,10 @@ macOS 在仓库内 Cargo `target/` 上触发过扩展属性相关的 `Operation 
 
 按风险顺序继续 Phase 0，而不是直接铺开完整 UI：
 
-1. S7/S8 持久化、原子恢复与 migration fixture。
+1. S8 copy-on-write migration 与损坏诊断 fixture。
 2. S9 多标签页写入权与只读降级。
 3. 补齐 S10/S11/S12 的完整退出证据。
 4. Phase 1A 文本实现前确认 P-02 固定画布字体产品决策。
 
 ---
-*Last updated: 2026-07-22 | Reason: record S6 SVG scale and culling evidence*
+*Last updated: 2026-07-22 | Reason: record S7 atomic IndexedDB save and recovery evidence*

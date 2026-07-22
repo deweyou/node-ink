@@ -3,6 +3,7 @@ import type { EditorWebControllerV1 } from '@nodeink-internal/editor-web';
 import {
   exposePointerBenchmark,
   runPlaygroundPointerBenchmark,
+  runPlaygroundPersistenceBenchmark,
   runPlaygroundSketchBenchmark,
   runPlaygroundScenePatchBenchmark,
   runPlaygroundSvgScaleBenchmark,
@@ -58,7 +59,8 @@ if (
   benchmark === 'sketch' ||
   benchmark === 'text' ||
   benchmark === 'scene-patch' ||
-  benchmark === 'svg-scale'
+  benchmark === 'svg-scale' ||
+  benchmark === 'persistence'
 ) {
   const benchmarkOutput = document.createElement('pre');
   benchmarkOutput.className = 'nodeink-benchmark';
@@ -77,7 +79,9 @@ if (
               ? await runPlaygroundTextBenchmark()
               : benchmark === 'scene-patch'
                 ? await runPlaygroundScenePatchBenchmark()
-                : await runPlaygroundSvgScaleBenchmark(),
+                : benchmark === 'svg-scale'
+                  ? await runPlaygroundSvgScaleBenchmark()
+                  : await runPlaygroundPersistenceBenchmark(),
       null,
       2,
     );

@@ -6,6 +6,7 @@
     { "path": "./packages/renderer-svg" },
     { "path": "./packages/editor-web" },
     { "path": "./packages/editor-react" },
+    { "path": "./packages/persistence-web" },
     { "path": "./apps/playground" }
   ]
 }

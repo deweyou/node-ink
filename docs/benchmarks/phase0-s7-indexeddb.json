@@ -1,0 +1,90 @@
+{
+  "commit": "785c22e",
+  "build": "release-wasm-dev-host",
+  "engineAlgorithmVersion": "phase0-s7",
+  "browser": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36",
+  "os": "MacIntel",
+  "hardware": {
+    "logicalProcessors": 18,
+    "deviceMemoryGb": 32,
+    "display": "2056x1329@2x"
+  },
+  "capability": {
+    "indexedDb": true,
+    "strictDurability": true,
+    "sha256": true
+  },
+  "sample": {
+    "iterationsPerPayloadSize": 5,
+    "payloadSizesBytes": [1048576, 10485760]
+  },
+  "scenarios": [
+    {
+      "payloadBytes": 1048576,
+      "iterations": 5,
+      "serializationMs": { "p50": 1.4, "p95": 1.9, "p99": 1.9 },
+      "hashMs": { "p50": 0.4, "p95": 0.6, "p99": 0.6 },
+      "candidateTransactionMs": { "p50": 1.4, "p95": 8.3, "p99": 8.3 },
+      "readBackMs": { "p50": 0.4, "p95": 0.4, "p99": 0.4 },
+      "readBackHashMs": { "p50": 0.4, "p95": 0.5, "p99": 0.5 },
+      "validationMainThreadMs": { "p50": 0.4, "p95": 0.6, "p99": 0.6 },
+      "stableTransactionMs": { "p50": 1.5, "p95": 1.9, "p99": 1.9 },
+      "totalSaveMs": { "p50": 4.4, "p95": 12.3, "p99": 12.3 },
+      "longTasks": { "supported": true, "count": 0, "totalDurationMs": 0 },
+      "recoveredRevision": 5
+    },
+    {
+      "payloadBytes": 10485760,
+      "iterations": 5,
+      "serializationMs": { "p50": 11.1, "p95": 12.5, "p99": 12.5 },
+      "hashMs": { "p50": 4.4, "p95": 4.5, "p99": 4.5 },
+      "candidateTransactionMs": { "p50": 5.7, "p95": 7, "p99": 7 },
+      "readBackMs": { "p50": 3, "p95": 3.5, "p99": 3.5 },
+      "readBackHashMs": { "p50": 4.3, "p95": 4.3, "p99": 4.3 },
+      "validationMainThreadMs": { "p50": 4.3, "p95": 4.6, "p99": 4.6 },
+      "stableTransactionMs": { "p50": 10.4, "p95": 11, "p99": 11 },
+      "totalSaveMs": { "p50": 32.2, "p95": 34.4, "p99": 34.4 },
+      "longTasks": { "supported": true, "count": 0, "totalDurationMs": 0 },
+      "recoveredRevision": 5
+    }
+  ],
+  "interruptions": [
+    {
+      "phase": "before_candidate",
+      "headRevision": 1,
+      "recoveredRevision": 1,
+      "recoveredStatus": "stable"
+    },
+    {
+      "phase": "during_candidate_transaction",
+      "headRevision": 1,
+      "recoveredRevision": 1,
+      "recoveredStatus": "stable"
+    },
+    {
+      "phase": "after_candidate",
+      "headRevision": 2,
+      "recoveredRevision": 1,
+      "recoveredStatus": "stable"
+    },
+    {
+      "phase": "after_readback",
+      "headRevision": 2,
+      "recoveredRevision": 1,
+      "recoveredStatus": "stable"
+    },
+    {
+      "phase": "after_stable",
+      "headRevision": 2,
+      "recoveredRevision": 2,
+      "recoveredStatus": "stable"
+    }
+  ],
+  "decision": {
+    "everyCompletedSaveReadBackVerified": true,
+    "everyInterruptionRecoveredStableSnapshot": true,
+    "noHalfSnapshotOpened": true,
+    "retention": "current stable plus previous stable",
+    "durability": "request strict when capability probe succeeds; always verify read-back"
+  }
+}

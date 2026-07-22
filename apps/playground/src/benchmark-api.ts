@@ -8,6 +8,12 @@ import {
   type StrokeBenchmarkReportV1,
 } from '@nodeink-internal/editor-web';
 import { createWasmEngine } from '@nodeink-internal/engine-web';
+import {
+  AtomicSnapshotPersistenceV1,
+  deleteNodeInkDatabase,
+  IndexedDbSnapshotStoreV1,
+  type SaveInterruptionV1,
+} from '@nodeink-internal/persistence-web';
 import type {
   NodeInkDocumentV1,
   RenderProfileV1,
@@ -132,6 +138,45 @@ export interface PlaygroundSvgScaleBenchmarkReport {
   };
 }
 
+export interface PlaygroundPersistenceBenchmarkReport {
+  build: 'release-wasm-dev-host';
+  engineAlgorithmVersion: 'phase0-s7';
+  browser: string;
+  os: string;
+  hardware: PlaygroundBenchmarkHardware;
+  capability: { indexedDb: true; strictDurability: boolean; sha256: true };
+  sample: { iterationsPerPayloadSize: 5; payloadSizesBytes: [1_048_576, 10_485_760] };
+  scenarios: PersistenceSizeScenarioReport[];
+  interruptions: PersistenceInterruptionReport[];
+  decision: {
+    everyCompletedSaveReadBackVerified: boolean;
+    everyInterruptionRecoveredStableSnapshot: boolean;
+    noHalfSnapshotOpened: boolean;
+  };
+}
+
+interface PersistenceSizeScenarioReport {
+  payloadBytes: 1_048_576 | 10_485_760;
+  iterations: 5;
+  serializationMs: Percentiles;
+  hashMs: Percentiles;
+  candidateTransactionMs: Percentiles;
+  readBackMs: Percentiles;
+  readBackHashMs: Percentiles;
+  validationMainThreadMs: Percentiles;
+  stableTransactionMs: Percentiles;
+  totalSaveMs: Percentiles;
+  longTasks: { supported: boolean; count: number; totalDurationMs: number };
+  recoveredRevision: number;
+}
+
+interface PersistenceInterruptionReport {
+  phase: Exclude<SaveInterruptionV1, null> | 'after_stable';
+  headRevision: number;
+  recoveredRevision: number;
+  recoveredStatus: 'stable';
+}
+
 type SvgFixtureKind = 'simple_path' | 'text_run' | 'sketch_multi_path';
 
 interface SvgScaleScenarioReport {
@@ -183,6 +228,7 @@ declare global {
     nodeInkRunTextBenchmark?: () => Promise<PlaygroundTextBenchmarkReport>;
     nodeInkRunScenePatchBenchmark?: () => Promise<PlaygroundScenePatchBenchmarkReport>;
     nodeInkRunSvgScaleBenchmark?: () => Promise<PlaygroundSvgScaleBenchmarkReport>;
+    nodeInkRunPersistenceBenchmark?: () => Promise<PlaygroundPersistenceBenchmarkReport>;
   }
 }
 
@@ -193,6 +239,7 @@ export function exposePointerBenchmark(controller: EditorWebControllerV1): void 
   window.nodeInkRunTextBenchmark = () => runPlaygroundTextBenchmark();
   window.nodeInkRunScenePatchBenchmark = () => runPlaygroundScenePatchBenchmark();
   window.nodeInkRunSvgScaleBenchmark = () => runPlaygroundSvgScaleBenchmark();
+  window.nodeInkRunPersistenceBenchmark = () => runPlaygroundPersistenceBenchmark();
 }
 
 export async function runPlaygroundPointerBenchmark(
@@ -549,6 +596,216 @@ export async function runPlaygroundSvgScaleBenchmark(): Promise<PlaygroundSvgSca
             scenario.singleNodePatchMs.p95 <= 16.7,
         ),
       cullingOwner: 'scene-resolution-host',
+    },
+  };
+}
+
+export async function runPlaygroundPersistenceBenchmark(): Promise<PlaygroundPersistenceBenchmarkReport> {
+  const databaseName = `nodeink-s7-${crypto.randomUUID()}`;
+  const store = await IndexedDbSnapshotStoreV1.open(databaseName);
+  const strictDurability = store.probeStrictDurability();
+  const durability = strictDurability ? 'strict' : 'relaxed';
+  const persistence = new AtomicSnapshotPersistenceV1({
+    store,
+    validatePayload: validateBenchmarkDocument,
+  });
+  try {
+    const scenarios: PersistenceSizeScenarioReport[] = [];
+    for (const payloadBytes of [1_048_576, 10_485_760] as const) {
+      scenarios.push(await measurePersistenceSize(persistence, payloadBytes, durability));
+    }
+    const interruptions = await measurePersistenceInterruptions(persistence, store, durability);
+    return {
+      build: 'release-wasm-dev-host',
+      engineAlgorithmVersion: 'phase0-s7',
+      ...benchmarkEnvironment(),
+      capability: { indexedDb: true, strictDurability, sha256: true },
+      sample: {
+        iterationsPerPayloadSize: 5,
+        payloadSizesBytes: [1_048_576, 10_485_760],
+      },
+      scenarios,
+      interruptions,
+      decision: {
+        everyCompletedSaveReadBackVerified: scenarios.every(
+          (scenario) => scenario.recoveredRevision === scenario.iterations,
+        ),
+        everyInterruptionRecoveredStableSnapshot: interruptions.every((result) =>
+          result.phase === 'after_stable'
+            ? result.recoveredRevision === 2
+            : result.recoveredRevision === 1,
+        ),
+        noHalfSnapshotOpened: interruptions.every((result) => result.recoveredStatus === 'stable'),
+      },
+    };
+  } finally {
+    store.close();
+    await deleteNodeInkDatabase(databaseName);
+  }
+}
+
+async function measurePersistenceSize(
+  persistence: AtomicSnapshotPersistenceV1,
+  payloadBytes: 1_048_576 | 10_485_760,
+  durability: IDBTransactionDurability,
+): Promise<PersistenceSizeScenarioReport> {
+  const documentId = `size-${payloadBytes}`;
+  const serialization: number[] = [];
+  const hash: number[] = [];
+  const candidate: number[] = [];
+  const readBack: number[] = [];
+  const readBackHash: number[] = [];
+  const validation: number[] = [];
+  const stable: number[] = [];
+  const total: number[] = [];
+  const longTasks = startLongTaskCollection();
+  for (let revision = 1; revision <= 5; revision += 1) {
+    const serializationStartedAt = performance.now();
+    const payload = createBenchmarkDocumentPayload(payloadBytes, documentId, revision);
+    serialization.push(performance.now() - serializationStartedAt);
+    const result = await persistence.save({
+      documentId,
+      revision,
+      expectedPreviousRevision: revision - 1,
+      schemaVersion: 1,
+      engineAlgorithmVersion: 'nodeink-scene-v1',
+      payload,
+      durability,
+      interruptAt: null,
+    });
+    hash.push(result.metrics.hashMs);
+    candidate.push(result.metrics.candidateTransactionMs);
+    readBack.push(result.metrics.readBackMs);
+    readBackHash.push(result.metrics.readBackHashMs);
+    validation.push(result.metrics.validationMs);
+    stable.push(result.metrics.stableTransactionMs);
+    total.push(result.metrics.totalMs);
+    await yieldToBrowser();
+  }
+  const recovered = await persistence.recover(documentId);
+  return {
+    payloadBytes,
+    iterations: 5,
+    serializationMs: percentiles(serialization),
+    hashMs: percentiles(hash),
+    candidateTransactionMs: percentiles(candidate),
+    readBackMs: percentiles(readBack),
+    readBackHashMs: percentiles(readBackHash),
+    validationMainThreadMs: percentiles(validation),
+    stableTransactionMs: percentiles(stable),
+    totalSaveMs: percentiles(total),
+    longTasks: await longTasks.stop(),
+    recoveredRevision: recovered.snapshot.revision,
+  };
+}
+
+async function measurePersistenceInterruptions(
+  persistence: AtomicSnapshotPersistenceV1,
+  store: IndexedDbSnapshotStoreV1,
+  durability: IDBTransactionDurability,
+): Promise<PersistenceInterruptionReport[]> {
+  const phases = [
+    'before_candidate',
+    'during_candidate_transaction',
+    'after_candidate',
+    'after_readback',
+    'after_stable',
+  ] as const;
+  const reports: PersistenceInterruptionReport[] = [];
+  for (const phase of phases) {
+    const documentId = `interrupt-${phase}`;
+    await persistence.save({
+      documentId,
+      revision: 1,
+      expectedPreviousRevision: 0,
+      schemaVersion: 1,
+      engineAlgorithmVersion: 'nodeink-scene-v1',
+      payload: createBenchmarkDocumentPayload(4_096, documentId, 1),
+      durability,
+      interruptAt: null,
+    });
+    const interruptAt = phase === 'after_stable' ? null : phase;
+    try {
+      await persistence.save({
+        documentId,
+        revision: 2,
+        expectedPreviousRevision: 1,
+        schemaVersion: 1,
+        engineAlgorithmVersion: 'nodeink-scene-v1',
+        payload: createBenchmarkDocumentPayload(4_096, documentId, 2),
+        durability,
+        interruptAt,
+      });
+    } catch (error) {
+      if (!(error instanceof Error) || !error.message.includes('interrupted')) throw error;
+    }
+    const catalog = await store.getCatalog(documentId);
+    const recovered = await persistence.recover(documentId);
+    reports.push({
+      phase,
+      headRevision: catalog?.headRevision ?? 0,
+      recoveredRevision: recovered.snapshot.revision,
+      recoveredStatus: recovered.snapshot.status as 'stable',
+    });
+  }
+  return reports;
+}
+
+function createBenchmarkDocumentPayload(
+  targetBytes: number,
+  documentId: string,
+  revision: number,
+): Uint8Array {
+  const encoder = new TextEncoder();
+  const shell = JSON.stringify({ schemaVersion: 1, documentId, revision, padding: '' });
+  const paddingLength = Math.max(0, targetBytes - encoder.encode(shell).byteLength);
+  return encoder.encode(
+    JSON.stringify({ schemaVersion: 1, documentId, revision, padding: 'x'.repeat(paddingLength) }),
+  );
+}
+
+function validateBenchmarkDocument(payload: Uint8Array, schemaVersion: number): void {
+  const parsed = JSON.parse(new TextDecoder().decode(payload)) as {
+    schemaVersion?: unknown;
+    documentId?: unknown;
+    revision?: unknown;
+  };
+  if (
+    schemaVersion !== 1 ||
+    parsed.schemaVersion !== 1 ||
+    typeof parsed.documentId !== 'string' ||
+    typeof parsed.revision !== 'number'
+  ) {
+    throw new Error('benchmark document does not satisfy schema V1');
+  }
+}
+
+function startLongTaskCollection(): {
+  stop(): Promise<{ supported: boolean; count: number; totalDurationMs: number }>;
+} {
+  const durations: number[] = [];
+  if (typeof PerformanceObserver === 'undefined') {
+    return { stop: async () => ({ supported: false, count: 0, totalDurationMs: 0 }) };
+  }
+  let supported = true;
+  const observer = new PerformanceObserver((list) => {
+    durations.push(...list.getEntries().map((entry) => entry.duration));
+  });
+  try {
+    observer.observe({ type: 'longtask', buffered: false });
+  } catch {
+    supported = false;
+  }
+  return {
+    async stop() {
+      await yieldToBrowser();
+      durations.push(...observer.takeRecords().map((entry) => entry.duration));
+      observer.disconnect();
+      return {
+        supported,
+        count: durations.length,
+        totalDurationMs: round(durations.reduce((sum, duration) => sum + duration, 0)),
+      };
     },
   };
 }

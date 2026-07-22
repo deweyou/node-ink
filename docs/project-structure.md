@@ -8,6 +8,7 @@ flowchart TD
     Protocol --> Controller["editor-web\nController + Actions"]
     Engine --> Controller
     Controller --> Renderer["renderer-svg\nDOM reconciliation"]
+    Protocol --> Persistence["persistence-web\nIndexedDB + recovery"]
     Controller --> React["editor-react\nReact adapter"]
     Renderer --> Vanilla["Vanilla host"]
     Renderer --> React
@@ -25,6 +26,7 @@ packages/protocol/          TypeScript wire types and runtime parsing
 packages/engine-web/        Generated WASM loading and EnginePort implementation
 packages/editor-web/        Framework-neutral Controller and editor actions
 packages/renderer-svg/      Framework-neutral SVG DOM renderer
+packages/persistence-web/   Framework-neutral IndexedDB persistence and recovery
 packages/editor-react/      Optional React adapter
 scripts/                    Cargo/WASM orchestration and target-dir policy
 docs/                       Product, architecture, decisions, plans, and repo memory
@@ -45,6 +47,7 @@ docs/                       Product, architecture, decisions, plans, and repo me
 - `protocol` defines the TypeScript view of wire contracts; wire casing is camelCase.
 - `editor-web` may depend on browser APIs, but not component frameworks.
 - `renderer-svg` paints resolved nodes; it does not infer Document semantics.
+- `persistence-web` owns IndexedDB transactions, SHA-256 read-back verification and stable snapshot recovery; it does not mutate Document semantics.
 - `editor-react` can be replaced without changing engine, controller, or renderer packages.
 
 ## Build Boundaries
@@ -55,4 +58,4 @@ docs/                       Product, architecture, decisions, plans, and repo me
 - Rust task output defaults outside the repository to avoid the observed macOS extended-attribute failure. `NODEINK_CARGO_TARGET_DIR` is the supported override.
 
 ---
-*Last updated: 2026-07-21 | Reason: document the first executable Rust-WASM-Web package graph and startup path*
+*Last updated: 2026-07-22 | Reason: add the S7 persistence-web ownership boundary*
