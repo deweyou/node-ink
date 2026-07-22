@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::{RectElementV1, ScenePathV1, StrokeElementV1, Vec2};
+use crate::{RECTANGLE_STROKE_WIDTH, RectElementV1, ScenePathV1, StrokeElementV1, Vec2};
 
 pub const ENGINE_ALGORITHM_VERSION: &str = "nodeink-scene-v1";
 
@@ -103,7 +103,7 @@ pub(crate) fn sketch_rectangle(
             "none".to_string()
         },
         stroke: "#047857".to_string(),
-        stroke_width: 2.0,
+        stroke_width: RECTANGLE_STROKE_WIDTH,
     }];
     if *fill_style == SketchFillStyleV1::Hachure {
         paths.push(ScenePathV1 {

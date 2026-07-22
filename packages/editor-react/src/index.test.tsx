@@ -36,6 +36,7 @@ describe('NodeInkEditor', () => {
     expect(controller.mountTarget?.className).toBe('nodeink-canvas');
     expect(button(target, 'Rectangle').disabled).toBe(false);
     expect(button(target, 'Move').disabled).toBe(true);
+    expect(button(target, 'Delete').disabled).toBe(true);
     expect(button(target, '100%').title).toBe('回正并适应全部内容');
     expect(button(target, '100%').ariaLabel).toBe('回正并适应全部内容，当前 100%');
 
@@ -48,13 +49,14 @@ describe('NodeInkEditor', () => {
         errorMessage: 'recoverable engine error',
       });
     });
-    for (const label of ['Rectangle', 'Move', 'Undo', 'Redo', '−', '100%', '+']) {
+    for (const label of ['Rectangle', 'Move', 'Delete', 'Undo', 'Redo', '−', '100%', '+']) {
       await act(async () => button(target, label).click());
     }
 
     expect(controller.actions.map((action) => action.type)).toEqual([
       'create_rectangle',
       'move_active',
+      'delete_selection',
       'undo',
       'redo',
       'zoom_out',
@@ -155,6 +157,7 @@ class StubController implements EditorWebControllerV1 {
     sceneRevision: 0,
     elementCount: 0,
     activeElementId: null,
+    selectionBounds: null,
     canUndo: false,
     canRedo: false,
     errorMessage: null,

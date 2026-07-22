@@ -11,6 +11,7 @@
   --ui-color-focus-ring: hsl(154 58.28% 55%);
   --ui-color-danger-text: hsl(8 72.16% 45%);
   --ui-color-danger-soft: hsl(8 76% 97%);
+  --nodeink-selection-color: hsl(211 100% 45%);
   --ui-radius-auto: 0.5rem;
   --ui-radius-pill: 999px;
   --ui-motion-duration-fast: 140ms;
@@ -72,6 +73,13 @@ button:disabled {
   color: var(--ui-color-text-disabled);
   cursor: not-allowed;
   background: var(--ui-color-canvas);
+}
+
+button[data-danger='true']:hover:not(:disabled),
+button[data-danger='true']:focus-visible {
+  border-color: var(--ui-color-danger-text);
+  color: var(--ui-color-danger-text);
+  background: var(--ui-color-danger-soft);
 }
 
 .nodeink-shell {
@@ -150,13 +158,17 @@ button:disabled {
   touch-action: none;
 }
 
-.nodeink-canvas rect {
+.nodeink-canvas [data-source-element-id] {
   cursor: grab;
   filter: drop-shadow(0 8px 14px color-mix(in srgb, var(--ui-color-text) 8%, transparent));
 }
 
-.nodeink-canvas rect:active {
+.nodeink-canvas [data-source-element-id]:active {
   cursor: grabbing;
+}
+
+.nodeink-canvas [data-nodeink-selection-outline] {
+  filter: none;
 }
 
 .nodeink-status {

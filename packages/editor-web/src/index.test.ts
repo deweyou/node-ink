@@ -8,6 +8,7 @@ import type {
   DiagramOperationBatchV1,
   EnginePortV1,
   EngineUpdateV1,
+  EditorOverlayV1,
   NormalizedPointerEventV1,
   PointerUpdateV1,
   RendererV1,
@@ -274,6 +275,57 @@ describe('EditorWebController', () => {
     expect(renderer.snapshots.at(-1)?.documentRevision).toBe(2);
   });
 
+  it('clears and deletes the Rust-owned selection through shared editor actions', async () => {
+    const engine = new StubEngine();
+    const renderer = new StubRenderer();
+    const controller = new EditorWebController({
+      engine,
+      renderer,
+      createId: (() => {
+        const ids = ['create-command', 'rect-1', 'delete-command'];
+        return () => ids.shift() ?? 'fallback';
+      })(),
+    });
+    await controller.mount(document.createElement('div'));
+
+    await controller.dispatch({ type: 'create_rectangle' });
+    expect(controller.getSnapshot()).toMatchObject({
+      activeElementId: 'rect-1',
+      selectionBounds: { x: 80, y: 72, width: 176, height: 104 },
+    });
+    expect(renderer.overlays.at(-1)).toEqual({
+      selectionBounds: { x: 80, y: 72, width: 176, height: 104 },
+      selectionPaddingWorld: 6,
+    });
+
+    await controller.dispatch({ type: 'zoom_in' });
+    expect(renderer.overlays.at(-1)).toEqual({
+      selectionBounds: { x: 80, y: 72, width: 176, height: 104 },
+      selectionPaddingWorld: 4,
+    });
+
+    const cleared = await controller.dispatch({ type: 'clear_selection' });
+    expect(cleared.snapshot).toMatchObject({
+      documentRevision: 1,
+      activeElementId: null,
+      selectionBounds: null,
+    });
+
+    await engine.setSelection('rect-1');
+    await controller.dispatch({ type: 'pointer_events', events: [pointerEvent('down', 1)] });
+    const deleted = await controller.dispatch({ type: 'delete_selection' });
+    expect(deleted.snapshot).toMatchObject({
+      documentRevision: 2,
+      elementCount: 0,
+      activeElementId: null,
+      selectionBounds: null,
+    });
+    expect(engine.commands.at(-1)?.command).toEqual({
+      type: 'delete_elements',
+      elementIds: ['rect-1'],
+    });
+  });
+
   it('supports explicit geometry, history, subscriptions, and idempotent disposal', async () => {
     const engine = new StubEngine();
     const renderer = new StubRenderer();
@@ -368,7 +420,7 @@ describe('EditorWebController', () => {
     });
     expect(withoutSelection).toMatchObject({
       ok: false,
-      snapshot: { status: 'error', errorMessage: 'Create a rectangle before moving it' },
+      snapshot: { status: 'error', errorMessage: 'Select an element before editing it' },
     });
 
     engine.executeError = 'engine rejected command';
@@ -406,7 +458,7 @@ describe('EditorWebController', () => {
     );
   });
 
-  it('selects the last rendered element when no operation preference exists', async () => {
+  it('does not infer selection from the last rendered element', async () => {
     const controller = new EditorWebController({
       engine: new StubEngine('existing-rect'),
       renderer: new StubRenderer(),
@@ -414,7 +466,8 @@ describe('EditorWebController', () => {
 
     await controller.mount(document.createElement('div'));
 
-    expect(controller.getSnapshot().activeElementId).toBe('existing-rect');
+    expect(controller.getSnapshot().activeElementId).toBeNull();
+    expect(controller.getSnapshot().selectionBounds).toBeNull();
   });
 
   it('pairs pointer listeners across repeated mounts and releases resources once', async () => {
@@ -675,6 +728,7 @@ class StubEngine implements EnginePortV1 {
   #camera: CameraV1 = { x: 0, y: 0, zoom: 1 };
   #revision = 0;
   #rectangleId: string | null;
+  #selectedElementId: string | null = null;
   #canRedo = false;
 
   constructor(rectangleId: string | null = null) {
@@ -738,8 +792,28 @@ class StubEngine implements EnginePortV1 {
     this.#canRedo = false;
     if (command.command.type === 'create_rectangle') {
       this.#rectangleId = command.command.rectangle.id;
+      this.#selectedElementId = this.#rectangleId;
+    } else if (command.command.type === 'move_elements') {
+      this.#selectedElementId = command.command.elementIds[0] ?? this.#selectedElementId;
+    } else if (command.command.type === 'delete_elements') {
+      if (this.#selectedElementId && command.command.elementIds.includes(this.#selectedElementId)) {
+        this.#selectedElementId = null;
+      }
+      if (this.#rectangleId && command.command.elementIds.includes(this.#rectangleId)) {
+        this.#rectangleId = null;
+      }
     }
-    return this.update([this.#rectangleId ?? 'rect-1']);
+    return this.update(
+      command.command.type === 'delete_elements' ? [] : [this.#rectangleId ?? 'rect-1'],
+    );
+  }
+
+  async setSelection(elementId: string | null): Promise<EngineUpdateV1> {
+    if (elementId && elementId !== this.#rectangleId) {
+      throw new Error(`element ${elementId} was not found`);
+    }
+    this.#selectedElementId = elementId;
+    return this.update();
   }
 
   async executeDiagramOperation(
@@ -901,6 +975,10 @@ class StubEngine implements EnginePortV1 {
         : null,
       scene,
       history: { canUndo: this.#revision > 0, canRedo: this.#canRedo },
+      selection: {
+        selectedElementId: this.#selectedElementId,
+        bounds: this.#selectedElementId ? { x: 80, y: 72, width: 176, height: 104 } : null,
+      },
     };
   }
 }
@@ -908,6 +986,7 @@ class StubEngine implements EnginePortV1 {
 class StubRenderer implements RendererV1 {
   readonly snapshots: SceneSnapshotV1[] = [];
   readonly viewports: Array<{ x: number; y: number; width: number; height: number }> = [];
+  readonly overlays: EditorOverlayV1[] = [];
   shouldReject = false;
   mountCalls = 0;
   unmountCalls = 0;
@@ -919,6 +998,10 @@ class StubRenderer implements RendererV1 {
   setViewport(viewport: { x: number; y: number; width: number; height: number }) {
     this.viewports.push(viewport);
     return { durationMs: 0 };
+  }
+
+  setOverlay(overlay: EditorOverlayV1): void {
+    this.overlays.push(overlay);
   }
 
   applySnapshot(snapshot: SceneSnapshotV1) {
@@ -975,6 +1058,7 @@ function stubScene(revision: number, rectangleId: string | null): SceneSnapshotV
             height: 104,
             fill: '#d1fae5',
             stroke: '#047857',
+            strokeWidth: 2,
           },
         }
       : {};
@@ -997,7 +1081,6 @@ function pointerEvent(
     sequence,
     phase,
     point: { x: 10, y: 20 },
-    targetElementId: phase === 'down' ? 'rect-1' : null,
   };
 }
 

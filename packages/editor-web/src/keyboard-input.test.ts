@@ -1,8 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { attachHistoryShortcuts } from './keyboard-input';
+import { attachEditorShortcuts } from './keyboard-input';
 
-describe('attachHistoryShortcuts', () => {
+describe('attachEditorShortcuts', () => {
   it.each([
     [{ key: 'z', metaKey: true }, 'undo'],
     [{ key: 'z', ctrlKey: true }, 'undo'],
@@ -12,7 +12,7 @@ describe('attachHistoryShortcuts', () => {
   ] as const)('maps %o to %s', (options, expectedAction) => {
     const shortcutTarget = document.implementation.createHTMLDocument();
     const listener = vi.fn(() => true);
-    attachHistoryShortcuts(shortcutTarget, listener);
+    attachEditorShortcuts(shortcutTarget, listener);
     const event = keyboardEvent(options);
 
     shortcutTarget.body.dispatchEvent(event);
@@ -24,7 +24,7 @@ describe('attachHistoryShortcuts', () => {
   it('leaves unavailable history actions and unrelated shortcuts to the browser', () => {
     const shortcutTarget = document.implementation.createHTMLDocument();
     const listener = vi.fn(() => false);
-    attachHistoryShortcuts(shortcutTarget, listener);
+    attachEditorShortcuts(shortcutTarget, listener);
     const unavailableUndo = keyboardEvent({ key: 'z', metaKey: true });
     const unmodifiedKey = keyboardEvent({ key: 'z' });
     const alternateShortcut = keyboardEvent({ key: 'z', metaKey: true, altKey: true });
@@ -46,7 +46,7 @@ describe('attachHistoryShortcuts', () => {
     editable.setAttribute('contenteditable', 'true');
     shortcutTarget.body.append(input, editable);
     const listener = vi.fn(() => true);
-    const detach = attachHistoryShortcuts(shortcutTarget, listener);
+    const detach = attachEditorShortcuts(shortcutTarget, listener);
 
     input.dispatchEvent(keyboardEvent({ key: 'z', metaKey: true }));
     editable.dispatchEvent(keyboardEvent({ key: 'z', ctrlKey: true }));
@@ -58,6 +58,22 @@ describe('attachHistoryShortcuts', () => {
     shortcutTarget.dispatchEvent(keyboardEvent({ key: 'z', metaKey: true }));
 
     expect(listener).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['Delete', 'delete_selection'],
+    ['Backspace', 'delete_selection'],
+    ['Escape', 'clear_selection'],
+  ] as const)('maps %s to %s without browser side effects', (key, expectedAction) => {
+    const shortcutTarget = document.implementation.createHTMLDocument();
+    const listener = vi.fn(() => true);
+    attachEditorShortcuts(shortcutTarget, listener);
+    const event = keyboardEvent({ key });
+
+    shortcutTarget.body.dispatchEvent(event);
+
+    expect(listener).toHaveBeenCalledWith(expectedAction);
+    expect(event.defaultPrevented).toBe(true);
   });
 });
 

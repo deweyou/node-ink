@@ -391,13 +391,17 @@ export async function runPlaygroundPointerBenchmark(
       throw new Error(created.snapshot.errorMessage ?? 'failed to create benchmark rectangle');
     }
   }
-  const elementId = controller.getSnapshot().activeElementId;
-  if (!elementId) {
-    throw new Error('benchmark rectangle is not active');
+  const selectionBounds = controller.getSnapshot().selectionBounds;
+  if (!selectionBounds) {
+    throw new Error('benchmark rectangle selection bounds are unavailable');
   }
+  const startPoint = {
+    x: selectionBounds.x + selectionBounds.width / 2,
+    y: selectionBounds.y + selectionBounds.height / 2,
+  };
 
-  const singleEvent = await runPointerBenchmark({ controller, elementId, batchSize: 1 });
-  const batch8 = await runPointerBenchmark({ controller, elementId, batchSize: 8 });
+  const singleEvent = await runPointerBenchmark({ controller, startPoint, batchSize: 1 });
+  const batch8 = await runPointerBenchmark({ controller, startPoint, batchSize: 8 });
   return {
     build: 'release-wasm-dev-host',
     engineAlgorithmVersion: 'phase0-s1',
@@ -1271,6 +1275,10 @@ class LifecycleRenderer implements RendererV1 {
 
   setViewport(viewport: ViewportV1) {
     return this.#renderer.setViewport(viewport);
+  }
+
+  setOverlay(overlay: Parameters<RendererV1['setOverlay']>[0]): void {
+    this.#renderer.setOverlay(overlay);
   }
 
   applySnapshot(snapshot: SceneSnapshotV1) {

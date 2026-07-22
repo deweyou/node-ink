@@ -73,6 +73,15 @@ impl EngineHandle {
         serde_json::to_string(&update).map_err(|error| js_error("serialization_failed", error))
     }
 
+    #[wasm_bindgen(js_name = setSelection)]
+    pub fn set_selection(&mut self, element_id: Option<String>) -> Result<String, JsValue> {
+        let update = self
+            .engine
+            .set_selection(element_id)
+            .map_err(engine_error)?;
+        serde_json::to_string(&update).map_err(|error| js_error("serialization_failed", error))
+    }
+
     #[wasm_bindgen(js_name = executeDiagramOperation)]
     pub fn execute_diagram_operation(&mut self, batch_json: &str) -> Result<String, JsValue> {
         let batch: DiagramOperationBatchV1 =

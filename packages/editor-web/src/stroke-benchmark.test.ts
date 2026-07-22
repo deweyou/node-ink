@@ -168,6 +168,7 @@ function success(): EditorActionResultV1 {
       sceneRevision: 0,
       elementCount: 0,
       activeElementId: null,
+      selectionBounds: null,
       canUndo: false,
       canRedo: false,
       errorMessage: null,

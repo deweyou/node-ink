@@ -17,6 +17,7 @@ describe('SvgRenderer', () => {
 
     expect(movedRectangle).toBe(firstRectangle);
     expect(movedRectangle?.getAttribute('x')).toBe('56');
+    expect(movedRectangle?.getAttribute('stroke-width')).toBe('2');
     expect(target.querySelector('svg')?.dataset.sceneRevision).toBe('2');
   });
 
@@ -93,6 +94,48 @@ describe('SvgRenderer', () => {
     expect(result.durationMs).toBeGreaterThanOrEqual(0);
     expect(target.querySelector('svg')?.getAttribute('viewBox')).toBe('120 80 640 480');
   });
+
+  it('renders a straight selection ring with explicit world-space padding', () => {
+    const target = document.createElement('div');
+    const renderer = new SvgRenderer();
+    renderer.mount(target);
+    renderer.applySnapshot(scene(1, 24));
+
+    renderer.setOverlay({
+      selectionBounds: { x: 20, y: 32, width: 160, height: 96 },
+      selectionPaddingWorld: 3,
+    });
+
+    const svg = target.querySelector('svg');
+    const overlay = target.querySelector('[data-nodeink-overlay]');
+    const outline = target.querySelector('[data-nodeink-selection-outline]');
+    expect(outline?.getAttribute('x')).toBe('17');
+    expect(outline?.getAttribute('y')).toBe('29');
+    expect(outline?.getAttribute('width')).toBe('166');
+    expect(outline?.getAttribute('height')).toBe('102');
+    expect(outline?.hasAttribute('rx')).toBe(false);
+    expect(outline?.getAttribute('stroke')).toContain('--nodeink-selection-color');
+    expect(outline?.getAttribute('stroke-width')).toBe('2');
+    expect(outline?.hasAttribute('stroke-dasharray')).toBe(false);
+    expect(outline?.getAttribute('vector-effect')).toBe('non-scaling-stroke');
+    expect(overlay?.getAttribute('pointer-events')).toBe('none');
+    expect(svg?.lastElementChild).toBe(overlay);
+
+    renderer.setOverlay({ selectionBounds: null, selectionPaddingWorld: 3 });
+    expect(target.querySelector('[data-nodeink-selection-outline]')).toBeNull();
+  });
+
+  it.each([Number.NaN, Number.POSITIVE_INFINITY, -1])(
+    'rejects invalid selection padding %s',
+    (selectionPaddingWorld) => {
+      const renderer = new SvgRenderer();
+      renderer.mount(document.createElement('div'));
+
+      expect(() => renderer.setOverlay({ selectionBounds: null, selectionPaddingWorld })).toThrow(
+        'finite non-negative',
+      );
+    },
+  );
 
   it.each([
     { x: Number.NaN, y: 0, width: 1, height: 1 },
@@ -232,6 +275,7 @@ function scene(sceneRevision: number, x: number): SceneSnapshotV1 {
         height: 96,
         fill: '#d1fae5',
         stroke: '#047857',
+        strokeWidth: 2,
       },
     },
   };

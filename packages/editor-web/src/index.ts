@@ -10,18 +10,19 @@ import {
   type RectElementV1,
   type RendererV1,
   type RenderApplyResultV1,
-  type SceneSnapshotV1,
+  type SelectionBoundsV1,
   type StrokeInputBatchV1,
   type StrokeTransportV1,
   type StrokeUpdateV1,
 } from '@nodeink-internal/protocol';
 
 import { attachPointerInput } from './pointer-input';
-import { attachHistoryShortcuts } from './keyboard-input';
+import { attachEditorShortcuts } from './keyboard-input';
 import { attachCameraInput, type CameraInputBindingV1 } from './camera-input';
 
 const CAMERA_ZOOM_STEP = 1.5;
 const CAMERA_FIT_PADDING = 64;
+const SELECTION_GAP_PX = 6;
 
 export type EditorActionV1 =
   | {
@@ -30,6 +31,8 @@ export type EditorActionV1 =
       position?: { x: number; y: number };
     }
   | { type: 'move_active'; delta: { x: number; y: number } }
+  | { type: 'delete_selection' }
+  | { type: 'clear_selection' }
   | { type: 'pointer_events'; events: NormalizedPointerEventV1[] }
   | { type: 'stroke_batch'; batch: StrokeInputBatchV1; transport: StrokeTransportV1 }
   | { type: 'undo' }
@@ -86,6 +89,7 @@ export interface EditorUiSnapshotV1 {
   sceneRevision: number;
   elementCount: number;
   activeElementId: string | null;
+  selectionBounds: SelectionBoundsV1 | null;
   canUndo: boolean;
   canRedo: boolean;
   errorMessage: string | null;
@@ -147,7 +151,7 @@ export class EditorWebController implements EditorWebControllerV1 {
   #documentId: string | null = null;
   #detachPointerInput: (() => void) | null = null;
   #cameraInput: CameraInputBindingV1 | null = null;
-  #detachHistoryShortcuts: (() => void) | null = null;
+  #detachEditorShortcuts: (() => void) | null = null;
   #detachVisibilityFlush: (() => void) | null = null;
   #detachPersistence: (() => void) | null = null;
   #detachResize: (() => void) | null = null;
@@ -174,6 +178,7 @@ export class EditorWebController implements EditorWebControllerV1 {
       sceneRevision: 0,
       elementCount: 0,
       activeElementId: null,
+      selectionBounds: null,
       canUndo: false,
       canRedo: false,
       errorMessage: null,
@@ -225,11 +230,16 @@ export class EditorWebController implements EditorWebControllerV1 {
             },
           )
         : null;
-    this.#detachHistoryShortcuts?.();
-    this.#detachHistoryShortcuts =
+    this.#detachEditorShortcuts?.();
+    this.#detachEditorShortcuts =
       this.#snapshot.documentAccess === 'writer'
-        ? attachHistoryShortcuts(target.ownerDocument, (action) => {
-            const isAvailable = action === 'undo' ? this.#snapshot.canUndo : this.#snapshot.canRedo;
+        ? attachEditorShortcuts(target.ownerDocument, (action) => {
+            const isAvailable =
+              action === 'undo'
+                ? this.#snapshot.canUndo
+                : action === 'redo'
+                  ? this.#snapshot.canRedo
+                  : this.#snapshot.activeElementId !== null;
             if (this.#snapshot.status !== 'ready' || !isAvailable) {
               return false;
             }
@@ -304,8 +314,8 @@ export class EditorWebController implements EditorWebControllerV1 {
     this.#detachPointerInput = null;
     this.#cameraInput?.detach();
     this.#cameraInput = null;
-    this.#detachHistoryShortcuts?.();
-    this.#detachHistoryShortcuts = null;
+    this.#detachEditorShortcuts?.();
+    this.#detachEditorShortcuts = null;
     this.#detachVisibilityFlush?.();
     this.#detachVisibilityFlush = null;
     this.#detachPersistence?.();
@@ -459,6 +469,7 @@ export class EditorWebController implements EditorWebControllerV1 {
       width: size.width / this.#snapshot.camera.zoom,
       height: size.height / this.#snapshot.camera.zoom,
     });
+    this.applySelectionOverlay();
   }
 
   private cameraViewportSize(): { width: number; height: number } {
@@ -550,6 +561,9 @@ export class EditorWebController implements EditorWebControllerV1 {
     if (action.type === 'redo') {
       return { update: await this.#engine.redo() };
     }
+    if (action.type === 'clear_selection') {
+      return { update: await this.#engine.setSelection(null) };
+    }
     if (!this.#documentId) {
       throw new Error('Editor must be mounted before dispatching document actions');
     }
@@ -581,7 +595,11 @@ export class EditorWebController implements EditorWebControllerV1 {
         },
       };
     }
-    if (action.type !== 'create_rectangle' && action.type !== 'move_active') {
+    if (
+      action.type !== 'create_rectangle' &&
+      action.type !== 'move_active' &&
+      action.type !== 'delete_selection'
+    ) {
       throw new Error(`Unsupported editor action: ${action.type}`);
     }
     const envelope: CommandEnvelopeV1 = {
@@ -595,11 +613,16 @@ export class EditorWebController implements EditorWebControllerV1 {
               type: 'create_rectangle',
               rectangle: createRectangle(action.elementId ?? this.#createId(), action.position),
             }
-          : {
-              type: 'move_elements',
-              elementIds: [this.requireActiveElement()],
-              delta: action.delta,
-            },
+          : action.type === 'move_active'
+            ? {
+                type: 'move_elements',
+                elementIds: [this.requireActiveElement()],
+                delta: action.delta,
+              }
+            : {
+                type: 'delete_elements',
+                elementIds: [this.requireActiveElement()],
+              },
     };
     return { update: await this.#engine.executeCommand(envelope) };
   }
@@ -613,21 +636,19 @@ export class EditorWebController implements EditorWebControllerV1 {
       throw new Error(`Renderer rejected scene: ${renderResult.reason}`);
     }
     this.#documentId = update.scene.documentId;
-    const activeElementId = chooseActiveElement(
-      update.scene,
-      update.operation?.changedElementIds.at(-1) ?? this.#snapshot.activeElementId,
-    );
     this.#snapshot = {
       ...this.#snapshot,
       status: 'ready',
       documentRevision: update.scene.documentRevision,
       sceneRevision: update.scene.sceneRevision,
       elementCount: update.scene.rootNodeIds.length,
-      activeElementId,
+      activeElementId: update.selection.selectedElementId,
+      selectionBounds: update.selection.bounds,
       canUndo: update.history.canUndo,
       canRedo: update.history.canRedo,
       errorMessage: null,
     };
+    this.applySelectionOverlay();
     if (emit) {
       this.emit();
     }
@@ -645,9 +666,16 @@ export class EditorWebController implements EditorWebControllerV1 {
 
   private requireActiveElement(): string {
     if (!this.#snapshot.activeElementId) {
-      throw new Error('Create a rectangle before moving it');
+      throw new Error('Select an element before editing it');
     }
     return this.#snapshot.activeElementId;
+  }
+
+  private applySelectionOverlay(): void {
+    this.#renderer.setOverlay({
+      selectionBounds: this.#snapshot.selectionBounds,
+      selectionPaddingWorld: SELECTION_GAP_PX / this.#snapshot.camera.zoom,
+    });
   }
 
   private ensureActive(): void {
@@ -749,20 +777,6 @@ function createRectangle(
     width: 176,
     height: 104,
   };
-}
-
-function chooseActiveElement(
-  scene: SceneSnapshotV1,
-  preferredElementId: string | null,
-): string | null {
-  if (
-    preferredElementId &&
-    Object.values(scene.nodes).some((node) => node.sourceElementId === preferredElementId)
-  ) {
-    return preferredElementId;
-  }
-  const lastNodeId = scene.rootNodeIds.at(-1);
-  return lastNodeId ? (scene.nodes[lastNodeId]?.sourceElementId ?? null) : null;
 }
 
 function defaultId(): string {

@@ -18,6 +18,11 @@ pub struct NormalizedPointerEventV1 {
     pub sequence: u64,
     pub phase: PointerPhaseV1,
     pub point: Vec2,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct TargetedPointerEvent {
+    pub input: NormalizedPointerEventV1,
     pub target_element_id: Option<ElementId>,
 }
 
@@ -47,6 +52,7 @@ pub(crate) struct PointerBatchOutcome {
     pub processed_event_count: usize,
     pub ignored_event_count: usize,
     pub transition: PointerTransition,
+    pub selection_change: Option<Option<ElementId>>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -71,18 +77,25 @@ impl PointerMachine {
     pub fn process_batch(
         &mut self,
         expected_revision: u64,
-        events: Vec<NormalizedPointerEventV1>,
+        events: Vec<TargetedPointerEvent>,
     ) -> PointerBatchOutcome {
         let processed_event_count = events.len();
         let mut ignored_event_count = 0;
         let mut transition = PointerTransition::None;
+        let mut selection_change = None;
 
         for event in events {
             match self.process_event(expected_revision, event) {
                 EventOutcome::Ignored => ignored_event_count += 1,
-                EventOutcome::Accepted(next_transition) => {
+                EventOutcome::Accepted {
+                    transition: next_transition,
+                    selection: next_selection,
+                } => {
                     if next_transition != PointerTransition::None {
                         transition = next_transition;
+                    }
+                    if next_selection.is_some() {
+                        selection_change = next_selection;
                     }
                 }
             }
@@ -92,6 +105,7 @@ impl PointerMachine {
             processed_event_count,
             ignored_event_count,
             transition,
+            selection_change,
         }
     }
 
@@ -102,24 +116,30 @@ impl PointerMachine {
     fn process_event(
         &mut self,
         expected_revision: u64,
-        event: NormalizedPointerEventV1,
+        event: TargetedPointerEvent,
     ) -> EventOutcome {
+        let TargetedPointerEvent {
+            input,
+            target_element_id,
+        } = event;
         match &mut self.state {
             PointerState::Idle => {
-                let Some(element_id) = event.target_element_id else {
-                    return EventOutcome::Ignored;
-                };
-                if event.phase != PointerPhaseV1::Down {
+                if input.phase != PointerPhaseV1::Down {
                     return EventOutcome::Ignored;
                 }
-                self.state = PointerState::Dragging {
-                    pointer_id: event.pointer_id,
-                    element_id,
-                    origin: event.point,
-                    last_sequence: event.sequence,
-                    expected_revision,
-                };
-                EventOutcome::Accepted(PointerTransition::None)
+                if let Some(element_id) = target_element_id.as_ref() {
+                    self.state = PointerState::Dragging {
+                        pointer_id: input.pointer_id,
+                        element_id: element_id.clone(),
+                        origin: input.point,
+                        last_sequence: input.sequence,
+                        expected_revision,
+                    };
+                }
+                EventOutcome::Accepted {
+                    transition: PointerTransition::None,
+                    selection: Some(target_element_id),
+                }
             }
             PointerState::Dragging {
                 pointer_id,
@@ -128,21 +148,19 @@ impl PointerMachine {
                 last_sequence,
                 expected_revision,
             } => {
-                if event.pointer_id != *pointer_id || event.sequence <= *last_sequence {
+                if input.pointer_id != *pointer_id || input.sequence <= *last_sequence {
                     return EventOutcome::Ignored;
                 }
-                *last_sequence = event.sequence;
+                *last_sequence = input.sequence;
                 let delta = Vec2 {
-                    x: event.point.x - origin.x,
-                    y: event.point.y - origin.y,
+                    x: input.point.x - origin.x,
+                    y: input.point.y - origin.y,
                 };
-                match event.phase {
-                    PointerPhaseV1::Move => {
-                        EventOutcome::Accepted(PointerTransition::Preview(PointerPreview {
-                            element_id: element_id.clone(),
-                            delta,
-                        }))
-                    }
+                let transition = match input.phase {
+                    PointerPhaseV1::Move => PointerTransition::Preview(PointerPreview {
+                        element_id: element_id.clone(),
+                        delta,
+                    }),
                     PointerPhaseV1::Up => {
                         let commit = PointerCommit {
                             element_id: element_id.clone(),
@@ -150,13 +168,17 @@ impl PointerMachine {
                             expected_revision: *expected_revision,
                         };
                         self.state = PointerState::Idle;
-                        EventOutcome::Accepted(PointerTransition::Commit(commit))
+                        PointerTransition::Commit(commit)
                     }
                     PointerPhaseV1::Cancel => {
                         self.state = PointerState::Idle;
-                        EventOutcome::Accepted(PointerTransition::Cancelled)
+                        PointerTransition::Cancelled
                     }
-                    PointerPhaseV1::Down => EventOutcome::Ignored,
+                    PointerPhaseV1::Down => return EventOutcome::Ignored,
+                };
+                EventOutcome::Accepted {
+                    transition,
+                    selection: None,
                 }
             }
         }
@@ -165,5 +187,8 @@ impl PointerMachine {
 
 enum EventOutcome {
     Ignored,
-    Accepted(PointerTransition),
+    Accepted {
+        transition: PointerTransition,
+        selection: Option<Option<ElementId>>,
+    },
 }

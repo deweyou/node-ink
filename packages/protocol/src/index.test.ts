@@ -48,6 +48,7 @@ describe('protocol V1', () => {
             nodes: {},
           },
           history: { canUndo: false, canRedo: false },
+          selection: { selectedElementId: null, bounds: null },
         }),
       ),
     ).toThrow('protocol V1');
@@ -65,6 +66,10 @@ describe('protocol V1', () => {
         nodes: {},
       },
       history: { canUndo: true, canRedo: false },
+      selection: {
+        selectedElementId: 'rect-1',
+        bounds: { x: 8, y: 12, width: 120, height: 80 },
+      },
     };
 
     expect(parseEngineUpdate(JSON.stringify(update))).toEqual(update);
@@ -126,12 +131,28 @@ describe('protocol V1', () => {
     expect(() => parseScenePatch(JSON.stringify(value))).toThrow('protocol V1');
   });
 
-  it.each([null, {}, { scene: null, history: {} }, { scene: {}, history: null }])(
-    'rejects structurally invalid update payloads',
-    (value) => {
-      expect(() => parseEngineUpdate(JSON.stringify(value))).toThrow('invalid update payload');
-    },
-  );
+  it.each([
+    null,
+    {},
+    { scene: null, history: {} },
+    { scene: {}, history: null },
+    { ...updateFixture(), selection: null },
+  ])('rejects structurally invalid update payloads', (value) => {
+    expect(() => parseEngineUpdate(JSON.stringify(value))).toThrow('invalid update payload');
+  });
+
+  it.each([
+    {},
+    { selectedElementId: 1, bounds: null },
+    { selectedElementId: null, bounds: {} },
+    { selectedElementId: null, bounds: { x: 0, y: 0, width: 10, height: 10 } },
+    { selectedElementId: 'rect-1', bounds: null },
+    { selectedElementId: 'rect-1', bounds: { x: 0, y: 0, width: -1, height: 10 } },
+  ])('rejects invalid selection state %o', (selection) => {
+    expect(() => parseEngineUpdate(JSON.stringify({ ...updateFixture(), selection }))).toThrow(
+      'protocol V1',
+    );
+  });
 
   it.each([
     ['document revision', { documentRevision: '0' }],
@@ -302,6 +323,7 @@ function updateFixture(
       ...sceneOverride,
     },
     history: { canUndo: false, canRedo: false, ...historyOverride },
+    selection: { selectedElementId: null, bounds: null },
   };
 }
 

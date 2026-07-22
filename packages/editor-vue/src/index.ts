@@ -124,6 +124,16 @@ export const NodeInkEditor = defineComponent({
             'button',
             {
               type: 'button',
+              'data-danger': 'true',
+              disabled: !isEditable || !currentSnapshot.activeElementId,
+              onClick: () => dispatch({ type: 'delete_selection' }),
+            },
+            'Delete',
+          ),
+          h(
+            'button',
+            {
+              type: 'button',
               disabled: !isEditable || !currentSnapshot.canUndo,
               onClick: () => dispatch({ type: 'undo' }),
             },
@@ -182,6 +192,7 @@ export const NodeInkEditor = defineComponent({
             h('span', currentSnapshot.status),
             h('span', `document r${currentSnapshot.documentRevision}`),
             h('span', `${currentSnapshot.elementCount} elements`),
+            h('span', currentSnapshot.activeElementId ? '1 selected' : 'No selection'),
           ]),
           persistence.notice
             ? h('p', { class: 'nodeink-notice', role: 'status' }, persistence.notice)
