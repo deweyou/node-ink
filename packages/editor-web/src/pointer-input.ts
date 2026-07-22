@@ -77,7 +77,6 @@ function normalizeEvents(
       sequence,
       phase,
       point: toCanvasPoint(event.clientX, event.clientY),
-      targetElementId: phase === 'down' ? sourceElementId(event.target) : null,
     };
   });
 }
@@ -107,12 +106,6 @@ function createScreenToCanvasPoint(
 
   const bounds = target.getBoundingClientRect();
   return (clientX, clientY) => ({ x: clientX - bounds.left, y: clientY - bounds.top });
-}
-
-function sourceElementId(target: EventTarget | null): string | null {
-  return target instanceof Element
-    ? (target.closest<SVGElement>('[data-source-element-id]')?.dataset.sourceElementId ?? null)
-    : null;
 }
 
 function releasePointer(target: HTMLElement, pointerId: number): void {

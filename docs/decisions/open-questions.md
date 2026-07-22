@@ -182,6 +182,14 @@
 - 空文档 fit 回到 `{ x: 0, y: 0, zoom: 1 }`；绝对 Camera 仍 clamp 到 10%–800%，超大范围到 10% 仍放不下时不越过安全边界。
 - 首次打开且没有已保存 Camera 时使用 fit content；已有 Camera 仍按 P-06 恢复。fitZoom 是派生状态，不进入 Document 或 Camera session store。
 
+### D-27 Phase 1A 单选与元素删除
+
+- 单击按 Document root order 选择最上层语义元素；单击空白或按 `Escape` 清空选择。Phase 1A 保持单选，不提前加入框选、多选或完整变换手柄。
+- Selection、hover 和拖动预览属于 Rust Editor State，但不进入 Document、序列化快照、Camera session store 或 Undo history。
+- 浏览器只传归一化 world coordinates；Rust Geometry 负责矩形和自由笔命中，Renderer 只绘制 Rust 返回的选择 bounds，不从 SVG/DOM 反推语义目标。
+- 拖动在 PointerUp 时提交一次 `move_elements` Transaction；`Delete`、`Backspace` 和显式工具栏按钮都通过一次 `delete_elements` Transaction 删除当前元素，因此可 Undo/Redo。
+- 此处删除的是当前 Document 内的元素，不决定 P-04 的文档级回收站语义。
+
 ## 22. 需要产品负责人决策的问题
 
 以下问题不阻碍继续评审文档，但会阻碍对应功能进入实现。
@@ -268,4 +276,4 @@
 P-01 已确认，Phase 0 可以实施。进入相应产品功能前必须确认其余问题；未到决策时点的问题可以保留待确认，但不能由实现者自行选择用户可见行为。
 
 ---
-*Last updated: 2026-07-22 | Reason: record the confirmed fit-content Camera and fit-relative 100% semantics*
+*Last updated: 2026-07-22 | Reason: record the confirmed Rust-owned single-selection and element deletion semantics*

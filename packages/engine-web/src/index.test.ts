@@ -11,6 +11,7 @@ const wasm = vi.hoisted(() => {
     applyCameraAction: vi.fn(),
     currentUpdate: vi.fn(),
     executeCommand: vi.fn(),
+    setSelection: vi.fn(),
     executeDiagramOperation: vi.fn(),
     handlePointerEvents: vi.fn(),
     handleStrokeBatchJson: vi.fn(),
@@ -50,6 +51,7 @@ describe('createWasmEngine', () => {
     wasm.handle.applyCameraAction.mockReturnValue('{"x":12,"y":6,"zoom":2}');
     wasm.handle.currentUpdate.mockReturnValue(update);
     wasm.handle.executeCommand.mockReturnValue(update);
+    wasm.handle.setSelection.mockReturnValue(update);
     wasm.handle.executeDiagramOperation.mockReturnValue(diagramOperationResult());
     wasm.handle.handlePointerEvents.mockReturnValue(pointerUpdate());
     wasm.handle.handleStrokeBatchJson.mockReturnValue(strokeUpdate());
@@ -104,6 +106,9 @@ describe('createWasmEngine', () => {
     await expect(engine.executeCommand(command)).resolves.toMatchObject({
       history: { canUndo: false },
     });
+    await expect(engine.setSelection('rect-1')).resolves.toMatchObject({
+      selection: { selectedElementId: null },
+    });
     await expect(engine.executeDiagramOperation(batch)).resolves.toMatchObject({
       batchId: 'batch-1',
       revision: 1,
@@ -115,7 +120,6 @@ describe('createWasmEngine', () => {
         sequence: 1,
         phase: 'down' as const,
         point: { x: 1, y: 2 },
-        targetElementId: 'rect-1',
       },
     ];
     await expect(engine.handlePointerEvents(pointerEvents, 'drag-1')).resolves.toMatchObject({
@@ -180,6 +184,7 @@ describe('createWasmEngine', () => {
     expect(wasm.default).toHaveBeenCalledOnce();
     expect(wasm.openDocument).toHaveBeenCalledWith(JSON.stringify(document));
     expect(wasm.handle.executeCommand).toHaveBeenCalledWith(JSON.stringify(command));
+    expect(wasm.handle.setSelection).toHaveBeenCalledWith('rect-1');
     expect(wasm.handle.setCamera).toHaveBeenCalledWith('{"x":24,"y":12,"zoom":1.5}');
     expect(wasm.handle.fitCamera).toHaveBeenCalledWith(500, 300, 50);
     expect(wasm.handle.applyCameraAction).toHaveBeenCalledWith(
@@ -386,6 +391,7 @@ function validUpdate(): string {
       nodes: {},
     },
     history: { canUndo: false, canRedo: false },
+    selection: { selectedElementId: null, bounds: null },
   });
 }
 

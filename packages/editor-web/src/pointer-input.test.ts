@@ -28,8 +28,8 @@ describe('attachPointerInput', () => {
     rectangle.dispatchEvent(pointerEvent('pointermove', { clientX: 180, clientY: 150 }));
 
     expect(batches).toMatchObject([
-      [{ phase: 'down', point: { x: 20, y: 30 }, targetElementId: 'rect-1' }],
-      [{ phase: 'move', point: { x: 40, y: 50 }, targetElementId: null }],
+      [{ phase: 'down', point: { x: 20, y: 30 } }],
+      [{ phase: 'move', point: { x: 40, y: 50 } }],
     ]);
   });
 
@@ -69,7 +69,6 @@ describe('attachPointerInput', () => {
           sequence: 1,
           phase: 'down',
           point: { x: 20, y: 30 },
-          targetElementId: 'rect-1',
         },
       ],
       [
@@ -78,14 +77,12 @@ describe('attachPointerInput', () => {
           sequence: 2,
           phase: 'move',
           point: { x: 25, y: 35 },
-          targetElementId: null,
         },
         {
           pointerId: 1,
           sequence: 3,
           phase: 'move',
           point: { x: 35, y: 45 },
-          targetElementId: null,
         },
       ],
       [
@@ -94,7 +91,6 @@ describe('attachPointerInput', () => {
           sequence: 4,
           phase: 'up',
           point: { x: 40, y: 50 },
-          targetElementId: null,
         },
       ],
     ]);

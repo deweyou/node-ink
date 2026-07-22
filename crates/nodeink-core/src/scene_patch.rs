@@ -73,6 +73,7 @@ pub fn benchmark_scene_snapshot(
                 height: 10.0,
                 fill: "#d1fae5".to_string(),
                 stroke: "#047857".to_string(),
+                stroke_width: crate::RECTANGLE_STROKE_WIDTH,
             }),
         );
     }
@@ -129,6 +130,7 @@ mod tests {
                 height: 10.0,
                 fill: "#d1fae5".to_string(),
                 stroke: "#047857".to_string(),
+                stroke_width: crate::RECTANGLE_STROKE_WIDTH,
             })
         );
     }
@@ -148,6 +150,7 @@ mod tests {
             height: 16.0,
             fill: "none".to_string(),
             stroke: "black".to_string(),
+            stroke_width: crate::RECTANGLE_STROKE_WIDTH,
         });
         after
             .nodes

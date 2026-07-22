@@ -128,6 +128,19 @@ export interface EngineUpdateV1 {
   operation: OperationResultV1 | null;
   scene: SceneSnapshotV1;
   history: HistoryStateV1;
+  selection: SelectionStateV1;
+}
+
+export interface SelectionBoundsV1 {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export interface SelectionStateV1 {
+  selectedElementId: string | null;
+  bounds: SelectionBoundsV1 | null;
 }
 
 export interface SerializedDocumentV1 {
@@ -253,6 +266,7 @@ export interface SceneRectV1 {
   height: number;
   fill: string;
   stroke: string;
+  strokeWidth: number;
 }
 
 export interface ScenePathV1 {
@@ -300,6 +314,7 @@ export interface EnginePortV1 {
   fitCamera(viewport: CameraViewportV1, padding: number): Promise<CameraV1>;
   applyCameraAction(action: CameraActionV1): Promise<CameraV1>;
   executeCommand(command: CommandEnvelopeV1): Promise<EngineUpdateV1>;
+  setSelection(elementId: string | null): Promise<EngineUpdateV1>;
   executeDiagramOperation(batch: DiagramOperationBatchV1): Promise<DiagramOperationBatchResultV1>;
   handlePointerEvents(
     events: NormalizedPointerEventV1[],
@@ -341,7 +356,6 @@ export interface NormalizedPointerEventV1 {
   sequence: number;
   phase: PointerPhaseV1;
   point: Vec2;
-  targetElementId: string | null;
 }
 
 export interface PointerUpdateV1 {
@@ -372,9 +386,15 @@ export interface StrokeUpdateV1 {
 export interface RendererV1 {
   mount(target: HTMLElement): void;
   setViewport(viewport: ViewportV1): RenderViewportResultV1;
+  setOverlay(overlay: EditorOverlayV1): void;
   applySnapshot(snapshot: SceneSnapshotV1): RenderApplyResultV1;
   applyPatch(patch: ScenePatchV1): RenderApplyResultV1;
   unmount(): void;
+}
+
+export interface EditorOverlayV1 {
+  selectionBounds: SelectionBoundsV1 | null;
+  selectionPaddingWorld: number;
 }
 
 export type RenderApplyResultV1 =
@@ -398,7 +418,12 @@ export function createBlankDocument(documentId: string): NodeInkDocumentV1 {
 
 export function parseEngineUpdate(value: string): EngineUpdateV1 {
   const parsed: unknown = JSON.parse(value);
-  if (!isRecord(parsed) || !isRecord(parsed.scene) || !isRecord(parsed.history)) {
+  if (
+    !isRecord(parsed) ||
+    !isRecord(parsed.scene) ||
+    !isRecord(parsed.history) ||
+    !isRecord(parsed.selection)
+  ) {
     throw new Error('Engine returned an invalid update payload');
   }
   if (
@@ -408,7 +433,11 @@ export function parseEngineUpdate(value: string): EngineUpdateV1 {
     !Array.isArray(parsed.scene.rootNodeIds) ||
     !isRecord(parsed.scene.nodes) ||
     typeof parsed.history.canUndo !== 'boolean' ||
-    typeof parsed.history.canRedo !== 'boolean'
+    typeof parsed.history.canRedo !== 'boolean' ||
+    (parsed.selection.selectedElementId !== null &&
+      typeof parsed.selection.selectedElementId !== 'string') ||
+    !isSelectionBounds(parsed.selection.bounds) ||
+    (parsed.selection.selectedElementId === null) !== (parsed.selection.bounds === null)
   ) {
     throw new Error('Engine update does not satisfy protocol V1');
   }
@@ -440,6 +469,7 @@ export function parseSceneSnapshot(value: string): SceneSnapshotV1 {
       operation: null,
       scene: parsed,
       history: { canUndo: false, canRedo: false },
+      selection: { selectedElementId: null, bounds: null },
     }),
   ).scene;
 }
@@ -554,6 +584,7 @@ export function parseSceneResolution(value: string): SceneResolutionV1 {
         operation: null,
         scene: parsed.scene,
         history: { canUndo: false, canRedo: false },
+        selection: { selectedElementId: null, bounds: null },
       }),
     ).scene,
   };
@@ -605,4 +636,21 @@ export function parseMigrationAttempt(value: string): MigrationAttemptV1 {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function isSelectionBounds(value: unknown): boolean {
+  return (
+    value === null ||
+    (isRecord(value) &&
+      typeof value.x === 'number' &&
+      Number.isFinite(value.x) &&
+      typeof value.y === 'number' &&
+      Number.isFinite(value.y) &&
+      typeof value.width === 'number' &&
+      Number.isFinite(value.width) &&
+      value.width >= 0 &&
+      typeof value.height === 'number' &&
+      Number.isFinite(value.height) &&
+      value.height >= 0)
+  );
 }

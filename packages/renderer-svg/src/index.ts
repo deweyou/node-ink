@@ -1,4 +1,5 @@
 import type {
+  EditorOverlayV1,
   RendererV1,
   RenderApplyResultV1,
   RenderViewportResultV1,
@@ -14,6 +15,7 @@ const svgNamespace = 'http://www.w3.org/2000/svg';
 
 export class SvgRenderer implements RendererV1 {
   #svg: SVGSVGElement | null = null;
+  #overlay: SVGGElement | null = null;
   #nodeElements = new Map<string, SVGElement>();
   #rootNodeIds: string[] = [];
   #sceneRevision: number | null = null;
@@ -25,8 +27,33 @@ export class SvgRenderer implements RendererV1 {
     svg.setAttribute('role', 'img');
     svg.setAttribute('aria-label', 'NodeInk canvas');
     svg.setAttribute('data-nodeink-canvas', 'true');
+    const overlay = document.createElementNS(svgNamespace, 'g');
+    overlay.dataset.nodeinkOverlay = 'true';
+    overlay.setAttribute('pointer-events', 'none');
+    overlay.setAttribute('aria-hidden', 'true');
+    svg.append(overlay);
     target.replaceChildren(svg);
     this.#svg = svg;
+    this.#overlay = overlay;
+  }
+
+  setOverlay(overlay: EditorOverlayV1): void {
+    if (!Number.isFinite(overlay.selectionPaddingWorld) || overlay.selectionPaddingWorld < 0) {
+      throw new Error('Selection overlay padding must be a finite non-negative number');
+    }
+    const group = this.requireOverlay();
+    group.replaceChildren();
+    if (overlay.selectionBounds) {
+      const outline = createSelectionRectangle(
+        overlay.selectionBounds,
+        overlay.selectionPaddingWorld,
+      );
+      outline.dataset.nodeinkSelectionOutline = 'true';
+      outline.setAttribute('stroke', 'var(--nodeink-selection-color, #0b74de)');
+      outline.setAttribute('stroke-width', '2');
+      group.append(outline);
+    }
+    this.requireSvg().append(group);
   }
 
   setViewport(viewport: ViewportV1): RenderViewportResultV1 {
@@ -74,6 +101,7 @@ export class SvgRenderer implements RendererV1 {
     this.#rootNodeIds = [...snapshot.rootNodeIds];
     this.#sceneRevision = snapshot.sceneRevision;
     svg.dataset.sceneRevision = String(snapshot.sceneRevision);
+    svg.append(this.requireOverlay());
     return {
       ok: true,
       sceneRevision: snapshot.sceneRevision,
@@ -122,6 +150,7 @@ export class SvgRenderer implements RendererV1 {
 
     this.#sceneRevision = patch.sceneRevision;
     svg.dataset.sceneRevision = String(patch.sceneRevision);
+    svg.append(this.requireOverlay());
     return {
       ok: true,
       sceneRevision: patch.sceneRevision,
@@ -137,6 +166,7 @@ export class SvgRenderer implements RendererV1 {
   unmount(): void {
     this.#svg?.remove();
     this.#svg = null;
+    this.#overlay = null;
     this.#nodeElements.clear();
     this.#rootNodeIds = [];
     this.#sceneRevision = null;
@@ -162,7 +192,7 @@ export class SvgRenderer implements RendererV1 {
     rectangle.setAttribute('rx', '12');
     rectangle.setAttribute('fill', node.fill);
     rectangle.setAttribute('stroke', node.stroke);
-    rectangle.setAttribute('stroke-width', '2');
+    rectangle.setAttribute('stroke-width', String(node.strokeWidth));
     this.#nodeElements.set(node.id, rectangle);
     return rectangle;
   }
@@ -216,4 +246,25 @@ export class SvgRenderer implements RendererV1 {
     }
     return this.#svg;
   }
+
+  private requireOverlay(): SVGGElement {
+    if (!this.#overlay) {
+      throw new Error('SVG renderer must be mounted before applying an editor overlay');
+    }
+    return this.#overlay;
+  }
+}
+
+function createSelectionRectangle(
+  bounds: NonNullable<EditorOverlayV1['selectionBounds']>,
+  padding: number,
+): SVGRectElement {
+  const rectangle = document.createElementNS(svgNamespace, 'rect');
+  rectangle.setAttribute('x', String(bounds.x - padding));
+  rectangle.setAttribute('y', String(bounds.y - padding));
+  rectangle.setAttribute('width', String(bounds.width + padding * 2));
+  rectangle.setAttribute('height', String(bounds.height + padding * 2));
+  rectangle.setAttribute('fill', 'none');
+  rectangle.setAttribute('vector-effect', 'non-scaling-stroke');
+  return rectangle;
 }

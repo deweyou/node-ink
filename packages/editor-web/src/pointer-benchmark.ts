@@ -4,7 +4,7 @@ import type { EditorWebControllerV1 } from './index';
 
 export interface PointerBenchmarkOptions {
   controller: Pick<EditorWebControllerV1, 'dispatch'>;
-  elementId: string;
+  startPoint: { x: number; y: number };
   durationSeconds?: number;
   inputHz?: number;
   batchSize?: number;
@@ -37,7 +37,7 @@ export interface PointerBenchmarkResult {
 
 export async function runPointerBenchmark({
   controller,
-  elementId,
+  startPoint,
   durationSeconds = 30,
   inputHz = 120,
   batchSize = 1,
@@ -65,7 +65,7 @@ export async function runPointerBenchmark({
     commitCount += result.pointerMetrics.didCommit ? 1 : 0;
   };
 
-  await dispatch([pointerEvent(elementId, 'down', sequence, 0)]);
+  await dispatch([pointerEvent('down', sequence, startPoint.x, startPoint.y)]);
   sequence += 1;
 
   for (let offset = 0; offset < moveEventCount; offset += normalizedBatchSize) {
@@ -73,13 +73,13 @@ export async function runPointerBenchmark({
     const batchEnd = Math.min(moveEventCount, offset + normalizedBatchSize);
     for (let index = offset; index < batchEnd; index += 1) {
       const progress = (index + 1) / moveEventCount;
-      events.push(pointerEvent(null, 'move', sequence, progress * 120));
+      events.push(pointerEvent('move', sequence, startPoint.x + progress * 120, startPoint.y));
       sequence += 1;
     }
     await dispatch(events);
   }
 
-  await dispatch([pointerEvent(null, 'up', sequence, 120)]);
+  await dispatch([pointerEvent('up', sequence, startPoint.x + 120, startPoint.y)]);
 
   const metrics = {
     p50Ms: percentile(durations, 0.5),
@@ -103,17 +103,16 @@ export async function runPointerBenchmark({
 }
 
 function pointerEvent(
-  targetElementId: string | null,
   phase: NormalizedPointerEventV1['phase'],
   sequence: number,
   x: number,
+  y: number,
 ): NormalizedPointerEventV1 {
   return {
     pointerId: 1,
     sequence,
     phase,
-    point: { x, y: 0 },
-    targetElementId,
+    point: { x, y },
   };
 }
 

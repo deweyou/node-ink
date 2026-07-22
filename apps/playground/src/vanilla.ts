@@ -39,6 +39,7 @@ rootElement.innerHTML = `
     <aside class="nodeink-toolbar" aria-label="Canvas actions">
       <button type="button" data-action="create_rectangle">Rectangle</button>
       <button type="button" data-action="move_active">Move</button>
+      <button type="button" data-action="delete_selection" data-danger="true">Delete</button>
       <button type="button" data-action="undo">Undo</button>
       <button type="button" data-action="redo">Redo</button>
     </aside>
@@ -152,6 +153,8 @@ rootElement.addEventListener('click', (event) => {
     void controller.dispatch({ type: 'create_rectangle' });
   } else if (action === 'move_active') {
     void controller.dispatch({ type: 'move_active', delta: { x: 32, y: 16 } });
+  } else if (action === 'delete_selection') {
+    void controller.dispatch({ type: 'delete_selection' });
   } else if (action === 'undo') {
     void controller.dispatch({ type: 'undo' });
   } else if (action === 'redo') {
@@ -181,6 +184,7 @@ function renderSnapshot(
     <span>${snapshot.status}</span>
     <span>document r${snapshot.documentRevision}</span>
     <span>${snapshot.elementCount} elements</span>
+    <span>${snapshot.activeElementId ? '1 selected' : 'No selection'}</span>
   `;
   noticeElement.hidden = !persistence.notice;
   noticeElement.textContent = persistence.notice;
@@ -215,6 +219,7 @@ function renderSnapshot(
   const camera = getEditorCameraPresentation(snapshot);
   setDisabled(root, 'create_rectangle', !isEditable);
   setDisabled(root, 'move_active', !isEditable || !snapshot.activeElementId);
+  setDisabled(root, 'delete_selection', !isEditable || !snapshot.activeElementId);
   setDisabled(root, 'undo', !isEditable || !snapshot.canUndo);
   setDisabled(root, 'redo', !isEditable || !snapshot.canRedo);
   setDisabled(root, 'zoom_out', snapshot.status !== 'ready');

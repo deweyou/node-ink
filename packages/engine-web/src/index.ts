@@ -42,6 +42,7 @@ interface WasmEngineHandle {
   fitCamera(viewportWidth: number, viewportHeight: number, padding: number): string;
   applyCameraAction(actionJson: string): string;
   executeCommand(commandJson: string): string;
+  setSelection(elementId: string | undefined): string;
   executeDiagramOperation(batchJson: string): string;
   handlePointerEvents(eventsJson: string, commandId: string): string;
   handleStrokeBatchJson(batchJson: string, commandId: string): string;
@@ -129,6 +130,14 @@ class WasmEnginePort implements EnginePortV1 {
   async executeCommand(command: CommandEnvelopeV1): Promise<EngineUpdateV1> {
     try {
       return parseEngineUpdate(this.requireHandle().executeCommand(JSON.stringify(command)));
+    } catch (error) {
+      throw normalizeEngineError(error);
+    }
+  }
+
+  async setSelection(elementId: string | null): Promise<EngineUpdateV1> {
+    try {
+      return parseEngineUpdate(this.requireHandle().setSelection(elementId ?? undefined));
     } catch (error) {
       throw normalizeEngineError(error);
     }

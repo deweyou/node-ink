@@ -1,17 +1,17 @@
-export type HistoryShortcutAction = 'undo' | 'redo';
+export type EditorShortcutAction = 'undo' | 'redo' | 'delete_selection' | 'clear_selection';
 
-export type HistoryShortcutListener = (action: HistoryShortcutAction) => boolean;
+export type EditorShortcutListener = (action: EditorShortcutAction) => boolean;
 
-export function attachHistoryShortcuts(
+export function attachEditorShortcuts(
   target: Document,
-  onHistoryShortcut: HistoryShortcutListener,
+  onShortcut: EditorShortcutListener,
 ): () => void {
   const handleKeyDown = (event: KeyboardEvent) => {
-    const action = historyAction(event);
+    const action = editorAction(event);
     if (!action || isEditableTarget(event.target)) {
       return;
     }
-    if (onHistoryShortcut(action)) {
+    if (onShortcut(action)) {
       event.preventDefault();
     }
   };
@@ -20,7 +20,7 @@ export function attachHistoryShortcuts(
   return () => target.removeEventListener('keydown', handleKeyDown);
 }
 
-function historyAction(event: KeyboardEvent): HistoryShortcutAction | null {
+function editorAction(event: KeyboardEvent): EditorShortcutAction | null {
   if (event.defaultPrevented || event.isComposing || event.altKey) {
     return null;
   }
@@ -30,6 +30,14 @@ function historyAction(event: KeyboardEvent): HistoryShortcutAction | null {
   }
   if (event.ctrlKey && !event.metaKey && !event.shiftKey && key === 'y') {
     return 'redo';
+  }
+  if (!event.metaKey && !event.ctrlKey && !event.shiftKey) {
+    if (key === 'delete' || key === 'backspace') {
+      return 'delete_selection';
+    }
+    if (key === 'escape') {
+      return 'clear_selection';
+    }
   }
   return null;
 }

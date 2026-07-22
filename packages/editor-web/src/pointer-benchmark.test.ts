@@ -9,6 +9,7 @@ const readySnapshot: EditorUiSnapshotV1 = {
   sceneRevision: 0,
   elementCount: 1,
   activeElementId: 'rect-1',
+  selectionBounds: { x: 0, y: 0, width: 100, height: 80 },
   canUndo: false,
   canRedo: false,
   errorMessage: null,
@@ -45,7 +46,7 @@ describe('runPointerBenchmark', () => {
 
     const result = await runPointerBenchmark({
       controller,
-      elementId: 'rect-1',
+      startPoint: { x: 50, y: 40 },
       durationSeconds: 0.01,
       inputHz: 100,
       batchSize: 0,
@@ -84,7 +85,7 @@ describe('runPointerBenchmark', () => {
             snapshot: { ...readySnapshot, errorMessage: 'engine failed' },
           }),
         },
-        elementId: 'rect-1',
+        startPoint: { x: 50, y: 40 },
         durationSeconds: 0,
         inputHz: 0,
       }),

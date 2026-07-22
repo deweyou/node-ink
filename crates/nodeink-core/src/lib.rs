@@ -8,6 +8,7 @@ mod migration;
 mod operation;
 mod pointer;
 mod scene_patch;
+mod selection;
 mod sketch;
 mod stroke;
 mod text;
@@ -24,8 +25,10 @@ pub use operation::{
     MAX_OPERATION_BATCH_SIZE, RectanglePatchV1,
 };
 pub use pointer::{NormalizedPointerEventV1, PointerPhaseV1};
-use pointer::{PointerMachine, PointerPreview, PointerTransition};
+use pointer::{PointerMachine, PointerPreview, PointerTransition, TargetedPointerEvent};
 pub use scene_patch::{ScenePatchV1, benchmark_scene_patch, benchmark_scene_snapshot, diff_scene};
+pub use selection::{SelectionBoundsV1, SelectionStateV1};
+use selection::{SelectionModel, hit_test_document};
 pub use sketch::{ENGINE_ALGORITHM_VERSION, RenderProfileV1, SketchFillStyleV1};
 use sketch::{sketch_rectangle, sketch_stroke};
 pub use stroke::{StrokeInputBatchV1, StrokePhaseV1};
@@ -38,6 +41,7 @@ pub use text::{
 
 pub const PROTOCOL_VERSION: u32 = 1;
 pub const SCHEMA_VERSION: u32 = 1;
+pub(crate) const RECTANGLE_STROKE_WIDTH: f64 = 2.0;
 
 pub type DocumentId = String;
 pub type ElementId = String;
@@ -179,6 +183,7 @@ pub struct EngineUpdateV1 {
     pub operation: Option<OperationResultV1>,
     pub scene: SceneSnapshotV1,
     pub history: HistoryStateV1,
+    pub selection: SelectionStateV1,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -238,6 +243,7 @@ pub struct SceneRectV1 {
     pub height: f64,
     pub fill: String,
     pub stroke: String,
+    pub stroke_width: f64,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -325,6 +331,7 @@ pub struct Engine {
     scene_revision: u64,
     undo_stack: Vec<NodeInkDocumentV1>,
     redo_stack: Vec<NodeInkDocumentV1>,
+    selection: SelectionModel,
     pointer_machine: PointerMachine,
     stroke_machine: StrokeMachine,
 }
@@ -338,6 +345,7 @@ impl Engine {
             scene_revision: 0,
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
+            selection: SelectionModel::default(),
             pointer_machine: PointerMachine::default(),
             stroke_machine: StrokeMachine::default(),
         })
@@ -383,7 +391,8 @@ impl Engine {
     ) -> Result<EngineUpdateV1, EngineErrorV1> {
         self.pointer_machine.cancel();
         self.stroke_machine.cancel();
-        self.execute_command_without_pointer_reset(envelope)
+        let selection_after = selection_after_command(&envelope.command, &self.selection);
+        self.execute_command_without_pointer_reset(envelope, selection_after)
     }
 
     pub fn execute_diagram_operation(
@@ -427,8 +436,12 @@ impl Engine {
                 self.pointer_machine.cancel();
                 self.stroke_machine.cancel();
                 let changed_element_ids = unique_element_ids(&affected_by_operation);
-                let update =
-                    self.commit_transaction(batch_id.clone(), candidate, changed_element_ids);
+                let update = self.commit_transaction(
+                    batch_id.clone(),
+                    candidate,
+                    changed_element_ids,
+                    SelectionAfterCommand::Preserve,
+                );
                 (Some(update.scene.document_revision), update.scene)
             }
             DiagramOperationModeV1::DryRun => (
@@ -459,9 +472,24 @@ impl Engine {
         events: Vec<NormalizedPointerEventV1>,
     ) -> Result<PointerUpdateV1, EngineErrorV1> {
         self.stroke_machine.cancel();
+        let targeted_events = events
+            .into_iter()
+            .map(|input| {
+                let target_element_id = (input.phase == PointerPhaseV1::Down)
+                    .then(|| hit_test_document(&self.document, input.point, self.camera.zoom))
+                    .flatten();
+                TargetedPointerEvent {
+                    input,
+                    target_element_id,
+                }
+            })
+            .collect();
         let outcome = self
             .pointer_machine
-            .process_batch(self.document.revision, events);
+            .process_batch(self.document.revision, targeted_events);
+        if let Some(selected_element_id) = outcome.selection_change {
+            self.selection.set_from_hit_test(selected_element_id);
+        }
         let (update, did_commit) = match outcome.transition {
             PointerTransition::None => (self.current_update(), false),
             PointerTransition::Preview(preview) => {
@@ -488,7 +516,13 @@ impl Engine {
                             delta: commit.delta,
                         },
                     };
-                    (self.execute_command_without_pointer_reset(envelope)?, true)
+                    (
+                        self.execute_command_without_pointer_reset(
+                            envelope,
+                            SelectionAfterCommand::Preserve,
+                        )?,
+                        true,
+                    )
                 }
             }
         };
@@ -534,7 +568,13 @@ impl Engine {
                         stroke: commit.stroke,
                     },
                 };
-                (self.execute_command_without_pointer_reset(envelope)?, true)
+                (
+                    self.execute_command_without_pointer_reset(
+                        envelope,
+                        SelectionAfterCommand::Preserve,
+                    )?,
+                    true,
+                )
             }
         };
         Ok(StrokeUpdateV1 {
@@ -548,6 +588,7 @@ impl Engine {
     fn execute_command_without_pointer_reset(
         &mut self,
         envelope: CommandEnvelopeV1,
+        selection_after: SelectionAfterCommand,
     ) -> Result<EngineUpdateV1, EngineErrorV1> {
         self.validate_envelope(&envelope)?;
 
@@ -556,6 +597,7 @@ impl Engine {
             envelope.command_id,
             candidate,
             unique_element_ids(&changed_by_command),
+            selection_after,
         ))
     }
 
@@ -578,11 +620,19 @@ impl Engine {
         transaction_id: String,
         candidate: NodeInkDocumentV1,
         changed_element_ids: Vec<ElementId>,
+        selection_after: SelectionAfterCommand,
     ) -> EngineUpdateV1 {
         let previous_revision = self.document.revision;
         self.undo_stack.push(self.document.clone());
         self.redo_stack.clear();
         self.document = candidate;
+        match selection_after {
+            SelectionAfterCommand::Preserve => self.selection.reconcile(&self.document),
+            SelectionAfterCommand::Set(selected_element_id) => self
+                .selection
+                .set(&self.document, selected_element_id)
+                .expect("selection after a validated transaction must reference a live element"),
+        }
         self.scene_revision += 1;
 
         self.update(Some(OperationResultV1 {
@@ -605,6 +655,7 @@ impl Engine {
         self.redo_stack.push(self.document.clone());
         previous.revision = next_revision;
         self.document = previous;
+        self.selection.reconcile(&self.document);
         self.scene_revision += 1;
         Ok(self.update(None))
     }
@@ -620,12 +671,23 @@ impl Engine {
         self.undo_stack.push(self.document.clone());
         next.revision = next_revision;
         self.document = next;
+        self.selection.reconcile(&self.document);
         self.scene_revision += 1;
         Ok(self.update(None))
     }
 
     pub fn current_update(&self) -> EngineUpdateV1 {
         self.update(None)
+    }
+
+    pub fn set_selection(
+        &mut self,
+        selected_element_id: Option<ElementId>,
+    ) -> Result<EngineUpdateV1, EngineErrorV1> {
+        self.pointer_machine.cancel();
+        self.stroke_machine.cancel();
+        self.selection.set(&self.document, selected_element_id)?;
+        Ok(self.current_update())
     }
 
     pub fn serialize_document(&self) -> Result<String, serde_json::Error> {
@@ -717,6 +779,47 @@ impl Engine {
                 can_undo: !self.undo_stack.is_empty(),
                 can_redo: !self.redo_stack.is_empty(),
             },
+            selection: self.selection.snapshot(
+                &self.document,
+                pointer_preview.map(|preview| (preview.element_id.as_str(), preview.delta)),
+            ),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+enum SelectionAfterCommand {
+    Preserve,
+    Set(Option<ElementId>),
+}
+
+fn selection_after_command(
+    command: &CommandV1,
+    selection: &SelectionModel,
+) -> SelectionAfterCommand {
+    match command {
+        CommandV1::CreateRectangle { rectangle } => {
+            SelectionAfterCommand::Set(Some(rectangle.id.clone()))
+        }
+        CommandV1::CreateStroke { stroke } => SelectionAfterCommand::Set(Some(stroke.id.clone())),
+        CommandV1::MoveElements { element_ids, .. } => element_ids
+            .first()
+            .cloned()
+            .map_or(SelectionAfterCommand::Preserve, |element_id| {
+                SelectionAfterCommand::Set(Some(element_id))
+            }),
+        CommandV1::UpdateRectangle { element_id, .. } => {
+            SelectionAfterCommand::Set(Some(element_id.clone()))
+        }
+        CommandV1::DeleteElements { element_ids } => {
+            if selection
+                .selected_element_id()
+                .is_some_and(|selected| element_ids.iter().any(|element_id| element_id == selected))
+            {
+                SelectionAfterCommand::Set(None)
+            } else {
+                SelectionAfterCommand::Preserve
+            }
         }
     }
 }
@@ -991,6 +1094,7 @@ fn resolve_scene(
                             height: resolved.height,
                             fill: "#d1fae5".to_string(),
                             stroke: "#047857".to_string(),
+                            stroke_width: RECTANGLE_STROKE_WIDTH,
                         }),
                     );
                 } else {
@@ -1917,16 +2021,20 @@ mod tests {
         let down = engine
             .handle_pointer_events(
                 "drag-1".to_string(),
-                vec![pointer_event(PointerPhaseV1::Down, 1, 24.0, Some("rect-1"))],
+                vec![pointer_event(PointerPhaseV1::Down, 1, 24.0)],
             )
             .unwrap();
         assert!(!down.did_commit);
         assert_eq!(down.processed_event_count, 1);
+        assert_eq!(
+            down.update.selection.selected_element_id.as_deref(),
+            Some("rect-1")
+        );
 
         let preview = engine
             .handle_pointer_events(
                 "drag-1".to_string(),
-                vec![pointer_event(PointerPhaseV1::Move, 2, 56.0, None)],
+                vec![pointer_event(PointerPhaseV1::Move, 2, 56.0)],
             )
             .unwrap();
         let SceneNodeV1::Rect(preview_rectangle) = &preview.update.scene.nodes["rect-1:shape"]
@@ -1934,6 +2042,7 @@ mod tests {
             panic!("rectangle should resolve to a rectangle scene node");
         };
         assert_eq!(preview_rectangle.x, 56.0);
+        assert_eq!(preview.update.selection.bounds.as_ref().unwrap().x, 55.0);
         assert_eq!(preview.update.scene.document_revision, 0);
         let ElementRecordV1::Rect(document_rectangle) = &engine.document().elements["rect-1"]
         else {
@@ -1944,7 +2053,7 @@ mod tests {
         let committed = engine
             .handle_pointer_events(
                 "drag-1".to_string(),
-                vec![pointer_event(PointerPhaseV1::Up, 3, 56.0, None)],
+                vec![pointer_event(PointerPhaseV1::Up, 3, 56.0)],
             )
             .unwrap();
         assert!(committed.did_commit);
@@ -1970,14 +2079,14 @@ mod tests {
             .handle_pointer_events(
                 "drag-batch".to_string(),
                 vec![
-                    pointer_event(PointerPhaseV1::Down, 10, 24.0, Some("rect-1")),
+                    pointer_event(PointerPhaseV1::Down, 10, 24.0),
                     NormalizedPointerEventV1 {
                         pointer_id: 2,
-                        ..pointer_event(PointerPhaseV1::Move, 11, 40.0, None)
+                        ..pointer_event(PointerPhaseV1::Move, 11, 40.0)
                     },
-                    pointer_event(PointerPhaseV1::Move, 11, 40.0, None),
-                    pointer_event(PointerPhaseV1::Move, 11, 48.0, None),
-                    pointer_event(PointerPhaseV1::Move, 12, 64.0, None),
+                    pointer_event(PointerPhaseV1::Move, 11, 40.0),
+                    pointer_event(PointerPhaseV1::Move, 11, 48.0),
+                    pointer_event(PointerPhaseV1::Move, 12, 64.0),
                 ],
             )
             .unwrap();
@@ -1997,7 +2106,7 @@ mod tests {
         let ignored = engine
             .handle_pointer_events(
                 "ignored".to_string(),
-                vec![pointer_event(PointerPhaseV1::Move, 1, 40.0, None)],
+                vec![pointer_event(PointerPhaseV1::Move, 1, 40.0)],
             )
             .unwrap();
         assert_eq!(ignored.ignored_event_count, 1);
@@ -2005,13 +2114,13 @@ mod tests {
         engine
             .handle_pointer_events(
                 "cancelled".to_string(),
-                vec![pointer_event(PointerPhaseV1::Down, 2, 24.0, Some("rect-1"))],
+                vec![pointer_event(PointerPhaseV1::Down, 2, 24.0)],
             )
             .unwrap();
         let cancelled = engine
             .handle_pointer_events(
                 "cancelled".to_string(),
-                vec![pointer_event(PointerPhaseV1::Cancel, 3, 48.0, None)],
+                vec![pointer_event(PointerPhaseV1::Cancel, 3, 48.0)],
             )
             .unwrap();
         assert!(!cancelled.did_commit);
@@ -2020,17 +2129,132 @@ mod tests {
         engine
             .handle_pointer_events(
                 "zero".to_string(),
-                vec![pointer_event(PointerPhaseV1::Down, 4, 24.0, Some("rect-1"))],
+                vec![pointer_event(PointerPhaseV1::Down, 4, 24.0)],
             )
             .unwrap();
         let zero_delta = engine
             .handle_pointer_events(
                 "zero".to_string(),
-                vec![pointer_event(PointerPhaseV1::Up, 5, 24.0, None)],
+                vec![pointer_event(PointerPhaseV1::Up, 5, 24.0)],
             )
             .unwrap();
         assert!(!zero_delta.did_commit);
         assert_eq!(engine.undo(), Err(EngineErrorV1::UndoUnavailable));
+    }
+
+    #[test]
+    fn pointer_hit_test_selects_topmost_geometry_and_blank_canvas_clears_selection() {
+        let mut document = document_with_rectangle();
+        let top = RectElementV1 {
+            id: "rect-top".to_string(),
+            x: 20.0,
+            y: 30.0,
+            width: 120.0,
+            height: 80.0,
+        };
+        document.root_order.push(top.id.clone());
+        document
+            .elements
+            .insert(top.id.clone(), ElementRecordV1::Rect(top));
+        let mut engine = Engine::open(document).unwrap();
+        let serialized_before = engine.serialize_document().unwrap();
+        let scene_revision_before = engine.current_update().scene.scene_revision;
+
+        let selected = engine
+            .handle_pointer_events(
+                "select-top".to_string(),
+                vec![pointer_event_at(PointerPhaseV1::Down, 1, 32.0, 40.0)],
+            )
+            .unwrap();
+
+        assert_eq!(
+            selected.update.selection.selected_element_id.as_deref(),
+            Some("rect-top")
+        );
+        assert_eq!(
+            selected.update.selection.bounds,
+            Some(SelectionBoundsV1 {
+                x: 19.0,
+                y: 29.0,
+                width: 122.0,
+                height: 82.0,
+            })
+        );
+        assert_eq!(selected.update.scene.document_revision, 0);
+        assert_eq!(selected.update.scene.scene_revision, scene_revision_before);
+        assert_eq!(engine.serialize_document().unwrap(), serialized_before);
+
+        engine
+            .handle_pointer_events(
+                "select-top".to_string(),
+                vec![pointer_event_at(PointerPhaseV1::Up, 2, 32.0, 40.0)],
+            )
+            .unwrap();
+        let cleared = engine
+            .handle_pointer_events(
+                "clear".to_string(),
+                vec![pointer_event_at(PointerPhaseV1::Down, 3, 400.0, 400.0)],
+            )
+            .unwrap();
+
+        assert_eq!(cleared.update.selection, SelectionStateV1::default());
+        assert_eq!(cleared.update.scene.document_revision, 0);
+        assert_eq!(engine.serialize_document().unwrap(), serialized_before);
+    }
+
+    #[test]
+    fn pointer_hit_test_selects_strokes_with_screen_space_tolerance() {
+        let document = document_with_rectangle_and_stroke();
+        let mut engine = Engine::open(document).unwrap();
+        engine
+            .set_camera(CameraV1 {
+                x: 0.0,
+                y: 0.0,
+                zoom: 2.0,
+            })
+            .unwrap();
+
+        let selected = engine
+            .handle_pointer_events(
+                "select-stroke".to_string(),
+                vec![pointer_event_at(PointerPhaseV1::Down, 1, 16.0, 26.0)],
+            )
+            .unwrap();
+
+        assert_eq!(
+            selected.update.selection.selected_element_id.as_deref(),
+            Some("stroke-1")
+        );
+    }
+
+    #[test]
+    fn deleting_the_selection_is_one_undoable_transaction_and_clears_editor_state() {
+        let mut engine = Engine::open(document_with_rectangle()).unwrap();
+        engine
+            .handle_pointer_events(
+                "select".to_string(),
+                vec![pointer_event_at(PointerPhaseV1::Down, 1, 32.0, 48.0)],
+            )
+            .unwrap();
+        let delete = envelope(
+            engine.document(),
+            "delete-selection",
+            CommandV1::DeleteElements {
+                element_ids: vec!["rect-1".to_string()],
+            },
+        );
+
+        let deleted = engine.execute_command(delete).unwrap();
+
+        assert_eq!(deleted.selection, SelectionStateV1::default());
+        assert!(deleted.scene.root_node_ids.is_empty());
+        assert_eq!(deleted.scene.document_revision, 1);
+        assert!(deleted.history.can_undo);
+
+        let restored = engine.undo().unwrap();
+        assert!(restored.scene.nodes.contains_key("rect-1:shape"));
+        assert_eq!(restored.selection, SelectionStateV1::default());
+        assert_eq!(restored.scene.document_revision, 2);
     }
 
     #[test]
@@ -2487,18 +2711,21 @@ mod tests {
         }
     }
 
-    fn pointer_event(
+    fn pointer_event(phase: PointerPhaseV1, sequence: u64, x: f64) -> NormalizedPointerEventV1 {
+        pointer_event_at(phase, sequence, x, 40.0)
+    }
+
+    fn pointer_event_at(
         phase: PointerPhaseV1,
         sequence: u64,
         x: f64,
-        target_element_id: Option<&str>,
+        y: f64,
     ) -> NormalizedPointerEventV1 {
         NormalizedPointerEventV1 {
             pointer_id: 1,
             sequence,
             phase,
-            point: Vec2 { x, y: 40.0 },
-            target_element_id: target_element_id.map(str::to_string),
+            point: Vec2 { x, y },
         }
     }
 

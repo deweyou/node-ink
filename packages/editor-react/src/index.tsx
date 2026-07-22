@@ -71,6 +71,14 @@ export function NodeInkEditor({ controller, hostLabel = 'React adapter' }: NodeI
         </button>
         <button
           type="button"
+          data-danger="true"
+          disabled={!isEditable || !snapshot.activeElementId}
+          onClick={() => void controller.dispatch({ type: 'delete_selection' })}
+        >
+          Delete
+        </button>
+        <button
+          type="button"
           disabled={!isEditable || !snapshot.canUndo}
           onClick={() => void controller.dispatch({ type: 'undo' })}
         >
@@ -121,6 +129,7 @@ export function NodeInkEditor({ controller, hostLabel = 'React adapter' }: NodeI
           <span>{snapshot.status}</span>
           <span>document r{snapshot.documentRevision}</span>
           <span>{snapshot.elementCount} elements</span>
+          <span>{snapshot.activeElementId ? '1 selected' : 'No selection'}</span>
         </output>
         {persistence.notice ? (
           <p className="nodeink-notice" role="status">
