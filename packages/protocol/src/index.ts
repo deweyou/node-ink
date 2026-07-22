@@ -111,6 +111,12 @@ export interface EngineUpdateV1 {
   history: HistoryStateV1;
 }
 
+export interface SerializedDocumentV1 {
+  canonicalPayload: string;
+  document: NodeInkDocumentV1;
+  engineAlgorithmVersion: string;
+}
+
 export interface SceneSnapshotV1 {
   protocolVersion: 1;
   documentId: string;
@@ -298,6 +304,8 @@ export interface EnginePortV1 {
     movedCount: number,
   ): Promise<SceneBenchmarkPayloadV1<ScenePatchV1>>;
   migrateDocumentPayload(payloadJson: string): Promise<MigrationAttemptV1>;
+  engineAlgorithmVersion(): string;
+  serializeDocument(): SerializedDocumentV1;
   undo(): Promise<EngineUpdateV1>;
   redo(): Promise<EngineUpdateV1>;
   dispose(): void;

@@ -4,9 +4,10 @@ Ink freely. Connect ideas.
 
 自由落笔，连接想法。
 
-NodeInk 当前处于 Phase 0 技术验证阶段。第一条纵向切片已经贯通 Rust
+NodeInk 已完成 Phase 0 技术验证，当前进入 Phase 1A 最小产品闭环。第一条纵向切片已经贯通 Rust
 Document/Command/Undo/Scene、真实 WASM bridge、框架无关的 Web Controller 与
-SVG Renderer，并由 Vanilla TypeScript、React 和 Vue 三个独立宿主复用。
+SVG Renderer，并由 Vanilla TypeScript、React 和 Vue 三个独立宿主复用。三个入口现在还
+共享单文档 IndexedDB 启动、750ms 自动保存、verified snapshot 恢复与多标签页单写者规则。
 
 ## 本地运行
 
@@ -48,4 +49,5 @@ cargo install cargo-llvm-cov --version 0.8.7 --locked
 - [技术架构](docs/architecture/technical-architecture.md)
 - [Phase 0 与实施计划](docs/planning/phase-plan.md)
 - [Phase 0 纵向切片结果](docs/planning/phase0-vertical-slice.md)
+- [Phase 1A 持久化与恢复切片](docs/planning/phase1a-persistence-recovery.md)
 - [待确认决策](docs/decisions/open-questions.md)

@@ -121,7 +121,14 @@ fn migrate_v0(value: Value) -> Result<MigrationResultV1, MigrationReportV1> {
     let document = NodeInkDocumentV1 {
         schema_version: SCHEMA_VERSION,
         document_id: legacy.document_id,
-        revision: legacy.revision,
+        revision: legacy.revision.checked_add(1).ok_or_else(|| {
+            report(
+                "migration",
+                "revision_overflow",
+                Some(0),
+                "legacy revision cannot advance for copy-on-write migration",
+            )
+        })?,
         root_order: legacy.root_order,
         elements,
     };
@@ -189,7 +196,7 @@ mod tests {
         assert!(result.migrated);
         assert_eq!(result.source_schema_version, 0);
         assert_eq!(result.target_schema_version, 1);
-        assert_eq!(result.document.revision, 4);
+        assert_eq!(result.document.revision, 5);
         assert!(result.canonical_payload.contains(r#""schemaVersion":1"#));
         assert_eq!(source, source_copy);
     }

@@ -8,7 +8,11 @@ import {
   type PropType,
 } from 'vue';
 
-import type { EditorActionV1, EditorWebControllerV1 } from '@nodeink-internal/editor-web';
+import {
+  getEditorPersistencePresentation,
+  type EditorActionV1,
+  type EditorWebControllerV1,
+} from '@nodeink-internal/editor-web';
 
 export interface NodeInkEditorProps {
   controller: EditorWebControllerV1;
@@ -74,6 +78,9 @@ export const NodeInkEditor = defineComponent({
     return () => {
       const currentSnapshot = snapshot.value;
       const isReady = currentSnapshot.status === 'ready';
+      const isEditable = isReady && currentSnapshot.documentAccess === 'writer';
+      const persistence = getEditorPersistencePresentation(currentSnapshot);
+      const visibleError = currentSnapshot.errorMessage ?? currentSnapshot.saveErrorMessage;
 
       return h('main', { class: 'nodeink-shell', 'data-nodeink-host': 'vue' }, [
         h('header', { class: 'nodeink-topbar' }, [
@@ -88,7 +95,7 @@ export const NodeInkEditor = defineComponent({
             'button',
             {
               type: 'button',
-              disabled: !isReady,
+              disabled: !isEditable,
               onClick: () => dispatch({ type: 'create_rectangle' }),
             },
             'Rectangle',
@@ -97,7 +104,7 @@ export const NodeInkEditor = defineComponent({
             'button',
             {
               type: 'button',
-              disabled: !isReady || !currentSnapshot.activeElementId,
+              disabled: !isEditable || !currentSnapshot.activeElementId,
               onClick: () => dispatch({ type: 'move_active', delta: { x: 32, y: 16 } }),
             },
             'Move',
@@ -106,7 +113,7 @@ export const NodeInkEditor = defineComponent({
             'button',
             {
               type: 'button',
-              disabled: !currentSnapshot.canUndo,
+              disabled: !isEditable || !currentSnapshot.canUndo,
               onClick: () => dispatch({ type: 'undo' }),
             },
             'Undo',
@@ -115,7 +122,7 @@ export const NodeInkEditor = defineComponent({
             'button',
             {
               type: 'button',
-              disabled: !currentSnapshot.canRedo,
+              disabled: !isEditable || !currentSnapshot.canRedo,
               onClick: () => dispatch({ type: 'redo' }),
             },
             'Redo',
@@ -124,12 +131,28 @@ export const NodeInkEditor = defineComponent({
         h('section', { class: 'nodeink-stage', 'aria-label': 'Infinite canvas proof' }, [
           h('div', { ref: canvas, class: 'nodeink-canvas' }),
           h('output', { class: 'nodeink-status', 'aria-live': 'polite' }, [
+            h('span', { 'data-save-status': currentSnapshot.saveStatus }, persistence.statusLabel),
             h('span', currentSnapshot.status),
             h('span', `document r${currentSnapshot.documentRevision}`),
             h('span', `${currentSnapshot.elementCount} elements`),
           ]),
-          currentSnapshot.errorMessage
-            ? h('p', { class: 'nodeink-error', role: 'alert' }, currentSnapshot.errorMessage)
+          persistence.notice
+            ? h('p', { class: 'nodeink-notice', role: 'status' }, persistence.notice)
+            : null,
+          visibleError
+            ? h('p', { class: 'nodeink-error', role: 'alert' }, [
+                h(
+                  'span',
+                  currentSnapshot.saveErrorMessage ? `保存失败：${visibleError}` : visibleError,
+                ),
+                persistence.canRetrySave
+                  ? h(
+                      'button',
+                      { type: 'button', onClick: () => dispatch({ type: 'retry_save' }) },
+                      '重试',
+                    )
+                  : null,
+              ])
             : null,
         ]),
       ]);

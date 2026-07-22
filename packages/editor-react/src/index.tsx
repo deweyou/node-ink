@@ -1,6 +1,9 @@
 import { useEffect, useRef, useSyncExternalStore } from 'react';
 
-import type { EditorWebControllerV1 } from '@nodeink-internal/editor-web';
+import {
+  getEditorPersistencePresentation,
+  type EditorWebControllerV1,
+} from '@nodeink-internal/editor-web';
 
 export interface NodeInkEditorProps {
   controller: EditorWebControllerV1;
@@ -24,6 +27,9 @@ export function NodeInkEditor({ controller, hostLabel = 'React adapter' }: NodeI
   }, [controller]);
 
   const isReady = snapshot.status === 'ready';
+  const isEditable = isReady && snapshot.documentAccess === 'writer';
+  const persistence = getEditorPersistencePresentation(snapshot);
+  const visibleError = snapshot.errorMessage ?? snapshot.saveErrorMessage;
 
   return (
     <main className="nodeink-shell" data-nodeink-host="react">
@@ -37,14 +43,14 @@ export function NodeInkEditor({ controller, hostLabel = 'React adapter' }: NodeI
       <aside className="nodeink-toolbar" aria-label="Canvas actions">
         <button
           type="button"
-          disabled={!isReady}
+          disabled={!isEditable}
           onClick={() => void controller.dispatch({ type: 'create_rectangle' })}
         >
           Rectangle
         </button>
         <button
           type="button"
-          disabled={!isReady || !snapshot.activeElementId}
+          disabled={!isEditable || !snapshot.activeElementId}
           onClick={() =>
             void controller.dispatch({
               type: 'move_active',
@@ -56,14 +62,14 @@ export function NodeInkEditor({ controller, hostLabel = 'React adapter' }: NodeI
         </button>
         <button
           type="button"
-          disabled={!snapshot.canUndo}
+          disabled={!isEditable || !snapshot.canUndo}
           onClick={() => void controller.dispatch({ type: 'undo' })}
         >
           Undo
         </button>
         <button
           type="button"
-          disabled={!snapshot.canRedo}
+          disabled={!isEditable || !snapshot.canRedo}
           onClick={() => void controller.dispatch({ type: 'redo' })}
         >
           Redo
@@ -72,13 +78,27 @@ export function NodeInkEditor({ controller, hostLabel = 'React adapter' }: NodeI
       <section className="nodeink-stage" aria-label="Infinite canvas proof">
         <div ref={canvasRef} className="nodeink-canvas" />
         <output className="nodeink-status" aria-live="polite">
+          <span data-save-status={snapshot.saveStatus}>{persistence.statusLabel}</span>
           <span>{snapshot.status}</span>
           <span>document r{snapshot.documentRevision}</span>
           <span>{snapshot.elementCount} elements</span>
         </output>
-        {snapshot.errorMessage ? (
+        {persistence.notice ? (
+          <p className="nodeink-notice" role="status">
+            {persistence.notice}
+          </p>
+        ) : null}
+        {visibleError ? (
           <p className="nodeink-error" role="alert">
-            {snapshot.errorMessage}
+            <span>{snapshot.saveErrorMessage ? `保存失败：${visibleError}` : visibleError}</span>
+            {persistence.canRetrySave ? (
+              <button
+                type="button"
+                onClick={() => void controller.dispatch({ type: 'retry_save' })}
+              >
+                重试
+              </button>
+            ) : null}
           </p>
         ) : null}
       </section>

@@ -1,8 +1,8 @@
 use nodeink_core::{
-    CommandEnvelopeV1, DiagramOperationBatchV1, Engine, EngineErrorV1, NodeInkDocumentV1,
-    NormalizedPointerEventV1, RenderProfileV1, StrokeInputBatchV1, StrokePhaseV1,
-    TextMetricsSnapshotV1, TextRunV1, Vec2, benchmark_scene_patch, benchmark_scene_snapshot,
-    migrate_document_payload,
+    CommandEnvelopeV1, DiagramOperationBatchV1, ENGINE_ALGORITHM_VERSION, Engine, EngineErrorV1,
+    NodeInkDocumentV1, NormalizedPointerEventV1, RenderProfileV1, StrokeInputBatchV1,
+    StrokePhaseV1, TextMetricsSnapshotV1, TextRunV1, Vec2, benchmark_scene_patch,
+    benchmark_scene_snapshot, migrate_document_payload,
 };
 use wasm_bindgen::prelude::*;
 
@@ -193,6 +193,11 @@ impl EngineHandle {
         self.engine
             .serialize_document()
             .map_err(|error| js_error("serialization_failed", error))
+    }
+
+    #[wasm_bindgen(js_name = engineAlgorithmVersion)]
+    pub fn engine_algorithm_version(&self) -> String {
+        ENGINE_ALGORITHM_VERSION.to_string()
     }
 }
 

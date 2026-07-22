@@ -22,6 +22,7 @@ import {
   type SceneBenchmarkPayloadV1,
   type ScenePatchV1,
   type SceneSnapshotV1,
+  type SerializedDocumentV1,
   type StrokeInputBatchV1,
   type StrokeTransportV1,
   type StrokeUpdateV1,
@@ -54,6 +55,8 @@ interface WasmEngineHandle {
   benchmarkSceneSnapshot(elementCount: number, movedCount: number, afterMove: boolean): string;
   benchmarkScenePatch(elementCount: number, movedCount: number): string;
   migrateDocumentPayload(payloadJson: string): string;
+  engineAlgorithmVersion(): string;
+  serializeDocument(): string;
   undo(): string;
   redo(): string;
   free(): void;
@@ -199,6 +202,25 @@ class WasmEnginePort implements EnginePortV1 {
     }
   }
 
+  engineAlgorithmVersion(): string {
+    return this.requireHandle().engineAlgorithmVersion();
+  }
+
+  serializeDocument(): SerializedDocumentV1 {
+    try {
+      const handle = this.requireHandle();
+      const canonicalPayload = handle.serializeDocument();
+      const document = parseSerializedDocument(canonicalPayload);
+      return {
+        canonicalPayload,
+        document,
+        engineAlgorithmVersion: handle.engineAlgorithmVersion(),
+      };
+    } catch (error) {
+      throw normalizeEngineError(error);
+    }
+  }
+
   async undo(): Promise<EngineUpdateV1> {
     try {
       return parseEngineUpdate(this.requireHandle().undo());
@@ -267,4 +289,19 @@ function normalizeEngineError(error: unknown): Error {
   } catch {
     return new Error(message);
   }
+}
+
+function parseSerializedDocument(canonicalPayload: string): NodeInkDocumentV1 {
+  const document = JSON.parse(canonicalPayload) as Partial<NodeInkDocumentV1>;
+  if (
+    document.schemaVersion !== 1 ||
+    typeof document.documentId !== 'string' ||
+    typeof document.revision !== 'number' ||
+    !Array.isArray(document.rootOrder) ||
+    typeof document.elements !== 'object' ||
+    document.elements === null
+  ) {
+    throw new Error('Engine returned an invalid serialized Document');
+  }
+  return document as NodeInkDocumentV1;
 }

@@ -166,6 +166,14 @@
 - 故意把 rustc 指向失败程序时 `vp run wasm:build` 以 exit 1 暴露 `cargo metadata` 错误，Web 成功不能掩盖 Rust 失败。
 - 根 `.npmrc` 只含 `registry=https://registry.npmjs.org/`，不得加入 token、私有源或静默 fallback。
 
+### D-25 Phase 1A 单文档保存与恢复体验
+
+- playground 使用一个固定本地文档，Transaction commit 后以 750ms debounce 自动保存；UI 明确显示未保存、保存中、已保存、保存失败和只读。
+- 保存失败保留内存 dirty revision，并只通过显式重试再次写入；页面隐藏时尝试 flush，但不依赖 unload 完成异步事务。
+- verified head 可写；stable/previous stable fallback 与候选穷尽诊断都只读，原始损坏 payload 不覆盖、不重置。
+- 第二标签页只读并提示关闭其他页面后刷新；Phase 1A 不实现显式接管或共同编辑。
+- React、Vue 与 Vanilla 只消费 `editor-web` 的同一保存/恢复 presentation，不分别定义状态语义。
+
 ## 22. 需要产品负责人决策的问题
 
 以下问题不阻碍继续评审文档，但会阻碍对应功能进入实现。
@@ -195,7 +203,7 @@
 - **理由**：共同编辑会提前引入本地同步、合并和冲突语义，接近被明确排除的协作复杂度。
 - **影响**：文档锁、冲突 UI 和恢复测试。
 - **决策时点**：Phase 1B 前。
-- **当前状态**：待确认。
+- **当前状态**：已确认推荐方向。Phase 1A 提供第二标签页只读与“关闭其他页面后刷新”；显式“接管”延后到 Phase 1B，详见 D-25。
 
 ### P-04 删除与回收站
 
@@ -220,7 +228,7 @@
 - **替代**：每次打开执行 fit content。
 - **影响**：用户连续性、Session schema 和“打开后找不到内容”的风险。
 - **决策时点**：Phase 1A 持久化前。
-- **当前状态**：待确认。
+- **当前状态**：已确认推荐方向。Camera 尚未进入本次持久化切片；实现后按每文档恢复最后 Camera，不恢复 selection、hover、active transform 或 IME buffer。
 
 ### P-07 桌面手写笔与触控范围
 
@@ -252,4 +260,4 @@
 P-01 已确认，Phase 0 可以实施。进入相应产品功能前必须确认其余问题；未到决策时点的问题可以保留待确认，但不能由实现者自行选择用户可见行为。
 
 ---
-*Last updated: 2026-07-22 | Reason: confirm the private Vue adapter follows the framework-neutral host contract*
+*Last updated: 2026-07-22 | Reason: confirm the Phase 1A autosave, recovery, multi-tab, and future Camera semantics*

@@ -74,6 +74,37 @@ describe('NodeInkEditor', () => {
     expect(controller.disposeCalls).toBe(0);
   });
 
+  it('renders shared save failures, retry actions, and readonly recovery notices', async () => {
+    const controller = new StubController();
+    target = document.createElement('div');
+    root = createRoot(target);
+    await act(async () => root?.render(<NodeInkEditor controller={controller} />));
+
+    await act(async () => {
+      controller.setSnapshot({
+        ...controller.getSnapshot(),
+        saveStatus: 'save_failed',
+        saveErrorMessage: 'quota exceeded',
+      });
+    });
+    expect(target.querySelector('[data-save-status="save_failed"]')?.textContent).toBe('保存失败');
+    await act(async () => button(target, '重试').click());
+    expect(controller.actions.at(-1)).toEqual({ type: 'retry_save' });
+
+    await act(async () => {
+      controller.setSnapshot({
+        ...controller.getSnapshot(),
+        saveStatus: 'readonly',
+        saveErrorMessage: null,
+        documentAccess: 'readonly',
+        readonlyReason: 'recovered_fallback',
+        recovery: 'stable_fallback',
+      });
+    });
+    expect(target.querySelector('[role="status"]')?.textContent).toContain('上次稳定版本');
+    expect(button(target, 'Rectangle').disabled).toBe(true);
+  });
+
   it('unsubscribes the shared store and disposes the controller once on unmount', async () => {
     const controller = new StubController();
     target = document.createElement('div');
@@ -107,6 +138,11 @@ class StubController implements EditorWebControllerV1 {
     canUndo: false,
     canRedo: false,
     errorMessage: null,
+    saveStatus: 'saved',
+    saveErrorMessage: null,
+    documentAccess: 'writer',
+    readonlyReason: null,
+    recovery: 'blank',
   };
 
   constructor(mountError: Error | null = null) {

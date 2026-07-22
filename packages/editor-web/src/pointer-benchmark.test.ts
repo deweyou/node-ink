@@ -12,6 +12,11 @@ const readySnapshot: EditorUiSnapshotV1 = {
   canUndo: false,
   canRedo: false,
   errorMessage: null,
+  saveStatus: 'saved',
+  saveErrorMessage: null,
+  documentAccess: 'writer',
+  readonlyReason: null,
+  recovery: 'blank',
 };
 
 describe('runPointerBenchmark', () => {

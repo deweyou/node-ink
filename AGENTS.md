@@ -4,16 +4,17 @@ NodeInk is a local-first, desktop Web canvas whose persistent semantics live in 
 
 ## Knowledge Base
 
-| Document                                                                                   | What it covers                                                   |
-| ------------------------------------------------------------------------------------------ | ---------------------------------------------------------------- |
-| [README.md](README.md)                                                                     | Local setup, demo URLs, and verification commands                |
-| [DESIGN.md](DESIGN.md)                                                                     | Durable UI/UX and visual design contract                         |
-| [docs/project-structure.md](docs/project-structure.md)                                     | Package ownership, dependency direction, and startup path        |
-| [docs/architecture/technical-architecture.md](docs/architecture/technical-architecture.md) | Product engine, protocol, persistence, and renderer architecture |
-| [docs/decisions/open-questions.md](docs/decisions/open-questions.md)                       | Confirmed decisions and choices that must not be guessed         |
-| [docs/planning/phase0-vertical-slice.md](docs/planning/phase0-vertical-slice.md)           | Implemented Phase 0 boundary and its verification evidence       |
-| [docs/.state.md](docs/.state.md)                                                           | Last memory review and active risks                              |
-| [docs/.todo.md](docs/.todo.md)                                                             | Prioritized repository-memory follow-ups                         |
+| Document                                                                                       | What it covers                                                   |
+| ---------------------------------------------------------------------------------------------- | ---------------------------------------------------------------- |
+| [README.md](README.md)                                                                         | Local setup, demo URLs, and verification commands                |
+| [DESIGN.md](DESIGN.md)                                                                         | Durable UI/UX and visual design contract                         |
+| [docs/project-structure.md](docs/project-structure.md)                                         | Package ownership, dependency direction, and startup path        |
+| [docs/architecture/technical-architecture.md](docs/architecture/technical-architecture.md)     | Product engine, protocol, persistence, and renderer architecture |
+| [docs/decisions/open-questions.md](docs/decisions/open-questions.md)                           | Confirmed decisions and choices that must not be guessed         |
+| [docs/planning/phase0-vertical-slice.md](docs/planning/phase0-vertical-slice.md)               | Implemented Phase 0 boundary and its verification evidence       |
+| [docs/planning/phase1a-persistence-recovery.md](docs/planning/phase1a-persistence-recovery.md) | Integrated local document startup, autosave, recovery, and lease |
+| [docs/.state.md](docs/.state.md)                                                               | Last memory review and active risks                              |
+| [docs/.todo.md](docs/.todo.md)                                                                 | Prioritized repository-memory follow-ups                         |
 
 ## Hard Constraints
 
