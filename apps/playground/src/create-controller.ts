@@ -1,4 +1,4 @@
-import { EditorWebController } from '@nodeink-internal/editor-web';
+import { EditorWebController, NODEINK_CANVAS_FONT_FAMILY } from '@nodeink-internal/editor-web';
 import { createWasmEngine } from '@nodeink-internal/engine-web';
 import {
   AtomicSnapshotPersistenceV1,
@@ -22,6 +22,7 @@ export async function createController() {
   let cameraStore: IndexedDbCameraStoreV1 | null = null;
   let migrationEngine: Awaited<ReturnType<typeof createWasmEngine>> | null = null;
   try {
+    await loadCanvasFont();
     store = await IndexedDbSnapshotStoreV1.open(localDatabaseName);
     cameraStore = await IndexedDbCameraStoreV1.open(`${localDatabaseName}-camera`);
     const durability = store.probeStrictDurability() ? 'strict' : 'relaxed';
@@ -94,5 +95,20 @@ export async function createController() {
     cameraStore?.close();
     store?.close();
     throw error;
+  }
+}
+
+async function loadCanvasFont(): Promise<void> {
+  if (!document.fonts) {
+    throw new Error('This browser cannot verify the bundled canvas font');
+  }
+  const family = `"${NODEINK_CANVAS_FONT_FAMILY}"`;
+  await Promise.all([
+    document.fonts.load(`400 24px ${family}`, 'NodeInk 中文画布'),
+    document.fonts.load(`500 24px ${family}`, 'NodeInk 中文画布'),
+  ]);
+  await document.fonts.ready;
+  if (!document.fonts.check(`400 24px ${family}`, 'NodeInk 中文画布')) {
+    throw new Error('The bundled NodeInk canvas font failed to load');
   }
 }

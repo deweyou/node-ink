@@ -130,6 +130,18 @@ export const NodeInkEditor = defineComponent({
             'button',
             {
               type: 'button',
+              'data-tool': 'text',
+              'aria-pressed': currentSnapshot.activeTool === 'text',
+              disabled: !isEditable,
+              title: 'Text tool (T)',
+              onClick: () => dispatch({ type: 'set_tool', tool: 'text' }),
+            },
+            'Text',
+          ),
+          h(
+            'button',
+            {
+              type: 'button',
               disabled: !isEditable,
               onClick: () => dispatch({ type: 'create_rectangle' }),
             },

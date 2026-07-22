@@ -4,6 +4,7 @@ export type PointerBatchListener = (events: NormalizedPointerEventV1[]) => void;
 
 export interface PointerInputOptionsV1 {
   shouldHandleEvent?: (event: PointerEvent) => boolean;
+  onDoubleClick?: (point: { x: number; y: number }) => void;
 }
 
 export function attachPointerInput(
@@ -62,6 +63,13 @@ export function attachPointerInput(
     releasePointer(target, event.pointerId);
     sequences.delete(event.pointerId);
   };
+  const handleDoubleClick = (event: MouseEvent) => {
+    if (event.button !== 0 || options.shouldHandleEvent?.(event as PointerEvent) === false) {
+      return;
+    }
+    event.preventDefault();
+    options.onDoubleClick?.(createScreenToCanvasPoint(target)(event.clientX, event.clientY));
+  };
   const cancelActivePointer = (pointerId: number) => {
     if (!activePointers.has(pointerId)) {
       return;
@@ -86,6 +94,7 @@ export function attachPointerInput(
   target.addEventListener('pointerup', handlePointerUp);
   target.addEventListener('pointercancel', handlePointerCancel);
   target.addEventListener('lostpointercapture', handleLostPointerCapture);
+  target.addEventListener('dblclick', handleDoubleClick);
   windowTarget?.addEventListener('blur', handleWindowBlur);
 
   return () => {
@@ -94,6 +103,7 @@ export function attachPointerInput(
     target.removeEventListener('pointerup', handlePointerUp);
     target.removeEventListener('pointercancel', handlePointerCancel);
     target.removeEventListener('lostpointercapture', handleLostPointerCapture);
+    target.removeEventListener('dblclick', handleDoubleClick);
     windowTarget?.removeEventListener('blur', handleWindowBlur);
     for (const pointerId of activePointers) {
       releasePointer(target, pointerId);

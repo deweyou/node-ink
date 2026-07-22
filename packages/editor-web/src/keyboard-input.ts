@@ -4,7 +4,8 @@ export type EditorShortcutAction =
   | 'delete_selection'
   | 'escape'
   | 'select_tool'
-  | 'freehand_tool';
+  | 'freehand_tool'
+  | 'text_tool';
 
 export type EditorShortcutListener = (action: EditorShortcutAction) => boolean;
 
@@ -49,6 +50,9 @@ function editorAction(event: KeyboardEvent): EditorShortcutAction | null {
     }
     if (key === 'p') {
       return 'freehand_tool';
+    }
+    if (key === 't') {
+      return 'text_tool';
     }
   }
   return null;

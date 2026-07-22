@@ -1,7 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import type { CommandEnvelopeV1, DiagramOperationBatchV1 } from '@nodeink-internal/protocol';
-import { createBlankDocument } from '@nodeink-internal/protocol';
+import type {
+  CommandEnvelopeV1,
+  DiagramOperationBatchV1,
+  TextElementV1,
+  TextMetricsSnapshotV1,
+} from '@nodeink-internal/protocol';
+import { canvasFontFamily, createBlankDocument } from '@nodeink-internal/protocol';
+
+const fixtureFontFingerprint = 'noto-sans-sc-v40-fontsource-5.3.0';
 
 const wasm = vi.hoisted(() => {
   const handle = {
@@ -13,6 +20,8 @@ const wasm = vi.hoisted(() => {
     executeCommand: vi.fn(),
     setActiveTool: vi.fn(),
     setSelection: vi.fn(),
+    beginTextEditAt: vi.fn(),
+    provideTextMetrics: vi.fn(),
     executeDiagramOperation: vi.fn(),
     handlePointerEvents: vi.fn(),
     handleStrokeBatchJson: vi.fn(),
@@ -54,6 +63,8 @@ describe('createWasmEngine', () => {
     wasm.handle.executeCommand.mockReturnValue(update);
     wasm.handle.setActiveTool.mockReturnValue(validUpdate('freehand'));
     wasm.handle.setSelection.mockReturnValue(update);
+    wasm.handle.beginTextEditAt.mockReturnValue(textEditTarget());
+    wasm.handle.provideTextMetrics.mockReturnValue(validUpdate('text'));
     wasm.handle.executeDiagramOperation.mockReturnValue(diagramOperationResult());
     wasm.handle.handlePointerEvents.mockReturnValue(pointerUpdate());
     wasm.handle.handleStrokeBatchJson.mockReturnValue(strokeUpdate());
@@ -108,11 +119,51 @@ describe('createWasmEngine', () => {
     await expect(engine.executeCommand(command)).resolves.toMatchObject({
       history: { canUndo: false },
     });
+    const createTextCommand: CommandEnvelopeV1 = {
+      protocolVersion: 1,
+      commandId: 'create-text-1',
+      documentId: 'doc-1',
+      expectedRevision: 0,
+      command: { type: 'create_text', text: textElement() },
+    };
+    const updateTextCommand: CommandEnvelopeV1 = {
+      protocolVersion: 1,
+      commandId: 'update-text-1',
+      documentId: 'doc-1',
+      expectedRevision: 0,
+      command: {
+        type: 'update_text',
+        elementId: 'text-1',
+        patch: { text: 'Updated\ntext', maxWidth: null },
+      },
+    };
+    await expect(engine.executeCommand(createTextCommand)).resolves.toBeDefined();
+    await expect(engine.executeCommand(updateTextCommand)).resolves.toBeDefined();
     await expect(engine.setActiveTool('freehand')).resolves.toMatchObject({
       activeTool: 'freehand',
     });
     await expect(engine.setSelection('rect-1')).resolves.toMatchObject({
       selection: { selectedElementId: null },
+    });
+    await expect(engine.beginTextEditAt({ x: 40, y: 48 })).resolves.toMatchObject({
+      element: { id: 'text-1', text: '第一行\nSecond line' },
+      update: { activeTool: 'text' },
+    });
+    const textMetrics: TextMetricsSnapshotV1 = {
+      fontFingerprint: 'noto-sans-sc-v40-fontsource-5.3.0',
+      metrics: [
+        {
+          key: 'text-1:line-0',
+          width: 120,
+          height: 24,
+          baseline: 18,
+          lineBreaks: [5],
+        },
+      ],
+    };
+    await expect(engine.provideTextMetrics(textMetrics)).resolves.toMatchObject({
+      activeTool: 'text',
+      textMeasureRequest: null,
     });
     await expect(engine.executeDiagramOperation(batch)).resolves.toMatchObject({
       batchId: 'batch-1',
@@ -152,14 +203,14 @@ describe('createWasmEngine', () => {
       {
         key: 'cjk',
         text: '你好',
-        fontFamily: 'Arial',
+        fontFamily: 'Noto Sans SC Variable',
         fontSize: 20,
         fontWeight: 400 as const,
         maxWidth: null,
       },
     ];
     await expect(
-      engine.resolveTextFixture('measure-1', 'font-v1', textRuns, null),
+      engine.resolveTextFixture('measure-1', 'noto-sans-sc-v40-fontsource-5.3.0', textRuns, null),
     ).resolves.toMatchObject({ request: { requestId: 'measure-1' }, scene: null });
     await expect(
       engine.handleStrokeBatch(strokeBatch, 'stroke-typed', 'typed_array'),
@@ -189,8 +240,12 @@ describe('createWasmEngine', () => {
     expect(wasm.default).toHaveBeenCalledOnce();
     expect(wasm.openDocument).toHaveBeenCalledWith(JSON.stringify(document));
     expect(wasm.handle.executeCommand).toHaveBeenCalledWith(JSON.stringify(command));
+    expect(wasm.handle.executeCommand).toHaveBeenCalledWith(JSON.stringify(createTextCommand));
+    expect(wasm.handle.executeCommand).toHaveBeenCalledWith(JSON.stringify(updateTextCommand));
     expect(wasm.handle.setActiveTool).toHaveBeenCalledWith('freehand');
     expect(wasm.handle.setSelection).toHaveBeenCalledWith('rect-1');
+    expect(wasm.handle.beginTextEditAt).toHaveBeenCalledWith('{"x":40,"y":48}');
+    expect(wasm.handle.provideTextMetrics).toHaveBeenCalledWith(JSON.stringify(textMetrics));
     expect(wasm.handle.setCamera).toHaveBeenCalledWith('{"x":24,"y":12,"zoom":1.5}');
     expect(wasm.handle.fitCamera).toHaveBeenCalledWith(500, 300, 50);
     expect(wasm.handle.applyCameraAction).toHaveBeenCalledWith(
@@ -218,7 +273,7 @@ describe('createWasmEngine', () => {
     );
     expect(wasm.handle.resolveTextFixture).toHaveBeenCalledWith(
       'measure-1',
-      'font-v1',
+      'noto-sans-sc-v40-fontsource-5.3.0',
       JSON.stringify(textRuns),
       undefined,
     );
@@ -273,6 +328,21 @@ describe('createWasmEngine', () => {
     });
     await expect(engine.setActiveTool('freehand')).rejects.toThrow('tool rejected');
 
+    wasm.handle.beginTextEditAt.mockImplementation(() => {
+      throw new Error(JSON.stringify({ message: 'text target rejected' }));
+    });
+    await expect(engine.beginTextEditAt({ x: 0, y: 0 })).rejects.toThrow('text target rejected');
+
+    wasm.handle.provideTextMetrics.mockImplementation(() => {
+      throw new Error(JSON.stringify({ message: 'metrics snapshot rejected' }));
+    });
+    await expect(
+      engine.provideTextMetrics({
+        fontFingerprint: 'noto-sans-sc-v40-fontsource-5.3.0',
+        metrics: [],
+      }),
+    ).rejects.toThrow('metrics snapshot rejected');
+
     wasm.handle.executeDiagramOperation.mockImplementation(() => {
       throw new Error(JSON.stringify({ message: 'batch rejected' }));
     });
@@ -322,9 +392,9 @@ describe('createWasmEngine', () => {
     wasm.handle.resolveTextFixture.mockImplementation(() => {
       throw new Error(JSON.stringify({ message: 'metrics rejected' }));
     });
-    await expect(engine.resolveTextFixture('measure', 'font-v1', [], null)).rejects.toThrow(
-      'metrics rejected',
-    );
+    await expect(
+      engine.resolveTextFixture('measure', 'noto-sans-sc-v40-fontsource-5.3.0', [], null),
+    ).rejects.toThrow('metrics rejected');
 
     wasm.handle.benchmarkScenePatch.mockImplementation(() => {
       throw new Error(JSON.stringify({ message: 'fixture rejected' }));
@@ -390,9 +460,10 @@ function diagramOperationResult(): string {
   });
 }
 
-function validUpdate(activeTool: 'select' | 'freehand' = 'select'): string {
+function validUpdate(activeTool: 'select' | 'freehand' | 'text' = 'select'): string {
   return JSON.stringify({
     activeTool,
+    textMeasureRequest: null,
     operation: null,
     scene: {
       protocolVersion: 1,
@@ -404,6 +475,34 @@ function validUpdate(activeTool: 'select' | 'freehand' = 'select'): string {
     },
     history: { canUndo: false, canRedo: false },
     selection: { selectedElementId: null, bounds: null },
+  });
+}
+
+function textElement(): TextElementV1 {
+  return {
+    kind: 'text',
+    id: 'text-1',
+    x: 40,
+    y: 48,
+    text: '第一行\nSecond line',
+    fontFamily: canvasFontFamily,
+    fontSize: 20,
+    fontWeight: 400,
+    maxWidth: 240,
+    fontFingerprint: fixtureFontFingerprint,
+  };
+}
+
+function textEditTarget(): string {
+  return JSON.stringify({
+    element: textElement(),
+    update: {
+      ...JSON.parse(validUpdate('text')),
+      selection: {
+        selectedElementId: 'text-1',
+        bounds: { x: 40, y: 48, width: 240, height: 48 },
+      },
+    },
   });
 }
 
@@ -436,7 +535,11 @@ function sceneResolution(): string {
 
 function textResolution(): string {
   return JSON.stringify({
-    request: { requestId: 'measure-1', fontFingerprint: 'font-v1', runs: [] },
+    request: {
+      requestId: 'measure-1',
+      fontFingerprint: 'noto-sans-sc-v40-fontsource-5.3.0',
+      runs: [],
+    },
     scene: null,
     canonicalHash: null,
   });

@@ -66,6 +66,7 @@ describe('attachEditorShortcuts', () => {
     ['Escape', 'escape'],
     ['v', 'select_tool'],
     ['P', 'freehand_tool'],
+    ['t', 'text_tool'],
   ] as const)('maps %s to %s without browser side effects', (key, expectedAction) => {
     const shortcutTarget = document.implementation.createHTMLDocument();
     const listener = vi.fn(() => true);

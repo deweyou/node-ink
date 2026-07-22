@@ -72,6 +72,16 @@ export function NodeInkEditor({ controller, hostLabel = 'React adapter' }: NodeI
         </button>
         <button
           type="button"
+          data-tool="text"
+          aria-pressed={snapshot.activeTool === 'text'}
+          disabled={!isEditable}
+          title="Text tool (T)"
+          onClick={() => void controller.dispatch({ type: 'set_tool', tool: 'text' })}
+        >
+          Text
+        </button>
+        <button
+          type="button"
           disabled={!isEditable}
           onClick={() => void controller.dispatch({ type: 'create_rectangle' })}
         >

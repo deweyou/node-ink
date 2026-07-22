@@ -36,6 +36,7 @@ describe('NodeInkEditor', () => {
     expect(controller.mountTarget?.className).toBe('nodeink-canvas');
     expect(button(target, 'Select').ariaPressed).toBe('true');
     expect(button(target, 'Draw').ariaPressed).toBe('false');
+    expect(button(target, 'Text').ariaPressed).toBe('false');
     expect(button(target, 'Rectangle').disabled).toBe(false);
     expect(button(target, 'Move').disabled).toBe(true);
     expect(button(target, 'Delete').disabled).toBe(true);
@@ -54,6 +55,7 @@ describe('NodeInkEditor', () => {
     for (const label of [
       'Select',
       'Draw',
+      'Text',
       'Rectangle',
       'Move',
       'Delete',
@@ -67,6 +69,7 @@ describe('NodeInkEditor', () => {
     }
 
     expect(controller.actions.map((action) => action.type)).toEqual([
+      'set_tool',
       'set_tool',
       'set_tool',
       'create_rectangle',
@@ -141,6 +144,7 @@ describe('NodeInkEditor', () => {
     expect(button(target, 'Rectangle').disabled).toBe(true);
     expect(button(target, 'Select').disabled).toBe(true);
     expect(button(target, 'Draw').disabled).toBe(true);
+    expect(button(target, 'Text').disabled).toBe(true);
     expect(button(target, '100%').disabled).toBe(false);
   });
 

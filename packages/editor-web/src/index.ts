@@ -15,12 +15,23 @@ import {
   type StrokeInputBatchV1,
   type StrokeTransportV1,
   type StrokeUpdateV1,
+  type TextElementV1,
+  type TextMeasureRequestV1,
+  type TextMetricsSnapshotV1,
+  type Vec2,
 } from '@nodeink-internal/protocol';
 
 import { attachPointerInput } from './pointer-input';
 import { attachEditorShortcuts } from './keyboard-input';
 import { attachCameraInput, type CameraInputBindingV1 } from './camera-input';
 import { FreehandInputAdapterV1 } from './freehand-input';
+import { CanvasTextMetricsAdapter } from './text-metrics';
+import {
+  attachTextEditorOverlay,
+  NODEINK_CANVAS_FONT_FAMILY,
+  NODEINK_DEFAULT_TEXT_SIZE,
+  type TextEditorOverlayV1,
+} from './text-editor-overlay';
 
 const CAMERA_ZOOM_STEP = 1.5;
 const CAMERA_FIT_PADDING = 64;
@@ -37,6 +48,9 @@ export type EditorActionV1 =
   | { type: 'clear_selection' }
   | { type: 'escape' }
   | { type: 'set_tool'; tool: EditorToolV1 }
+  | { type: 'begin_text_edit'; point: Vec2 }
+  | { type: 'commit_text_edit'; value: string }
+  | { type: 'cancel_text_edit' }
   | { type: 'pointer_events'; events: NormalizedPointerEventV1[] }
   | { type: 'stroke_batch'; batch: StrokeInputBatchV1; transport: StrokeTransportV1 }
   | { type: 'undo' }
@@ -85,6 +99,11 @@ export interface EditorPersistencePortV1 {
 export interface EditorCameraPersistencePortV1 {
   loadCamera(documentId: string): Promise<CameraV1 | null>;
   saveCamera(documentId: string, camera: CameraV1): Promise<void>;
+}
+
+export interface EditorTextMetricsPortV1 {
+  fingerprint(): string;
+  measure(request: TextMeasureRequestV1): { snapshot: TextMetricsSnapshotV1 };
 }
 
 export interface EditorUiSnapshotV1 {
@@ -138,6 +157,7 @@ export interface EditorWebControllerOptions {
   createId?: () => string;
   persistence?: EditorPersistencePortV1;
   cameraPersistence?: EditorCameraPersistencePortV1;
+  textMetrics?: EditorTextMetricsPortV1;
   documentAccess?: EditorDocumentAccessV1;
   readonlyReason?: EditorReadonlyReasonV1 | null;
   recovery?: EditorRecoveryV1;
@@ -150,6 +170,7 @@ export class EditorWebController implements EditorWebControllerV1 {
   readonly #createId: () => string;
   readonly #persistence: EditorPersistencePortV1 | null;
   readonly #cameraPersistence: EditorCameraPersistencePortV1 | null;
+  readonly #textMetrics: EditorTextMetricsPortV1;
   readonly #onDispose: (() => void | Promise<void>) | null;
   readonly #listeners = new Set<() => void>();
   #snapshot: EditorUiSnapshotV1;
@@ -166,6 +187,8 @@ export class EditorWebController implements EditorWebControllerV1 {
   #cameraSaveTimer: ReturnType<typeof setTimeout> | null = null;
   #cameraSavePromise: Promise<void> | null = null;
   readonly #freehandInput = new FreehandInputAdapterV1();
+  #textEditor: TextEditorOverlayV1 | null = null;
+  #textDraft: TextEditingDraftV1 | null = null;
   #queue = Promise.resolve();
   #isDisposed = false;
 
@@ -175,6 +198,7 @@ export class EditorWebController implements EditorWebControllerV1 {
     this.#createId = options.createId ?? defaultId;
     this.#persistence = options.persistence ?? null;
     this.#cameraPersistence = options.cameraPersistence ?? null;
+    this.#textMetrics = options.textMetrics ?? new CanvasTextMetricsAdapter();
     this.#onDispose = options.onDispose ?? null;
     const documentAccess = options.documentAccess ?? 'writer';
     const persistenceSnapshot = this.#persistence?.getSnapshot() ?? null;
@@ -234,6 +258,11 @@ export class EditorWebController implements EditorWebControllerV1 {
             {
               shouldHandleEvent: (event) =>
                 this.#cameraInput?.shouldHandleDocumentPointer(event) ?? true,
+              onDoubleClick: (point) => {
+                if (this.#snapshot.activeTool === 'select' && !this.#textEditor) {
+                  void this.dispatch({ type: 'begin_text_edit', point });
+                }
+              },
             },
           )
         : null;
@@ -257,7 +286,9 @@ export class EditorWebController implements EditorWebControllerV1 {
                 ? { type: 'set_tool', tool: 'select' }
                 : action === 'freehand_tool'
                   ? { type: 'set_tool', tool: 'freehand' }
-                  : { type: action };
+                  : action === 'text_tool'
+                    ? { type: 'set_tool', tool: 'text' }
+                    : { type: action };
             void this.dispatch(editorAction);
             return true;
           })
@@ -289,7 +320,7 @@ export class EditorWebController implements EditorWebControllerV1 {
       this.#detachResize = () => observer.disconnect();
     }
     try {
-      const update = await this.#engine.currentUpdate();
+      const update = await this.resolveTextMetrics(await this.#engine.currentUpdate());
       this.#documentId = update.scene.documentId;
       const fitCamera = await this.refreshFitCamera(false);
       const camera = await this.restoreCamera(update.scene.documentId, fitCamera);
@@ -339,6 +370,9 @@ export class EditorWebController implements EditorWebControllerV1 {
     this.#detachResize = null;
     this.#cameraTarget = null;
     this.#freehandInput.reset();
+    this.#textEditor?.dispose();
+    this.#textEditor = null;
+    this.#textDraft = null;
     this.#listeners.clear();
     this.#renderer.unmount();
     const persistenceFlush = this.#persistence?.flush() ?? null;
@@ -379,6 +413,7 @@ export class EditorWebController implements EditorWebControllerV1 {
     try {
       const previousRevision = this.#snapshot.documentRevision;
       const execution = await this.executeAction(action);
+      execution.update = await this.resolveTextMetrics(execution.update);
       const renderResult = this.applyUpdate(execution.update, false);
       if (this.#snapshot.documentRevision > previousRevision) {
         this.#persistence?.markCommitted(this.#snapshot.documentRevision);
@@ -412,6 +447,7 @@ export class EditorWebController implements EditorWebControllerV1 {
       }
       this.setCameraSnapshot(camera);
       this.applyCameraToRenderer();
+      this.#textEditor?.updateCamera(camera);
       this.scheduleCameraSave(camera);
       return { ok: true, snapshot: this.#snapshot };
     } catch (error) {
@@ -571,6 +607,10 @@ export class EditorWebController implements EditorWebControllerV1 {
   }
 
   private async executeAction(action: EditorActionV1): Promise<ActionExecutionResult> {
+    if (action.type === 'cancel_text_edit') {
+      this.#textEditor?.cancel();
+      return { update: await this.#engine.currentUpdate() };
+    }
     if (action.type === 'undo') {
       return { update: await this.#engine.undo() };
     }
@@ -582,19 +622,33 @@ export class EditorWebController implements EditorWebControllerV1 {
     }
     if (action.type === 'set_tool') {
       this.#freehandInput.reset();
+      this.#textEditor?.cancel();
       return { update: await this.#engine.setActiveTool(action.tool) };
     }
     if (action.type === 'escape') {
+      if (this.#textEditor) {
+        this.#textEditor.cancel();
+        return { update: await this.#engine.currentUpdate() };
+      }
       this.#freehandInput.reset();
       return {
         update:
-          this.#snapshot.activeTool === 'freehand'
+          this.#snapshot.activeTool !== 'select'
             ? await this.#engine.setActiveTool('select')
             : await this.#engine.setSelection(null),
       };
     }
     if (!this.#documentId) {
       throw new Error('Editor must be mounted before dispatching document actions');
+    }
+
+    if (action.type === 'begin_text_edit') {
+      const target = await this.#engine.beginTextEditAt(action.point);
+      this.openTextEditor(target.element, action.point);
+      return { update: target.update };
+    }
+    if (action.type === 'commit_text_edit') {
+      return { update: await this.commitTextDraft(action.value) };
     }
 
     const commandId = this.#createId();
@@ -613,6 +667,15 @@ export class EditorWebController implements EditorWebControllerV1 {
             didCommit: strokeUpdate.didCommit,
           },
         };
+      }
+      if (this.#snapshot.activeTool === 'text') {
+        const down = action.events.find((event) => event.phase === 'down');
+        if (down && !this.#textEditor) {
+          const target = await this.#engine.beginTextEditAt(down.point);
+          this.openTextEditor(target.element, down.point);
+          return { update: target.update };
+        }
+        return { update: await this.#engine.currentUpdate() };
       }
       const pointerUpdate = await this.#engine.handlePointerEvents(action.events, commandId);
       return {
@@ -673,6 +736,102 @@ export class EditorWebController implements EditorWebControllerV1 {
       await this.#engine.setActiveTool('select');
     }
     return { update: await this.#engine.executeCommand(envelope) };
+  }
+
+  private openTextEditor(element: TextElementV1 | null, point: Vec2): void {
+    if (!this.#cameraTarget) {
+      throw new Error('Editor must be mounted before editing text');
+    }
+    this.#textEditor?.cancel();
+    const position = element ? { x: element.x, y: element.y } : point;
+    this.#textDraft = {
+      element,
+      position,
+      initialValue: element?.text ?? '',
+    };
+    let overlay: TextEditorOverlayV1 | null = null;
+    overlay = attachTextEditorOverlay({
+      target: this.#cameraTarget,
+      position,
+      initialValue: this.#textDraft.initialValue,
+      camera: this.#snapshot.camera,
+      fontSize: element?.fontSize ?? NODEINK_DEFAULT_TEXT_SIZE,
+      fontWeight: element?.fontWeight ?? 400,
+      onCommit: (value) => {
+        if (this.#textEditor === overlay) {
+          this.#textEditor = null;
+        }
+        void this.dispatch({ type: 'commit_text_edit', value });
+      },
+      onCancel: () => {
+        if (this.#textEditor === overlay) {
+          this.#textEditor = null;
+          this.#textDraft = null;
+        }
+      },
+    });
+    if (element) {
+      overlay.element.dataset.textElementId = element.id;
+    }
+    this.#textEditor = overlay;
+  }
+
+  private async commitTextDraft(value: string): Promise<EngineUpdateV1> {
+    const draft = this.#textDraft;
+    this.#textDraft = null;
+    if (!draft || !this.#documentId) {
+      return this.#engine.currentUpdate();
+    }
+    const normalizedValue = value.replace(/\r\n?/g, '\n');
+    if (draft.element && normalizedValue === draft.initialValue) {
+      return this.#engine.currentUpdate();
+    }
+    if (!draft.element && normalizedValue.length === 0) {
+      return this.#engine.currentUpdate();
+    }
+    const commandId = this.#createId();
+    const command: CommandEnvelopeV1['command'] = draft.element
+      ? normalizedValue.length === 0
+        ? { type: 'delete_elements', elementIds: [draft.element.id] }
+        : {
+            type: 'update_text',
+            elementId: draft.element.id,
+            patch: { text: normalizedValue },
+          }
+      : {
+          type: 'create_text',
+          text: {
+            kind: 'text',
+            id: this.#createId(),
+            x: draft.position.x,
+            y: draft.position.y,
+            text: normalizedValue,
+            fontFamily: NODEINK_CANVAS_FONT_FAMILY,
+            fontSize: NODEINK_DEFAULT_TEXT_SIZE,
+            fontWeight: 400,
+            maxWidth: null,
+            fontFingerprint: this.#textMetrics.fingerprint(),
+          },
+        };
+    return this.#engine.executeCommand({
+      protocolVersion,
+      commandId,
+      documentId: this.#documentId,
+      expectedRevision: this.#snapshot.documentRevision,
+      command,
+    });
+  }
+
+  private async resolveTextMetrics(update: EngineUpdateV1): Promise<EngineUpdateV1> {
+    let resolved = update;
+    for (let attempt = 0; resolved.textMeasureRequest; attempt += 1) {
+      if (attempt >= 32) {
+        throw new Error('Text measurement did not converge');
+      }
+      const measured = this.#textMetrics.measure(resolved.textMeasureRequest);
+      resolved = await this.#engine.provideTextMetrics(measured.snapshot);
+    }
+    return resolved;
   }
 
   private applyUpdate(
@@ -803,6 +962,12 @@ interface ActionExecutionResult {
   strokeMetrics?: Pick<StrokeUpdateV1, 'processedPointCount' | 'ignoredPointCount' | 'didCommit'>;
 }
 
+interface TextEditingDraftV1 {
+  element: TextElementV1 | null;
+  position: Vec2;
+  initialValue: string;
+}
+
 export { runPointerBenchmark } from './pointer-benchmark';
 export type { PointerBenchmarkOptions, PointerBenchmarkResult } from './pointer-benchmark';
 export { runStrokeBenchmark } from './stroke-benchmark';
@@ -812,6 +977,11 @@ export type {
   StrokeBenchmarkReportV1,
   StrokeBenchmarkVariantResultV1,
 } from './stroke-benchmark';
+export {
+  NODEINK_CANVAS_FONT_EPOCH,
+  NODEINK_CANVAS_FONT_FAMILY,
+  NODEINK_DEFAULT_TEXT_SIZE,
+} from './text-font';
 export { attachImeComposition } from './ime-input';
 export type { ImeCompositionBindingV1, ImeCompositionStateV1 } from './ime-input';
 export { CanvasTextMetricsAdapter } from './text-metrics';

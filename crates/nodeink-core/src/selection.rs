@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     ElementId, ElementRecordV1, EngineErrorV1, NodeInkDocumentV1, RECTANGLE_STROKE_WIDTH, Vec2,
+    text::TextMetricsCache,
 };
 
 const SCREEN_HIT_TOLERANCE: f64 = 6.0;
@@ -79,6 +80,7 @@ impl SelectionModel {
         &self,
         document: &NodeInkDocumentV1,
         preview: Option<(&str, Vec2)>,
+        text_metrics: &TextMetricsCache,
     ) -> SelectionStateV1 {
         let Some(element_id) = self.selected_element_id.as_ref() else {
             return SelectionStateV1::default();
@@ -89,9 +91,12 @@ impl SelectionModel {
         let preview_delta = preview
             .filter(|(preview_element_id, _)| *preview_element_id == element_id)
             .map_or(Vec2 { x: 0.0, y: 0.0 }, |(_, delta)| delta);
+        let Some(bounds) = element_bounds(element, text_metrics) else {
+            return SelectionStateV1::default();
+        };
         SelectionStateV1 {
             selected_element_id: Some(element_id.clone()),
-            bounds: element_bounds(element).map(|bounds| bounds.translated(preview_delta)),
+            bounds: Some(bounds.translated(preview_delta)),
         }
     }
 }
@@ -100,15 +105,21 @@ pub(crate) fn hit_test_document(
     document: &NodeInkDocumentV1,
     point: Vec2,
     camera_zoom: f64,
+    text_metrics: &TextMetricsCache,
 ) -> Option<ElementId> {
     let tolerance = SCREEN_HIT_TOLERANCE / camera_zoom;
     document.root_order.iter().rev().find_map(|element_id| {
         let element = document.elements.get(element_id)?;
-        hit_test_element(element, point, tolerance).then(|| element_id.clone())
+        hit_test_element(element, point, tolerance, text_metrics).then(|| element_id.clone())
     })
 }
 
-fn hit_test_element(element: &ElementRecordV1, point: Vec2, tolerance: f64) -> bool {
+fn hit_test_element(
+    element: &ElementRecordV1,
+    point: Vec2,
+    tolerance: f64,
+    text_metrics: &TextMetricsCache,
+) -> bool {
     match element {
         ElementRecordV1::Rect(rectangle) => {
             point.x >= rectangle.x
@@ -122,6 +133,12 @@ fn hit_test_element(element: &ElementRecordV1, point: Vec2, tolerance: f64) -> b
                 point_segment_distance_squared(point, segment[0], segment[1]) <= radius * radius
             })
         }
+        ElementRecordV1::Text(_) => element_bounds(element, text_metrics).is_some_and(|bounds| {
+            point.x >= bounds.x - tolerance
+                && point.x <= bounds.x + bounds.width + tolerance
+                && point.y >= bounds.y - tolerance
+                && point.y <= bounds.y + bounds.height + tolerance
+        }),
     }
 }
 
@@ -150,7 +167,10 @@ fn squared_distance(first: Vec2, second: Vec2) -> f64 {
     delta_x * delta_x + delta_y * delta_y
 }
 
-fn element_bounds(element: &ElementRecordV1) -> Option<SelectionBoundsV1> {
+fn element_bounds(
+    element: &ElementRecordV1,
+    text_metrics: &TextMetricsCache,
+) -> Option<SelectionBoundsV1> {
     match element {
         ElementRecordV1::Rect(rectangle) => {
             let half_width = RECTANGLE_STROKE_WIDTH / 2.0;
@@ -182,6 +202,16 @@ fn element_bounds(element: &ElementRecordV1) -> Option<SelectionBoundsV1> {
                 width: max_x - min_x + stroke.stroke_width,
                 height: max_y - min_y + stroke.stroke_width,
             })
+        }
+        ElementRecordV1::Text(text) => {
+            text_metrics
+                .metric_for(text)
+                .map(|metric| SelectionBoundsV1 {
+                    x: text.x,
+                    y: text.y,
+                    width: metric.width,
+                    height: metric.height,
+                })
         }
     }
 }

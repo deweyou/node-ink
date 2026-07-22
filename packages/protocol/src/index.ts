@@ -1,5 +1,6 @@
 export const protocolVersion = 1 as const;
 export const schemaVersion = 1 as const;
+export const canvasFontFamily = 'Noto Sans SC Variable' as const;
 
 export interface NodeInkDocumentV1 {
   schemaVersion: 1;
@@ -9,7 +10,7 @@ export interface NodeInkDocumentV1 {
   elements: Record<string, ElementRecordV1>;
 }
 
-export type ElementRecordV1 = RectElementV1 | StrokeElementV1;
+export type ElementRecordV1 = RectElementV1 | StrokeElementV1 | TextElementV1;
 
 export interface RectElementV1 {
   kind: 'rect';
@@ -25,6 +26,19 @@ export interface StrokeElementV1 {
   id: string;
   points: Vec2[];
   strokeWidth: number;
+}
+
+export interface TextElementV1 {
+  kind: 'text';
+  id: string;
+  x: number;
+  y: number;
+  text: string;
+  fontFamily: typeof canvasFontFamily;
+  fontSize: number;
+  fontWeight: 400 | 500;
+  maxWidth: number | null;
+  fontFingerprint: string;
 }
 
 export interface Vec2 {
@@ -63,8 +77,15 @@ export type CommandV1 =
   | { type: 'create_rectangle'; rectangle: RectElementV1 }
   | { type: 'move_elements'; elementIds: string[]; delta: Vec2 }
   | { type: 'create_stroke'; stroke: StrokeElementV1 }
+  | { type: 'create_text'; text: TextElementV1 }
+  | { type: 'update_text'; elementId: string; patch: TextPatchV1 }
   | { type: 'update_rectangle'; elementId: string; patch: RectanglePatchV1 }
   | { type: 'delete_elements'; elementIds: string[] };
+
+export interface TextPatchV1 {
+  text?: string;
+  maxWidth?: number | null;
+}
 
 export interface RectanglePatchV1 {
   x?: number;
@@ -124,7 +145,7 @@ export interface HistoryStateV1 {
   canRedo: boolean;
 }
 
-export type EditorToolV1 = 'select' | 'freehand';
+export type EditorToolV1 = 'select' | 'freehand' | 'text';
 
 export interface ToolStateV1 {
   activeTool: EditorToolV1;
@@ -135,6 +156,7 @@ export interface EngineUpdateV1 extends ToolStateV1 {
   scene: SceneSnapshotV1;
   history: HistoryStateV1;
   selection: SelectionStateV1;
+  textMeasureRequest: TextMeasureRequestV1 | null;
 }
 
 export interface SelectionBoundsV1 {
@@ -239,6 +261,11 @@ export interface TextFixtureResolutionV1 {
   canonicalHash: string | null;
 }
 
+export interface TextEditTargetV1 {
+  element: TextElementV1 | null;
+  update: EngineUpdateV1;
+}
+
 export interface MigrationResultV1 {
   sourceSchemaVersion: number;
   targetSchemaVersion: number;
@@ -322,6 +349,8 @@ export interface EnginePortV1 {
   executeCommand(command: CommandEnvelopeV1): Promise<EngineUpdateV1>;
   setActiveTool(tool: EditorToolV1): Promise<EngineUpdateV1>;
   setSelection(elementId: string | null): Promise<EngineUpdateV1>;
+  beginTextEditAt(point: Vec2): Promise<TextEditTargetV1>;
+  provideTextMetrics(snapshot: TextMetricsSnapshotV1): Promise<EngineUpdateV1>;
   executeDiagramOperation(batch: DiagramOperationBatchV1): Promise<DiagramOperationBatchResultV1>;
   handlePointerEvents(
     events: NormalizedPointerEventV1[],
@@ -434,11 +463,7 @@ export function parseEngineUpdate(value: string): EngineUpdateV1 {
     throw new Error('Engine returned an invalid update payload');
   }
   if (
-    parsed.scene.protocolVersion !== protocolVersion ||
-    typeof parsed.scene.documentRevision !== 'number' ||
-    typeof parsed.scene.sceneRevision !== 'number' ||
-    !Array.isArray(parsed.scene.rootNodeIds) ||
-    !isRecord(parsed.scene.nodes) ||
+    !isSceneSnapshot(parsed.scene) ||
     typeof parsed.history.canUndo !== 'boolean' ||
     typeof parsed.history.canRedo !== 'boolean' ||
     (parsed.selection.selectedElementId !== null &&
@@ -452,7 +477,11 @@ export function parseEngineUpdate(value: string): EngineUpdateV1 {
   if (!isEditorTool(activeTool)) {
     throw new Error('Engine update does not satisfy protocol V1');
   }
-  return { ...parsed, activeTool } as unknown as EngineUpdateV1;
+  const textMeasureRequest = parsed.textMeasureRequest ?? null;
+  if (!isTextMeasureRequest(textMeasureRequest)) {
+    throw new Error('Engine update does not satisfy protocol V1');
+  }
+  return { ...parsed, activeTool, textMeasureRequest } as unknown as EngineUpdateV1;
 }
 
 export function parseCamera(value: string): CameraV1 {
@@ -496,7 +525,12 @@ export function parseScenePatch(value: string): ScenePatchV1 {
     !isRecord(parsed.addedNodes) ||
     !isRecord(parsed.updatedNodes) ||
     !Array.isArray(parsed.removedNodeIds) ||
-    (parsed.rootNodeIds !== null && !Array.isArray(parsed.rootNodeIds))
+    !isSceneNodeMap(parsed.addedNodes) ||
+    !isSceneNodeMap(parsed.updatedNodes) ||
+    !parsed.removedNodeIds.every((nodeId) => typeof nodeId === 'string') ||
+    (parsed.rootNodeIds !== null &&
+      (!Array.isArray(parsed.rootNodeIds) ||
+        !parsed.rootNodeIds.every((nodeId) => typeof nodeId === 'string')))
   ) {
     throw new Error('Engine patch does not satisfy protocol V1');
   }
@@ -575,6 +609,27 @@ export function parseStrokeUpdate(value: string): StrokeUpdateV1 {
   };
 }
 
+export function parseTextEditTarget(value: string): TextEditTargetV1 {
+  const parsed: unknown = JSON.parse(value);
+  if (
+    !isRecord(parsed) ||
+    (parsed.element !== null && !isTextElement(parsed.element)) ||
+    !isRecord(parsed.update)
+  ) {
+    throw new Error('Engine returned an invalid text edit target payload');
+  }
+  let update: EngineUpdateV1;
+  try {
+    update = parseEngineUpdate(JSON.stringify(parsed.update));
+  } catch {
+    throw new Error('Engine returned an invalid text edit target payload');
+  }
+  return {
+    element: parsed.element,
+    update,
+  };
+}
+
 export function parseSceneResolution(value: string): SceneResolutionV1 {
   const parsed: unknown = JSON.parse(value);
   if (
@@ -650,7 +705,132 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function isEditorTool(value: unknown): value is EditorToolV1 {
-  return value === 'select' || value === 'freehand';
+  return value === 'select' || value === 'freehand' || value === 'text';
+}
+
+function isSceneSnapshot(value: Record<string, unknown>): boolean {
+  const rootNodeIds = value.rootNodeIds;
+  const nodes = value.nodes;
+  if (
+    value.protocolVersion !== protocolVersion ||
+    typeof value.documentId !== 'string' ||
+    !isNonNegativeInteger(value.documentRevision) ||
+    !isNonNegativeInteger(value.sceneRevision) ||
+    !Array.isArray(rootNodeIds) ||
+    !rootNodeIds.every((nodeId) => typeof nodeId === 'string') ||
+    !isRecord(nodes) ||
+    !isSceneNodeMap(nodes)
+  ) {
+    return false;
+  }
+  return rootNodeIds.every((nodeId) => nodes[nodeId] !== undefined);
+}
+
+function isSceneNodeMap(value: Record<string, unknown>): boolean {
+  return Object.entries(value).every(([nodeId, node]) => isSceneNode(node) && node.id === nodeId);
+}
+
+function isSceneNode(value: unknown): value is SceneNodeV1 {
+  if (
+    !isRecord(value) ||
+    typeof value.id !== 'string' ||
+    typeof value.sourceElementId !== 'string'
+  ) {
+    return false;
+  }
+  if (value.kind === 'rect') {
+    return (
+      isFiniteNumber(value.x) &&
+      isFiniteNumber(value.y) &&
+      isNonNegativeFiniteNumber(value.width) &&
+      isNonNegativeFiniteNumber(value.height) &&
+      typeof value.fill === 'string' &&
+      typeof value.stroke === 'string' &&
+      isNonNegativeFiniteNumber(value.strokeWidth)
+    );
+  }
+  if (value.kind === 'path') {
+    return (
+      typeof value.pathData === 'string' &&
+      typeof value.fill === 'string' &&
+      typeof value.stroke === 'string' &&
+      isNonNegativeFiniteNumber(value.strokeWidth)
+    );
+  }
+  return value.kind === 'text' && Array.isArray(value.runs) && value.runs.every(isSceneTextRun);
+}
+
+function isSceneTextRun(value: unknown): value is SceneTextRunV1 {
+  return (
+    isRecord(value) &&
+    typeof value.text === 'string' &&
+    isFiniteNumber(value.x) &&
+    isFiniteNumber(value.y) &&
+    value.fontFamily === canvasFontFamily &&
+    isPositiveFiniteNumber(value.fontSize) &&
+    (value.fontWeight === 400 || value.fontWeight === 500) &&
+    typeof value.fill === 'string'
+  );
+}
+
+function isTextMeasureRequest(value: unknown): value is TextMeasureRequestV1 | null {
+  return (
+    value === null ||
+    (isRecord(value) &&
+      typeof value.requestId === 'string' &&
+      value.requestId.length > 0 &&
+      typeof value.fontFingerprint === 'string' &&
+      value.fontFingerprint.length > 0 &&
+      Array.isArray(value.runs) &&
+      value.runs.every(isTextRun))
+  );
+}
+
+function isTextElement(value: unknown): value is TextElementV1 {
+  return (
+    isRecord(value) &&
+    value.kind === 'text' &&
+    typeof value.id === 'string' &&
+    value.id.length > 0 &&
+    isFiniteNumber(value.x) &&
+    isFiniteNumber(value.y) &&
+    typeof value.text === 'string' &&
+    value.fontFamily === canvasFontFamily &&
+    isPositiveFiniteNumber(value.fontSize) &&
+    (value.fontWeight === 400 || value.fontWeight === 500) &&
+    (value.maxWidth === null || isPositiveFiniteNumber(value.maxWidth)) &&
+    typeof value.fontFingerprint === 'string' &&
+    value.fontFingerprint.length > 0
+  );
+}
+
+function isTextRun(value: unknown): value is TextRunV1 {
+  return (
+    isRecord(value) &&
+    typeof value.key === 'string' &&
+    value.key.length > 0 &&
+    typeof value.text === 'string' &&
+    value.fontFamily === canvasFontFamily &&
+    isPositiveFiniteNumber(value.fontSize) &&
+    (value.fontWeight === 400 || value.fontWeight === 500) &&
+    (value.maxWidth === null || isPositiveFiniteNumber(value.maxWidth))
+  );
+}
+
+function isFiniteNumber(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value);
+}
+
+function isNonNegativeFiniteNumber(value: unknown): value is number {
+  return isFiniteNumber(value) && value >= 0;
+}
+
+function isPositiveFiniteNumber(value: unknown): value is number {
+  return isFiniteNumber(value) && value > 0;
+}
+
+function isNonNegativeInteger(value: unknown): value is number {
+  return typeof value === 'number' && Number.isInteger(value) && value >= 0;
 }
 
 function isSelectionBounds(value: unknown): boolean {

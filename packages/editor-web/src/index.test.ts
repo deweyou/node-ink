@@ -20,6 +20,8 @@ import type {
   StrokeInputBatchV1,
   StrokeTransportV1,
   StrokeUpdateV1,
+  TextElementV1,
+  TextMeasureRequestV1,
   TextFixtureResolutionV1,
   TextMetricsSnapshotV1,
   TextRunV1,
@@ -394,6 +396,163 @@ describe('EditorWebController', () => {
     expect(controller.getSnapshot().activeTool).toBe('select');
   });
 
+  it('creates fixed-font multiline text after IME composition and measures it without another document commit', async () => {
+    const engine = new StubEngine();
+    const persistence = new StubPersistence();
+    const measure = vi.fn((request: TextMeasureRequestV1) => ({
+      snapshot: {
+        fontFingerprint: request.fontFingerprint,
+        metrics: request.runs.map((run) => ({
+          key: run.key,
+          width: 144,
+          height: 60,
+          baseline: 20,
+          lineBreaks: [2],
+        })),
+      },
+    }));
+    const ids = ['unused-pointer', 'create-command', 'text-1'];
+    const controller = new EditorWebController({
+      engine,
+      renderer: new StubRenderer(),
+      persistence,
+      textMetrics: { fingerprint: () => 'font-ready-v1', measure },
+      createId: () => ids.shift() ?? 'fallback',
+    });
+    const target = document.createElement('div');
+    await controller.mount(target);
+    await controller.dispatch({ type: 'set_tool', tool: 'text' });
+    await controller.dispatch({ type: 'pointer_events', events: [pointerEvent('down', 1)] });
+    const input = target.querySelector('textarea');
+    expect(input).not.toBeNull();
+
+    input?.dispatchEvent(new CompositionEvent('compositionstart'));
+    if (input) {
+      input.value = '你好';
+    }
+    input?.dispatchEvent(new InputEvent('input', { bubbles: true, isComposing: true }));
+    input?.dispatchEvent(new CompositionEvent('compositionend'));
+    expect(engine.commands).toHaveLength(0);
+
+    if (input) {
+      input.value = '你好\nNodeInk';
+    }
+    input?.dispatchEvent(new InputEvent('input', { bubbles: true }));
+    input?.dispatchEvent(new FocusEvent('blur'));
+    await vi.waitFor(() => expect(engine.commands).toHaveLength(1));
+
+    expect(engine.commands[0]).toMatchObject({
+      commandId: 'create-command',
+      expectedRevision: 0,
+      command: {
+        type: 'create_text',
+        text: {
+          id: 'text-1',
+          text: '你好\nNodeInk',
+          fontFamily: 'Noto Sans SC Variable',
+          fontSize: 24,
+          fontWeight: 400,
+          maxWidth: null,
+          fontFingerprint: 'font-ready-v1',
+        },
+      },
+    });
+    expect(measure).toHaveBeenCalledOnce();
+    expect(engine.providedTextMetrics).toHaveLength(1);
+    expect(persistence.committedRevisions).toEqual([1]);
+    expect(controller.getSnapshot()).toMatchObject({
+      documentRevision: 1,
+      sceneRevision: 1,
+      elementCount: 1,
+    });
+  });
+
+  it('edits existing text on Select double-click and deletes it when cleared', async () => {
+    const engine = new StubEngine();
+    engine.textEditElement = textElement('text-1', '旧文本');
+    const ids = ['update-command', 'delete-command'];
+    const controller = new EditorWebController({
+      engine,
+      renderer: new StubRenderer(),
+      createId: () => ids.shift() ?? 'fallback',
+    });
+    const target = document.createElement('div');
+    target.getBoundingClientRect = vi.fn(
+      () => ({ width: 400, height: 300, left: 0, top: 0 }) as DOMRect,
+    );
+    await controller.mount(target);
+
+    target.dispatchEvent(
+      new MouseEvent('dblclick', {
+        bubbles: true,
+        cancelable: true,
+        button: 0,
+        clientX: 40,
+        clientY: 52,
+      }),
+    );
+    const firstInput = await vi.waitFor(() => {
+      const candidate = target.querySelector('textarea');
+      expect(candidate).not.toBeNull();
+      return candidate as HTMLTextAreaElement;
+    });
+    firstInput.value = '新文本';
+    firstInput.dispatchEvent(new InputEvent('input', { bubbles: true }));
+    firstInput.dispatchEvent(
+      new KeyboardEvent('keydown', {
+        key: 'Enter',
+        metaKey: true,
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+    await vi.waitFor(() => expect(engine.commands).toHaveLength(1));
+    expect(engine.commands[0]?.command).toEqual({
+      type: 'update_text',
+      elementId: 'text-1',
+      patch: { text: '新文本' },
+    });
+
+    await controller.dispatch({ type: 'begin_text_edit', point: { x: 40, y: 52 } });
+    const secondInput = target.querySelector('textarea');
+    expect(secondInput).not.toBeNull();
+    if (secondInput) {
+      secondInput.value = '';
+      secondInput.dispatchEvent(new InputEvent('input', { bubbles: true }));
+      secondInput.dispatchEvent(new FocusEvent('blur'));
+    }
+    await vi.waitFor(() => expect(engine.commands).toHaveLength(2));
+    expect(engine.commands[1]?.command).toEqual({
+      type: 'delete_elements',
+      elementIds: ['text-1'],
+    });
+  });
+
+  it('cancels an empty text draft without creating history', async () => {
+    const engine = new StubEngine();
+    const controller = new EditorWebController({
+      engine,
+      renderer: new StubRenderer(),
+      createId: () => 'unused-pointer',
+    });
+    const target = document.createElement('div');
+    await controller.mount(target);
+    await controller.dispatch({ type: 'set_tool', tool: 'text' });
+    await controller.dispatch({ type: 'pointer_events', events: [pointerEvent('down', 1)] });
+
+    target.querySelector('textarea')?.dispatchEvent(
+      new KeyboardEvent('keydown', {
+        key: 'Escape',
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+
+    expect(target.querySelector('textarea')).toBeNull();
+    expect(engine.commands).toHaveLength(0);
+    expect(controller.getSnapshot().documentRevision).toBe(0);
+  });
+
   it('supports explicit geometry, history, subscriptions, and idempotent disposal', async () => {
     const engine = new StubEngine();
     const renderer = new StubRenderer();
@@ -563,6 +722,7 @@ describe('EditorWebController', () => {
       'pointerup',
       'pointercancel',
       'lostpointercapture',
+      'dblclick',
     ]);
     expect(firstRemove.mock.calls.map(([type]) => type)).toEqual([
       'pointerdown',
@@ -575,8 +735,9 @@ describe('EditorWebController', () => {
       'pointerup',
       'pointercancel',
       'lostpointercapture',
+      'dblclick',
     ]);
-    expect(secondAdd).toHaveBeenCalledTimes(10);
+    expect(secondAdd).toHaveBeenCalledTimes(11);
     expect(secondRemove).not.toHaveBeenCalled();
     expect(renderer.mountCalls).toBe(2);
 
@@ -589,6 +750,7 @@ describe('EditorWebController', () => {
       'pointerup',
       'pointercancel',
       'lostpointercapture',
+      'dblclick',
       'pointerdown',
       'pointermove',
       'pointerup',
@@ -785,6 +947,9 @@ class StubEngine implements EnginePortV1 {
   readonly commands: CommandEnvelopeV1[] = [];
   readonly pointerBatches: NormalizedPointerEventV1[][] = [];
   readonly strokeBatches: StrokeInputBatchV1[] = [];
+  readonly providedTextMetrics: TextMetricsSnapshotV1[] = [];
+  textMeasureRequest: TextMeasureRequestV1 | null = null;
+  textEditElement: TextElementV1 | null = null;
   currentError: unknown = null;
   executeError: unknown = null;
   undoCalls = 0;
@@ -801,8 +966,10 @@ class StubEngine implements EnginePortV1 {
   #camera: CameraV1 = { x: 0, y: 0, zoom: 1 };
   #revision = 0;
   #rectangleId: string | null;
+  #textElement: TextElementV1 | null = null;
+  #textMeasured = false;
   #selectedElementId: string | null = null;
-  #activeTool: 'select' | 'freehand' = 'select';
+  #activeTool: 'select' | 'freehand' | 'text' = 'select';
   #canRedo = false;
 
   constructor(rectangleId: string | null = null) {
@@ -867,6 +1034,20 @@ class StubEngine implements EnginePortV1 {
     if (command.command.type === 'create_rectangle') {
       this.#rectangleId = command.command.rectangle.id;
       this.#selectedElementId = this.#rectangleId;
+    } else if (command.command.type === 'create_text') {
+      this.#textElement = command.command.text;
+      this.textEditElement = command.command.text;
+      this.#selectedElementId = command.command.text.id;
+      this.requestTextMeasurement(command.command.text);
+    } else if (command.command.type === 'update_text') {
+      const current = this.textEditElement;
+      if (current && current.id === command.command.elementId) {
+        const updated = { ...current, ...command.command.patch };
+        this.#textElement = updated;
+        this.textEditElement = updated;
+        this.#selectedElementId = updated.id;
+        this.requestTextMeasurement(updated);
+      }
     } else if (command.command.type === 'move_elements') {
       this.#selectedElementId = command.command.elementIds[0] ?? this.#selectedElementId;
     } else if (command.command.type === 'delete_elements') {
@@ -876,13 +1057,25 @@ class StubEngine implements EnginePortV1 {
       if (this.#rectangleId && command.command.elementIds.includes(this.#rectangleId)) {
         this.#rectangleId = null;
       }
+      if (this.#textElement && command.command.elementIds.includes(this.#textElement.id)) {
+        this.#textElement = null;
+        this.textEditElement = null;
+        this.textMeasureRequest = null;
+        this.#textMeasured = false;
+      }
     }
-    return this.update(
-      command.command.type === 'delete_elements' ? [] : [this.#rectangleId ?? 'rect-1'],
-    );
+    const changedElementIds =
+      command.command.type === 'delete_elements'
+        ? []
+        : command.command.type === 'create_text'
+          ? [command.command.text.id]
+          : command.command.type === 'update_text'
+            ? [command.command.elementId]
+            : [this.#rectangleId ?? 'rect-1'];
+    return this.update(changedElementIds);
   }
 
-  async setActiveTool(tool: 'select' | 'freehand'): Promise<EngineUpdateV1> {
+  async setActiveTool(tool: 'select' | 'freehand' | 'text'): Promise<EngineUpdateV1> {
     this.#activeTool = tool;
     this.#selectedElementId = null;
     return this.update();
@@ -893,6 +1086,18 @@ class StubEngine implements EnginePortV1 {
       throw new Error(`element ${elementId} was not found`);
     }
     this.#selectedElementId = elementId;
+    return this.update();
+  }
+
+  async beginTextEditAt(): Promise<{ element: TextElementV1 | null; update: EngineUpdateV1 }> {
+    this.#selectedElementId = this.textEditElement?.id ?? null;
+    return { element: this.textEditElement, update: this.update() };
+  }
+
+  async provideTextMetrics(snapshot: TextMetricsSnapshotV1): Promise<EngineUpdateV1> {
+    this.providedTextMetrics.push(snapshot);
+    this.textMeasureRequest = null;
+    this.#textMeasured = true;
     return this.update();
   }
 
@@ -1044,9 +1249,14 @@ class StubEngine implements EnginePortV1 {
   }
 
   private update(changedElementIds: string[] = []): EngineUpdateV1 {
-    const scene = stubScene(this.#revision, this.#rectangleId);
+    const scene = stubScene(
+      this.#revision,
+      this.#rectangleId,
+      this.#textMeasured ? this.#textElement : null,
+    );
     return {
       activeTool: this.#activeTool,
+      textMeasureRequest: this.textMeasureRequest,
       operation: changedElementIds.length
         ? {
             commandId: `command-${this.#revision}`,
@@ -1062,6 +1272,24 @@ class StubEngine implements EnginePortV1 {
         selectedElementId: this.#selectedElementId,
         bounds: this.#selectedElementId ? { x: 80, y: 72, width: 176, height: 104 } : null,
       },
+    };
+  }
+
+  private requestTextMeasurement(element: TextElementV1): void {
+    this.#textMeasured = false;
+    this.textMeasureRequest = {
+      requestId: `measure-${this.#revision}`,
+      fontFingerprint: element.fontFingerprint,
+      runs: [
+        {
+          key: `${element.id}:run-${this.#revision}`,
+          text: element.text,
+          fontFamily: element.fontFamily,
+          fontSize: element.fontSize,
+          fontWeight: element.fontWeight,
+          maxWidth: element.maxWidth,
+        },
+      ],
     };
   }
 }
@@ -1126,9 +1354,13 @@ class StubCameraPersistence implements EditorCameraPersistencePortV1 {
   }
 }
 
-function stubScene(revision: number, rectangleId: string | null): SceneSnapshotV1 {
+function stubScene(
+  revision: number,
+  rectangleId: string | null,
+  text: TextElementV1 | null = null,
+): SceneSnapshotV1 {
   const sceneNodeId = rectangleId ? `${rectangleId}:shape` : null;
-  const nodes =
+  const rectangleNodes =
     sceneNodeId && rectangleId
       ? {
           [sceneNodeId]: {
@@ -1145,13 +1377,50 @@ function stubScene(revision: number, rectangleId: string | null): SceneSnapshotV
           },
         }
       : {};
+  const textNodeId = text ? `${text.id}:text` : null;
+  const textNodes =
+    text && textNodeId
+      ? {
+          [textNodeId]: {
+            kind: 'text' as const,
+            id: textNodeId,
+            sourceElementId: text.id,
+            runs: [
+              {
+                text: text.text,
+                x: text.x,
+                y: text.y + 20,
+                fontFamily: text.fontFamily,
+                fontSize: text.fontSize,
+                fontWeight: text.fontWeight,
+                fill: '#0f172a',
+              },
+            ],
+          },
+        }
+      : {};
   return {
     protocolVersion: 1,
     documentId: 'doc-1',
     documentRevision: revision,
     sceneRevision: revision,
-    rootNodeIds: sceneNodeId ? [sceneNodeId] : [],
-    nodes,
+    rootNodeIds: [sceneNodeId, textNodeId].filter((id): id is string => id !== null),
+    nodes: { ...rectangleNodes, ...textNodes },
+  };
+}
+
+function textElement(id: string, text: string): TextElementV1 {
+  return {
+    kind: 'text',
+    id,
+    x: 40,
+    y: 52,
+    text,
+    fontFamily: 'Noto Sans SC Variable',
+    fontSize: 24,
+    fontWeight: 400,
+    maxWidth: null,
+    fontFingerprint: 'font-ready-v1',
   };
 }
 

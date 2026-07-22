@@ -15,6 +15,9 @@ Document revision/Undo。单击选择、空白清空、拖动、`Delete`/`Backsp
 Rust Editor State 与 Transaction 驱动，并在 React、Vue、Vanilla 三端共享；选择本身不会持久化。
 Select/Draw 现在也是 Rust-owned 非持久工具状态：`V`/`P` 可切换，Draw 使用 S2 验证过的
 Float64Array batch-2 输入，支持连续笔迹、单击圆点、取消恢复与整笔 Undo/Redo。
+Text 也进入同一条产品路径：`T` 单击创建，Select 双击语义文本可编辑；固定加载
+`Noto Sans SC Variable`，支持多行与中文 IME，blur 或 `Cmd/Ctrl+Enter` 只提交一个 Rust
+Transaction。浏览器字体测量通过两阶段协议回填 Scene，不建立第二份 Document 状态。
 
 ## 本地运行
 
@@ -60,4 +63,5 @@ cargo install cargo-llvm-cov --version 0.8.7 --locked
 - [Phase 1A Camera 与无限画布切片](docs/planning/phase1a-camera-viewport.md)
 - [Phase 1A 单选与元素删除切片](docs/planning/phase1a-selection-tool.md)
 - [Phase 1A 自由笔工具切片](docs/planning/phase1a-freehand-tool.md)
+- [Phase 1A 产品文本切片](docs/planning/phase1a-product-text.md)
 - [待确认决策](docs/decisions/open-questions.md)

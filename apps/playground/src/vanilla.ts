@@ -39,6 +39,7 @@ rootElement.innerHTML = `
     <aside class="nodeink-toolbar" aria-label="Canvas actions">
       <button type="button" data-action="set_tool_select" data-tool="select" title="Select tool (V)">Select</button>
       <button type="button" data-action="set_tool_freehand" data-tool="freehand" title="Freehand tool (P)">Draw</button>
+      <button type="button" data-action="set_tool_text" data-tool="text" title="Text tool (T)">Text</button>
       <button type="button" data-action="create_rectangle">Rectangle</button>
       <button type="button" data-action="move_active">Move</button>
       <button type="button" data-action="delete_selection" data-danger="true">Delete</button>
@@ -157,6 +158,8 @@ rootElement.addEventListener('click', (event) => {
     void controller.dispatch({ type: 'set_tool', tool: 'select' });
   } else if (action === 'set_tool_freehand') {
     void controller.dispatch({ type: 'set_tool', tool: 'freehand' });
+  } else if (action === 'set_tool_text') {
+    void controller.dispatch({ type: 'set_tool', tool: 'text' });
   } else if (action === 'move_active') {
     void controller.dispatch({ type: 'move_active', delta: { x: 32, y: 16 } });
   } else if (action === 'delete_selection') {
@@ -226,8 +229,10 @@ function renderSnapshot(
   const camera = getEditorCameraPresentation(snapshot);
   setDisabled(root, 'set_tool_select', !isEditable);
   setDisabled(root, 'set_tool_freehand', !isEditable);
+  setDisabled(root, 'set_tool_text', !isEditable);
   setPressed(root, 'select', snapshot.activeTool === 'select');
   setPressed(root, 'freehand', snapshot.activeTool === 'freehand');
+  setPressed(root, 'text', snapshot.activeTool === 'text');
   setDisabled(root, 'create_rectangle', !isEditable);
   setDisabled(root, 'move_active', !isEditable || !snapshot.activeElementId);
   setDisabled(root, 'delete_selection', !isEditable || !snapshot.activeElementId);

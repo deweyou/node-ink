@@ -162,6 +162,19 @@ describe('attachPointerInput', () => {
     expect(batches.map((batch) => batch[0]?.phase)).toEqual(['down', 'cancel', 'down', 'cancel']);
     expect(batches[1]?.[0]).toMatchObject({ sequence: 2, point: { x: 20, y: 30 } });
   });
+
+  it('maps a primary double click to semantic canvas coordinates', () => {
+    const target = document.createElement('div');
+    mockBounds(target);
+    const onDoubleClick = vi.fn();
+    attachPointerInput(target, vi.fn(), { onDoubleClick });
+
+    target.dispatchEvent(mouseEvent('dblclick', { clientX: 50, clientY: 80 }));
+    target.dispatchEvent(mouseEvent('dblclick', { button: 2 }));
+
+    expect(onDoubleClick).toHaveBeenCalledOnce();
+    expect(onDoubleClick).toHaveBeenCalledWith({ x: 40, y: 60 });
+  });
 });
 
 interface PointerEventOptions {
@@ -182,6 +195,16 @@ function pointerEvent(type: string, options: PointerEventOptions = {}): PointerE
     getCoalescedEvents: { value: () => options.coalescedEvents ?? [] },
   });
   return event;
+}
+
+function mouseEvent(type: string, options: PointerEventOptions = {}): MouseEvent {
+  return new MouseEvent(type, {
+    bubbles: true,
+    cancelable: true,
+    button: options.button ?? 0,
+    clientX: options.clientX ?? 10,
+    clientY: options.clientY ?? 20,
+  });
 }
 
 function mockBounds(target: HTMLElement): void {

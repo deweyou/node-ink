@@ -197,6 +197,14 @@
 - 自由笔复用 S2 的 Float64Array batch-2 传输，PointerUp 形成一个 `create_stroke` Transaction；单击规范化为稳定圆点，取消与失焦只清除 preview。
 - Phase 1 使用 mouse/trackpad/pen 的位置输入和固定 3px 笔宽，不承诺 pressure、可变宽轮廓或移动触摸编辑。这些能力需要独立几何、命中和设备验收。
 
+### D-29 Phase 1A 产品文本与固定字体
+
+- 画布文本固定使用随应用加载的 `Noto Sans SC Variable`（`@fontsource-variable/noto-sans-sc@5.3.0`，OFL-1.1）；UI 字体仍使用系统栈。Host 在创建 Engine 前等待 400/500 weight 可用，失败时明确阻止进入可写编辑器。
+- `TextElementV1` 持久化内容、位置、24px/400 默认样式、可选 `maxWidth` 与非空 `fontFingerprint`；创建、更新、清空删除、移动及 Undo/Redo 全部经过 Rust Command/Transaction。
+- Rust 发出 `textMeasureRequest`，浏览器用固定字体测量并通过 `provideTextMetrics` 回填；metrics cache 与 Scene revision 属于瞬态解析状态，不增加 Document revision 或 Undo history。换行索引统一按 Unicode code point，而不是 JavaScript UTF-16 code unit。
+- IME buffer 只存在于 HTML textarea overlay。Enter 插入换行，`Cmd/Ctrl+Enter` 或 blur 提交一次，`Escape` 取消；空白新文本不产生 Command，清空已有文本走 `delete_elements`。
+- Text 工具快捷键为 `T`；Text 单击开始创建，Select 对已有文本的双击通过 Rust 语义命中进入编辑，不能依赖 SVG DOM target。
+
 ## 22. 需要产品负责人决策的问题
 
 以下问题不阻碍继续评审文档，但会阻碍对应功能进入实现。
@@ -216,7 +224,7 @@
 - **替代 B**：把文本 bounds 从确定性 Scene 验收中排除。
 - **影响**：跨设备换行、布局、Scene hash、包体积和字体许可。
 - **决策时点**：Phase 0 文本测量 Spike 后、Phase 1A 文本实现前。
-- **当前状态**：待确认。
+- **当前状态**：已确认采用推荐方案。Phase 1A 固定使用随应用加载的 `Noto Sans SC Variable`，持久化 `fontFingerprint` 并等待字体就绪后创建 Engine，详见 D-29。
 - **Phase 0 证据**：两阶段测量与 fingerprint 失效可行；本机首次 3-run 测量 7.5ms、缓存 3/3 命中。跨设备一致性仍要求固定字体或明确降级契约。
 
 ### P-03 多标签页行为

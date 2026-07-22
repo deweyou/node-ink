@@ -34,11 +34,12 @@ pub use sketch::{ENGINE_ALGORITHM_VERSION, RenderProfileV1, SketchFillStyleV1};
 use sketch::{sketch_rectangle, sketch_stroke};
 pub use stroke::{StrokeInputBatchV1, StrokePhaseV1};
 use stroke::{StrokeMachine, StrokePreview, StrokeTransition};
-use text::resolve_text_fixture;
 pub use text::{
-    ResolvedTextRunV1, TextFixtureResolutionV1, TextFixtureSceneV1, TextMeasureRequestV1,
-    TextMetricsSnapshotV1, TextMetricsV1, TextRunV1,
+    CANVAS_FONT_FAMILY, DEFAULT_TEXT_FONT_SIZE, DEFAULT_TEXT_FONT_WEIGHT, ResolvedTextRunV1,
+    TextFixtureResolutionV1, TextFixtureSceneV1, TextMeasureRequestV1, TextMetricsSnapshotV1,
+    TextMetricsV1, TextRunV1,
 };
+use text::{TextMetricsCache, resolve_text_fixture, scene_runs};
 pub use tool::EditorToolV1;
 use tool::ToolState;
 
@@ -77,6 +78,7 @@ impl NodeInkDocumentV1 {
 pub enum ElementRecordV1 {
     Rect(RectElementV1),
     Stroke(StrokeElementV1),
+    Text(TextElementV1),
 }
 
 impl ElementRecordV1 {
@@ -84,6 +86,14 @@ impl ElementRecordV1 {
         match self {
             Self::Rect(rectangle) => &rectangle.id,
             Self::Stroke(stroke) => &stroke.id,
+            Self::Text(text) => &text.id,
+        }
+    }
+
+    pub(crate) fn as_text(&self) -> Option<&TextElementV1> {
+        match self {
+            Self::Text(text) => Some(text),
+            Self::Rect(_) | Self::Stroke(_) => None,
         }
     }
 
@@ -98,6 +108,10 @@ impl ElementRecordV1 {
                     point.x += delta.x;
                     point.y += delta.y;
                 }
+            }
+            Self::Text(text) => {
+                text.x += delta.x;
+                text.y += delta.y;
             }
         }
     }
@@ -119,6 +133,55 @@ pub struct StrokeElementV1 {
     pub id: ElementId,
     pub points: Vec<Vec2>,
     pub stroke_width: f64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TextElementV1 {
+    pub id: ElementId,
+    pub x: f64,
+    pub y: f64,
+    pub text: String,
+    pub font_family: String,
+    pub font_size: f64,
+    pub font_weight: u16,
+    pub max_width: Option<f64>,
+    pub font_fingerprint: String,
+}
+
+impl TextElementV1 {
+    pub fn new(
+        id: impl Into<ElementId>,
+        x: f64,
+        y: f64,
+        text: impl Into<String>,
+        font_fingerprint: impl Into<String>,
+    ) -> Self {
+        Self {
+            id: id.into(),
+            x,
+            y,
+            text: text.into(),
+            font_family: CANVAS_FONT_FAMILY.to_string(),
+            font_size: DEFAULT_TEXT_FONT_SIZE,
+            font_weight: DEFAULT_TEXT_FONT_WEIGHT,
+            max_width: None,
+            font_fingerprint: font_fingerprint.into(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TextPatchV1 {
+    pub text: Option<String>,
+    pub max_width: Option<Option<f64>>,
+}
+
+impl TextPatchV1 {
+    fn is_empty(&self) -> bool {
+        self.text.is_none() && self.max_width.is_none()
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -154,6 +217,13 @@ pub enum CommandV1 {
     CreateStroke {
         stroke: StrokeElementV1,
     },
+    CreateText {
+        text: TextElementV1,
+    },
+    UpdateText {
+        element_id: ElementId,
+        patch: TextPatchV1,
+    },
     UpdateRectangle {
         element_id: ElementId,
         patch: RectanglePatchV1,
@@ -188,6 +258,36 @@ pub struct EngineUpdateV1 {
     pub history: HistoryStateV1,
     pub selection: SelectionStateV1,
     pub active_tool: EditorToolV1,
+    pub text_measure_request: Option<TextMeasureRequestV1>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TextEditTargetV1 {
+    #[serde(serialize_with = "serialize_optional_text_edit_element")]
+    pub element: Option<TextElementV1>,
+    pub update: EngineUpdateV1,
+}
+
+fn serialize_optional_text_edit_element<S>(
+    element: &Option<TextElementV1>,
+    serializer: S,
+) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    let Some(element) = element else {
+        return serializer.serialize_none();
+    };
+    let mut value = serde_json::to_value(element).map_err(serde::ser::Error::custom)?;
+    value
+        .as_object_mut()
+        .expect("TextElementV1 serializes as an object")
+        .insert(
+            "kind".to_string(),
+            serde_json::Value::String("text".to_string()),
+        );
+    value.serialize(serializer)
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -319,12 +419,18 @@ pub enum EngineErrorV1 {
     InvalidTextFixture,
     #[error("text metrics fingerprint does not match the request")]
     TextFingerprintMismatch,
+    #[error("invalid product text metrics")]
+    InvalidTextMetrics,
+    #[error("invalid text element {element_id}")]
+    InvalidText { element_id: ElementId },
     #[error("invalid benchmark fixture")]
     InvalidBenchmarkFixture,
     #[error("invalid operation batch: {reason}")]
     InvalidOperationBatch { reason: String },
     #[error("element {element_id} is not a rectangle")]
     ElementNotRectangle { element_id: ElementId },
+    #[error("element {element_id} is not text")]
+    ElementNotText { element_id: ElementId },
     #[error("undo history is empty")]
     UndoUnavailable,
     #[error("redo history is empty")]
@@ -344,6 +450,7 @@ pub struct Engine {
     tool_state: ToolState,
     pointer_machine: PointerMachine,
     stroke_machine: StrokeMachine,
+    text_metrics: TextMetricsCache,
 }
 
 impl Engine {
@@ -359,6 +466,7 @@ impl Engine {
             tool_state: ToolState::default(),
             pointer_machine: PointerMachine::default(),
             stroke_machine: StrokeMachine::default(),
+            text_metrics: TextMetricsCache::default(),
         })
     }
 
@@ -380,7 +488,11 @@ impl Engine {
         viewport: CameraViewportV1,
         padding: f64,
     ) -> Result<CameraV1, EngineErrorV1> {
-        CameraV1::fit_content(document_content_bounds(&self.document), viewport, padding)
+        CameraV1::fit_content(
+            document_content_bounds(&self.document, &self.text_metrics),
+            viewport,
+            padding,
+        )
     }
 
     pub fn apply_camera_action(
@@ -400,6 +512,10 @@ impl Engine {
         &mut self,
         envelope: CommandEnvelopeV1,
     ) -> Result<EngineUpdateV1, EngineErrorV1> {
+        if matches!(&envelope.command, CommandV1::CreateText { text } if text.text.is_empty()) {
+            self.validate_envelope(&envelope)?;
+            return Ok(self.current_update());
+        }
         self.pointer_machine.cancel();
         self.stroke_machine.cancel();
         let selection_after = selection_after_command(&envelope.command, &self.selection);
@@ -463,6 +579,7 @@ impl Engine {
                     None,
                     None,
                     &RenderProfileV1::clean(),
+                    &self.text_metrics,
                 ),
             ),
         };
@@ -488,7 +605,14 @@ impl Engine {
             .into_iter()
             .map(|input| {
                 let target_element_id = (input.phase == PointerPhaseV1::Down)
-                    .then(|| hit_test_document(&self.document, input.point, self.camera.zoom))
+                    .then(|| {
+                        hit_test_document(
+                            &self.document,
+                            input.point,
+                            self.camera.zoom,
+                            &self.text_metrics,
+                        )
+                    })
                     .flatten();
                 TargetedPointerEvent {
                     input,
@@ -718,6 +842,43 @@ impl Engine {
         Ok(self.current_update())
     }
 
+    pub fn begin_text_edit_at(&mut self, point: Vec2) -> Result<TextEditTargetV1, EngineErrorV1> {
+        if !point.x.is_finite() || !point.y.is_finite() {
+            return Err(EngineErrorV1::InvalidDelta);
+        }
+        let active_tool = self.tool_state.active_tool();
+        if !matches!(active_tool, EditorToolV1::Select | EditorToolV1::Text) {
+            return Err(EngineErrorV1::ToolInputMismatch {
+                active_tool,
+                required_tool: EditorToolV1::Text,
+            });
+        }
+        let element =
+            hit_test_document(&self.document, point, self.camera.zoom, &self.text_metrics)
+                .and_then(|element_id| self.document.elements.get(&element_id))
+                .and_then(ElementRecordV1::as_text)
+                .cloned();
+        if let Some(text) = &element {
+            self.selection.set(&self.document, Some(text.id.clone()))?;
+        } else if active_tool == EditorToolV1::Text {
+            self.selection.clear();
+        }
+        Ok(TextEditTargetV1 {
+            element,
+            update: self.current_update(),
+        })
+    }
+
+    pub fn provide_text_metrics(
+        &mut self,
+        snapshot: TextMetricsSnapshotV1,
+    ) -> Result<EngineUpdateV1, EngineErrorV1> {
+        if self.text_metrics.provide(&self.document, snapshot)? {
+            self.scene_revision += 1;
+        }
+        Ok(self.current_update())
+    }
+
     pub fn serialize_document(&self) -> Result<String, serde_json::Error> {
         serde_json::to_string(&self.document)
     }
@@ -729,7 +890,24 @@ impl Engine {
         if !profile.validate() {
             return Err(EngineErrorV1::InvalidRenderProfile);
         }
-        let scene = resolve_scene(&self.document, self.scene_revision, None, None, &profile);
+        if self
+            .text_metrics
+            .request_for_document(
+                &self.document,
+                format!("text-measure-{}", self.scene_revision),
+            )
+            .is_some()
+        {
+            return Err(EngineErrorV1::InvalidTextMetrics);
+        }
+        let scene = resolve_scene(
+            &self.document,
+            self.scene_revision,
+            None,
+            None,
+            &profile,
+            &self.text_metrics,
+        );
         let canonical =
             serde_json::to_string(&scene).expect("SceneSnapshot serialization is infallible");
         Ok(SceneResolutionV1 {
@@ -813,6 +991,7 @@ impl Engine {
                 pointer_preview,
                 stroke_preview,
                 &RenderProfileV1::clean(),
+                &self.text_metrics,
             ),
             history: HistoryStateV1 {
                 can_undo: !self.undo_stack.is_empty(),
@@ -821,8 +1000,13 @@ impl Engine {
             selection: self.selection.snapshot(
                 &self.document,
                 pointer_preview.map(|preview| (preview.element_id.as_str(), preview.delta)),
+                &self.text_metrics,
             ),
             active_tool: self.tool_state.active_tool(),
+            text_measure_request: self.text_metrics.request_for_document(
+                &self.document,
+                format!("text-measure-{}", self.scene_revision),
+            ),
         }
     }
 }
@@ -842,6 +1026,18 @@ fn selection_after_command(
             SelectionAfterCommand::Set(Some(rectangle.id.clone()))
         }
         CommandV1::CreateStroke { stroke } => SelectionAfterCommand::Set(Some(stroke.id.clone())),
+        CommandV1::CreateText { text } => SelectionAfterCommand::Set(Some(text.id.clone())),
+        CommandV1::UpdateText { element_id, patch } => {
+            if patch.text.as_ref().is_some_and(String::is_empty) {
+                if selection.selected_element_id() == Some(element_id.as_str()) {
+                    SelectionAfterCommand::Set(None)
+                } else {
+                    SelectionAfterCommand::Preserve
+                }
+            } else {
+                SelectionAfterCommand::Set(Some(element_id.clone()))
+            }
+        }
         CommandV1::MoveElements { element_ids, .. } => element_ids
             .first()
             .cloned()
@@ -915,6 +1111,50 @@ fn apply_command(
             document
                 .elements
                 .insert(element_id.clone(), ElementRecordV1::Stroke(stroke));
+            Ok(vec![element_id])
+        }
+        CommandV1::CreateText { text } => {
+            validate_text(&text)?;
+            if document.elements.contains_key(&text.id) {
+                return Err(EngineErrorV1::ElementAlreadyExists {
+                    element_id: text.id,
+                });
+            }
+            let element_id = text.id.clone();
+            document.root_order.push(element_id.clone());
+            document
+                .elements
+                .insert(element_id.clone(), ElementRecordV1::Text(text));
+            Ok(vec![element_id])
+        }
+        CommandV1::UpdateText { element_id, patch } => {
+            if patch.is_empty() {
+                return Err(EngineErrorV1::InvalidText {
+                    element_id: element_id.clone(),
+                });
+            }
+            let element = document.elements.get_mut(&element_id).ok_or_else(|| {
+                EngineErrorV1::ElementNotFound {
+                    element_id: element_id.clone(),
+                }
+            })?;
+            let ElementRecordV1::Text(text) = element else {
+                return Err(EngineErrorV1::ElementNotText { element_id });
+            };
+            if patch.text.as_ref().is_some_and(String::is_empty) {
+                document.elements.remove(&element_id);
+                document
+                    .root_order
+                    .retain(|candidate| candidate != &element_id);
+                return Ok(vec![element_id]);
+            }
+            if let Some(value) = patch.text {
+                text.text = value;
+            }
+            if let Some(value) = patch.max_width {
+                text.max_width = value;
+            }
+            validate_text(text)?;
             Ok(vec![element_id])
         }
         CommandV1::UpdateRectangle { element_id, patch } => {
@@ -1003,21 +1243,28 @@ fn validate_document(document: &NodeInkDocumentV1) -> Result<(), EngineErrorV1> 
         match element {
             ElementRecordV1::Rect(rectangle) => validate_rectangle(rectangle)?,
             ElementRecordV1::Stroke(stroke) => validate_stroke(stroke)?,
+            ElementRecordV1::Text(text) => validate_text(text)?,
         }
     }
     Ok(())
 }
 
-fn document_content_bounds(document: &NodeInkDocumentV1) -> Option<CameraContentBounds> {
+fn document_content_bounds(
+    document: &NodeInkDocumentV1,
+    text_metrics: &TextMetricsCache,
+) -> Option<CameraContentBounds> {
     document
         .root_order
         .iter()
         .filter_map(|element_id| document.elements.get(element_id))
-        .filter_map(element_content_bounds)
+        .filter_map(|element| element_content_bounds(element, text_metrics))
         .reduce(CameraContentBounds::union)
 }
 
-fn element_content_bounds(element: &ElementRecordV1) -> Option<CameraContentBounds> {
+fn element_content_bounds(
+    element: &ElementRecordV1,
+    text_metrics: &TextMetricsCache,
+) -> Option<CameraContentBounds> {
     match element {
         ElementRecordV1::Rect(rectangle) => Some(CameraContentBounds::from_rect(
             rectangle.x,
@@ -1036,6 +1283,9 @@ fn element_content_bounds(element: &ElementRecordV1) -> Option<CameraContentBoun
                     .expand(stroke.stroke_width / 2.0),
             )
         }
+        ElementRecordV1::Text(text) => text_metrics.metric_for(text).map(|metric| {
+            CameraContentBounds::from_rect(text.x, text.y, metric.width, metric.height)
+        }),
     }
 }
 
@@ -1072,6 +1322,28 @@ fn validate_stroke(stroke: &StrokeElementV1) -> Result<(), EngineErrorV1> {
     Ok(())
 }
 
+fn validate_text(text: &TextElementV1) -> Result<(), EngineErrorV1> {
+    let is_valid = !text.id.trim().is_empty()
+        && text.x.is_finite()
+        && text.y.is_finite()
+        && !text.text.is_empty()
+        && text.text.chars().count() <= 65_536
+        && text.font_family == CANVAS_FONT_FAMILY
+        && text.font_size.is_finite()
+        && text.font_size > 0.0
+        && matches!(text.font_weight, 400 | 500)
+        && text
+            .max_width
+            .is_none_or(|width| width.is_finite() && width > 0.0)
+        && !text.font_fingerprint.trim().is_empty();
+    if !is_valid {
+        return Err(EngineErrorV1::InvalidText {
+            element_id: text.id.clone(),
+        });
+    }
+    Ok(())
+}
+
 fn validate_stroke_input(batch: &StrokeInputBatchV1) -> Result<(), EngineErrorV1> {
     if batch
         .points
@@ -1101,6 +1373,7 @@ fn resolve_scene(
     pointer_preview: Option<&PointerPreview>,
     stroke_preview: Option<&StrokePreview>,
     profile: &RenderProfileV1,
+    text_metrics: &TextMetricsCache,
 ) -> SceneSnapshotV1 {
     let mut root_node_ids =
         Vec::with_capacity(document.root_order.len() + usize::from(stroke_preview.is_some()));
@@ -1146,6 +1419,20 @@ fn resolve_scene(
             }
             ElementRecordV1::Stroke(stroke) => {
                 insert_stroke_scene_node(&mut root_node_ids, &mut nodes, stroke, profile);
+            }
+            ElementRecordV1::Text(text) => {
+                if let Some(metric) = text_metrics.metric_for(text) {
+                    let scene_node_id = format!("{}:text", text.id);
+                    root_node_ids.push(scene_node_id.clone());
+                    nodes.insert(
+                        scene_node_id.clone(),
+                        SceneNodeV1::Text(SceneTextV1 {
+                            id: scene_node_id,
+                            source_element_id: text.id.clone(),
+                            runs: scene_runs(text, metric),
+                        }),
+                    );
+                }
             }
         }
     }
@@ -2702,6 +2989,287 @@ mod tests {
     }
 
     #[test]
+    fn product_text_defaults_and_wire_contract_are_explicit() {
+        let text = product_text("text-1", "你好");
+        assert_eq!(text.font_family, CANVAS_FONT_FAMILY);
+        assert_eq!(text.font_size, 24.0);
+        assert_eq!(text.font_weight, 400);
+        assert_eq!(text.max_width, Some(120.0));
+        assert_eq!(text.font_fingerprint, "font-ready-v1");
+
+        let value = serde_json::to_value(CommandEnvelopeV1 {
+            protocol_version: 1,
+            command_id: "create-text".to_string(),
+            document_id: "doc-1".to_string(),
+            expected_revision: 0,
+            command: CommandV1::CreateText { text: text.clone() },
+        })
+        .unwrap();
+        assert_eq!(value["command"]["type"], "create_text");
+        assert_eq!(
+            value["command"]["text"]["fontFamily"],
+            "Noto Sans SC Variable"
+        );
+        assert_eq!(value["command"]["text"]["fontFingerprint"], "font-ready-v1");
+
+        let update_value = serde_json::to_value(
+            Engine::open(NodeInkDocumentV1::blank("doc-1"))
+                .unwrap()
+                .current_update(),
+        )
+        .unwrap();
+        assert!(update_value["textMeasureRequest"].is_null());
+
+        let target_value = serde_json::to_value(TextEditTargetV1 {
+            element: Some(text),
+            update: Engine::open(NodeInkDocumentV1::blank("doc-1"))
+                .unwrap()
+                .current_update(),
+        })
+        .unwrap();
+        assert_eq!(target_value["element"]["kind"], "text");
+    }
+
+    #[test]
+    fn product_text_resolves_in_two_phases_without_extra_document_history() {
+        let mut engine = Engine::open(NodeInkDocumentV1::blank("doc-1")).unwrap();
+        let created = engine
+            .execute_command(envelope(
+                engine.document(),
+                "create-text",
+                CommandV1::CreateText {
+                    text: product_text("text-1", "你好\nNodeInk画布"),
+                },
+            ))
+            .unwrap();
+
+        assert_eq!(created.scene.document_revision, 1);
+        assert_eq!(created.scene.scene_revision, 1);
+        assert!(created.scene.root_node_ids.is_empty());
+        assert_eq!(created.selection, SelectionStateV1::default());
+        let request = created
+            .text_measure_request
+            .expect("new text must request metrics");
+        assert_eq!(request.font_fingerprint, "font-ready-v1");
+        assert_eq!(request.runs.len(), 1);
+        assert_eq!(request.runs[0].font_family, CANVAS_FONT_FAMILY);
+        assert_eq!(request.runs[0].max_width, Some(120.0));
+
+        let resolved = engine
+            .provide_text_metrics(TextMetricsSnapshotV1 {
+                font_fingerprint: request.font_fingerprint,
+                metrics: vec![TextMetricsV1 {
+                    key: request.runs[0].key.clone(),
+                    width: 112.0,
+                    height: 72.0,
+                    baseline: 18.0,
+                    line_breaks: vec![2, 9],
+                }],
+            })
+            .unwrap();
+        assert_eq!(resolved.scene.document_revision, 1);
+        assert_eq!(resolved.scene.scene_revision, 2);
+        assert!(resolved.history.can_undo);
+        assert!(!resolved.history.can_redo);
+        assert!(resolved.text_measure_request.is_none());
+        assert_eq!(
+            resolved.selection,
+            SelectionStateV1 {
+                selected_element_id: Some("text-1".to_string()),
+                bounds: Some(SelectionBoundsV1 {
+                    x: 40.0,
+                    y: 52.0,
+                    width: 112.0,
+                    height: 72.0,
+                }),
+            }
+        );
+        let SceneNodeV1::Text(scene_text) = &resolved.scene.nodes["text-1:text"] else {
+            panic!("resolved text must produce a SceneText node");
+        };
+        assert_eq!(
+            scene_text
+                .runs
+                .iter()
+                .map(|run| run.text.as_str())
+                .collect::<Vec<_>>(),
+            ["你好", "NodeIn", "k画布"]
+        );
+        assert_eq!(
+            scene_text.runs.iter().map(|run| run.y).collect::<Vec<_>>(),
+            [70.0, 94.0, 118.0]
+        );
+
+        let repeated = engine
+            .provide_text_metrics(TextMetricsSnapshotV1 {
+                font_fingerprint: "font-ready-v1".to_string(),
+                metrics: vec![TextMetricsV1 {
+                    key: request.runs[0].key.clone(),
+                    width: 112.0,
+                    height: 72.0,
+                    baseline: 18.0,
+                    line_breaks: vec![2, 9],
+                }],
+            })
+            .unwrap();
+        assert_eq!(repeated.scene.scene_revision, 2);
+        assert_eq!(repeated.scene, resolved.scene);
+    }
+
+    #[test]
+    fn text_update_move_hit_test_and_empty_delete_share_transactions() {
+        let mut engine = Engine::open(NodeInkDocumentV1::blank("doc-1")).unwrap();
+        let created = engine
+            .execute_command(envelope(
+                engine.document(),
+                "create-text",
+                CommandV1::CreateText {
+                    text: product_text("text-1", "原文"),
+                },
+            ))
+            .unwrap();
+        let request = created.text_measure_request.unwrap();
+        engine
+            .provide_text_metrics(product_metrics(&request, 72.0, 30.0, vec![]))
+            .unwrap();
+
+        engine.set_active_tool(EditorToolV1::Select);
+        let target = engine
+            .begin_text_edit_at(Vec2 { x: 48.0, y: 60.0 })
+            .unwrap();
+        assert_eq!(target.element.as_ref().unwrap().id, "text-1");
+        assert_eq!(target.update.scene.document_revision, 1);
+        assert_eq!(
+            target.update.selection.selected_element_id.as_deref(),
+            Some("text-1")
+        );
+
+        let moved = engine
+            .execute_command(envelope(
+                engine.document(),
+                "move-text",
+                CommandV1::MoveElements {
+                    element_ids: vec!["text-1".to_string()],
+                    delta: Vec2 { x: 12.0, y: 8.0 },
+                },
+            ))
+            .unwrap();
+        assert_eq!(moved.scene.document_revision, 2);
+        assert_eq!(moved.selection.bounds.unwrap().x, 52.0);
+
+        let changed = engine
+            .execute_command(envelope(
+                engine.document(),
+                "update-text",
+                CommandV1::UpdateText {
+                    element_id: "text-1".to_string(),
+                    patch: TextPatchV1 {
+                        text: Some("新文本".to_string()),
+                        ..TextPatchV1::default()
+                    },
+                },
+            ))
+            .unwrap();
+        assert_eq!(changed.scene.document_revision, 3);
+        assert!(changed.scene.root_node_ids.is_empty());
+        assert!(changed.text_measure_request.is_some());
+
+        let deleted = engine
+            .execute_command(envelope(
+                engine.document(),
+                "empty-text-deletes",
+                CommandV1::UpdateText {
+                    element_id: "text-1".to_string(),
+                    patch: TextPatchV1 {
+                        text: Some(String::new()),
+                        ..TextPatchV1::default()
+                    },
+                },
+            ))
+            .unwrap();
+        assert_eq!(deleted.scene.document_revision, 4);
+        assert!(engine.document().elements.is_empty());
+        assert_eq!(deleted.selection, SelectionStateV1::default());
+
+        let undone = engine.undo().unwrap();
+        assert_eq!(undone.scene.document_revision, 5);
+        assert!(engine.document().elements.contains_key("text-1"));
+        assert!(undone.text_measure_request.is_some());
+    }
+
+    #[test]
+    fn empty_text_creation_is_a_noop_and_invalid_metrics_never_mutate_state() {
+        let mut engine = Engine::open(NodeInkDocumentV1::blank("doc-1")).unwrap();
+        let empty = engine
+            .execute_command(envelope(
+                engine.document(),
+                "empty-create",
+                CommandV1::CreateText {
+                    text: product_text("text-1", ""),
+                },
+            ))
+            .unwrap();
+        assert_eq!(empty.scene.document_revision, 0);
+        assert!(!empty.history.can_undo);
+        assert!(engine.document().elements.is_empty());
+
+        let created = engine
+            .execute_command(envelope(
+                engine.document(),
+                "create-text",
+                CommandV1::CreateText {
+                    text: product_text("text-1", "内容"),
+                },
+            ))
+            .unwrap();
+        let request = created.text_measure_request.unwrap();
+        let scene_revision = created.scene.scene_revision;
+        assert_eq!(
+            engine.provide_text_metrics(TextMetricsSnapshotV1 {
+                font_fingerprint: "stale-font".to_string(),
+                metrics: vec![TextMetricsV1 {
+                    key: request.runs[0].key.clone(),
+                    width: 48.0,
+                    height: 30.0,
+                    baseline: 18.0,
+                    line_breaks: vec![],
+                }],
+            }),
+            Err(EngineErrorV1::TextFingerprintMismatch)
+        );
+        assert_eq!(engine.current_update().scene.scene_revision, scene_revision);
+        assert_eq!(
+            engine.provide_text_metrics(TextMetricsSnapshotV1 {
+                font_fingerprint: "font-ready-v1".to_string(),
+                metrics: vec![TextMetricsV1 {
+                    key: request.runs[0].key.clone(),
+                    width: 121.0,
+                    height: 30.0,
+                    baseline: 18.0,
+                    line_breaks: vec![],
+                }],
+            }),
+            Err(EngineErrorV1::InvalidTextMetrics)
+        );
+        assert_eq!(engine.current_update().scene.scene_revision, scene_revision);
+    }
+
+    #[test]
+    fn text_tool_can_begin_on_blank_canvas_without_mutating_document() {
+        let mut engine = Engine::open(NodeInkDocumentV1::blank("doc-1")).unwrap();
+        engine.set_active_tool(EditorToolV1::Text);
+
+        let target = engine
+            .begin_text_edit_at(Vec2 { x: 120.0, y: 80.0 })
+            .unwrap();
+
+        assert!(target.element.is_none());
+        assert_eq!(target.update.active_tool, EditorToolV1::Text);
+        assert_eq!(target.update.scene.document_revision, 0);
+        assert!(!target.update.history.can_undo);
+    }
+
+    #[test]
     fn text_resolution_requests_only_missing_metrics_then_stabilizes() {
         let engine = Engine::open(NodeInkDocumentV1::blank("doc-1")).unwrap();
         let runs = text_runs();
@@ -2900,6 +3468,31 @@ mod tests {
                 max_width: None,
             },
         ]
+    }
+
+    fn product_text(id: &str, content: &str) -> TextElementV1 {
+        TextElementV1 {
+            max_width: Some(120.0),
+            ..TextElementV1::new(id, 40.0, 52.0, content, "font-ready-v1")
+        }
+    }
+
+    fn product_metrics(
+        request: &TextMeasureRequestV1,
+        width: f64,
+        height: f64,
+        line_breaks: Vec<usize>,
+    ) -> TextMetricsSnapshotV1 {
+        TextMetricsSnapshotV1 {
+            font_fingerprint: request.font_fingerprint.clone(),
+            metrics: vec![TextMetricsV1 {
+                key: request.runs[0].key.clone(),
+                width,
+                height,
+                baseline: 18.0,
+                line_breaks,
+            }],
+        }
     }
 
     fn text_metric(key: &str, width: f64) -> TextMetricsV1 {

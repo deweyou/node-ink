@@ -6,6 +6,7 @@ pub enum EditorToolV1 {
     #[default]
     Select,
     Freehand,
+    Text,
 }
 
 #[derive(Debug, Clone, Copy, Default)]

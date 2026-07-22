@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  canvasFontFamily,
   createBlankDocument,
   parseDiagramOperationBatchResult,
   parseCamera,
@@ -11,8 +12,11 @@ import {
   parseSceneResolution,
   parseSceneSnapshot,
   parseStrokeUpdate,
+  parseTextEditTarget,
   parseTextFixtureResolution,
 } from './index';
+
+const fixtureFontFingerprint = 'noto-sans-sc-v40-fontsource-5.3.0';
 
 describe('protocol V1', () => {
   it('parses finite Camera state within the supported zoom range', () => {
@@ -57,6 +61,20 @@ describe('protocol V1', () => {
   it('parses a valid engine update', () => {
     const update = {
       activeTool: 'freehand',
+      textMeasureRequest: {
+        requestId: 'measure-text-1',
+        fontFingerprint: 'noto-sans-sc-v40-fontsource-5.3.0',
+        runs: [
+          {
+            key: 'text-1',
+            text: '第一行\nSecond line',
+            fontFamily: 'Noto Sans SC Variable',
+            fontSize: 20,
+            fontWeight: 400,
+            maxWidth: 240,
+          },
+        ],
+      },
       operation: null,
       scene: {
         protocolVersion: 1,
@@ -79,10 +97,12 @@ describe('protocol V1', () => {
   it('defaults legacy engine updates to the select tool', () => {
     const legacy = updateFixture();
     delete (legacy as { activeTool?: unknown }).activeTool;
+    delete (legacy as { textMeasureRequest?: unknown }).textMeasureRequest;
 
     expect(parseEngineUpdate(JSON.stringify(legacy))).toEqual({
       ...legacy,
       activeTool: 'select',
+      textMeasureRequest: null,
     });
   });
 
@@ -90,6 +110,102 @@ describe('protocol V1', () => {
     expect(() => parseEngineUpdate(JSON.stringify({ ...updateFixture(), activeTool }))).toThrow(
       'protocol V1',
     );
+  });
+
+  it.each([
+    {},
+    {
+      requestId: 1,
+      fontFingerprint: 'noto-sans-sc-v40-fontsource-5.3.0',
+      runs: [],
+    },
+    { requestId: 'measure-1', fontFingerprint: 1, runs: [] },
+    {
+      requestId: 'measure-1',
+      fontFingerprint: 'noto-sans-sc-v40-fontsource-5.3.0',
+      runs: {},
+    },
+    {
+      requestId: 'measure-1',
+      fontFingerprint: 'noto-sans-sc-v40-fontsource-5.3.0',
+      runs: [
+        {
+          key: 'text-1',
+          text: 'hello',
+          fontFamily: 'Noto Sans SC Variable',
+          fontSize: 20,
+          fontWeight: 700,
+          maxWidth: null,
+        },
+      ],
+    },
+  ])('rejects an invalid text measurement request %o', (textMeasureRequest) => {
+    expect(() =>
+      parseEngineUpdate(JSON.stringify({ ...updateFixture(), textMeasureRequest })),
+    ).toThrow('protocol V1');
+  });
+
+  it('parses a multi-line text Scene node with an explicit source element', () => {
+    const textNode = sceneTextFixture();
+    const scene = {
+      ...updateFixture().scene,
+      rootNodeIds: [textNode.id],
+      nodes: { [textNode.id]: textNode },
+    };
+
+    expect(parseSceneSnapshot(JSON.stringify(scene))).toEqual(scene);
+  });
+
+  it('parses a text edit target without deriving the semantic target from SVG', () => {
+    const value = {
+      element: textElementFixture(),
+      update: {
+        ...updateFixture(),
+        activeTool: 'text',
+        selection: {
+          selectedElementId: 'text-1',
+          bounds: { x: 40, y: 48, width: 240, height: 48 },
+        },
+      },
+    };
+
+    expect(parseTextEditTarget(JSON.stringify(value))).toEqual(value);
+    expect(parseTextEditTarget(JSON.stringify({ element: null, update: updateFixture() }))).toEqual(
+      { element: null, update: updateFixture() },
+    );
+  });
+
+  it.each([
+    null,
+    {},
+    { element: null, update: null },
+    { element: { ...textElementFixture(), fontFamily: 'Arial' }, update: updateFixture() },
+    { element: { ...textElementFixture(), fontFingerprint: '' }, update: updateFixture() },
+    { element: { ...textElementFixture(), maxWidth: 0 }, update: updateFixture() },
+    { element: textElementFixture(), update: {} },
+  ])('rejects an invalid text edit target %o', (value) => {
+    expect(() => parseTextEditTarget(JSON.stringify(value))).toThrow('text edit target');
+  });
+
+  it.each([
+    { ...sceneTextFixture(), sourceElementId: null },
+    { ...sceneTextFixture(), runs: {} },
+    {
+      ...sceneTextFixture(),
+      runs: [{ ...sceneTextFixture().runs[0], fontWeight: 700 }],
+    },
+    {
+      ...sceneTextFixture(),
+      runs: [{ ...sceneTextFixture().runs[0], x: null }],
+    },
+  ])('rejects an invalid text Scene node %o', (textNode) => {
+    const scene = {
+      ...updateFixture().scene,
+      rootNodeIds: ['text-1:text'],
+      nodes: { 'text-1:text': textNode },
+    };
+
+    expect(() => parseSceneSnapshot(JSON.stringify(scene))).toThrow('protocol V1');
   });
 
   it('parses a standalone scene snapshot', () => {
@@ -144,6 +260,7 @@ describe('protocol V1', () => {
     patchFixture({ updatedNodes: [] }),
     patchFixture({ removedNodeIds: {} }),
     patchFixture({ rootNodeIds: {} }),
+    patchFixture({ addedNodes: { 'text-1:text': { ...sceneTextFixture(), runs: {} } } }),
   ])('rejects invalid scene patch payloads', (value) => {
     expect(() => parseScenePatch(JSON.stringify(value))).toThrow('protocol V1');
   });
@@ -260,13 +377,17 @@ describe('protocol V1', () => {
 
   it('parses pending and resolved text fixtures', () => {
     const pending = {
-      request: { requestId: 'measure-1', fontFingerprint: 'font-v1', runs: [] },
+      request: {
+        requestId: 'measure-1',
+        fontFingerprint: 'noto-sans-sc-v40-fontsource-5.3.0',
+        runs: [],
+      },
       scene: null,
       canonicalHash: null,
     };
     const resolved = {
       request: null,
-      scene: { fontFingerprint: 'font-v1', runs: [] },
+      scene: { fontFingerprint: 'noto-sans-sc-v40-fontsource-5.3.0', runs: [] },
       canonicalHash: 'fnv1a64:text',
     };
 
@@ -330,6 +451,7 @@ function updateFixture(
 ) {
   return {
     activeTool: 'select',
+    textMeasureRequest: null,
     operation: null,
     scene: {
       protocolVersion: 1,
@@ -342,6 +464,49 @@ function updateFixture(
     },
     history: { canUndo: false, canRedo: false, ...historyOverride },
     selection: { selectedElementId: null, bounds: null },
+  };
+}
+
+function sceneTextFixture() {
+  return {
+    kind: 'text' as const,
+    id: 'text-1:text',
+    sourceElementId: 'text-1',
+    runs: [
+      {
+        text: '第一行',
+        x: 40,
+        y: 64,
+        fontFamily: canvasFontFamily,
+        fontSize: 20,
+        fontWeight: 400 as const,
+        fill: '#1f2937',
+      },
+      {
+        text: 'Second line',
+        x: 40,
+        y: 88,
+        fontFamily: canvasFontFamily,
+        fontSize: 20,
+        fontWeight: 400 as const,
+        fill: '#1f2937',
+      },
+    ],
+  };
+}
+
+function textElementFixture() {
+  return {
+    kind: 'text' as const,
+    id: 'text-1',
+    x: 40,
+    y: 48,
+    text: '第一行\nSecond line',
+    fontFamily: canvasFontFamily,
+    fontSize: 20,
+    fontWeight: 400 as const,
+    maxWidth: 240,
+    fontFingerprint: fixtureFontFingerprint,
   };
 }
 

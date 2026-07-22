@@ -98,13 +98,13 @@ UI / Internal Operation
 #### 文本
 
 ```text
-双击文本
+Text 单击或 Select 双击语义文本
 → TypeScript HTML textarea overlay
 → IME composition stays in browser
-→ Commit text content
-→ Rust UpdateText command
+→ blur / Cmd/Ctrl+Enter commits once; Escape cancels
+→ Rust CreateText / UpdateText / DeleteElements command
 → MeasureRequest
-→ Browser font measurement
+→ Bundled fixed-font browser measurement
 → Scene resolution resumes
 ```
 
@@ -398,7 +398,7 @@ PointerDown
 
 - Escape、pointer cancel 或失焦在提交前撤销 transient state。
 - 自由笔在拖动过程中产生 preview points；PointerUp 后创建一个 `StrokeElement`。
-- 文本 composition 期间不修改 Document；composition end/blur/快捷键确认时提交一个文本 Transaction。
+- 文本 composition 与普通输入过程都不修改 Document；composition end 只更新 overlay buffer，blur 或 `Cmd/Ctrl+Enter` 提交一个文本 Transaction，`Escape` 取消。
 - Inspector 连续拖动数值可使用 preview + commit，或显式 merge key 合并为一个 Undo entry；不能产生数百个用户不可理解的撤销步骤。
 
 ### 9.5 Command 与高层 Operation 的关系
@@ -518,12 +518,11 @@ interface TextMeasureRequestV1 {
     fontFamily: string;
     fontSize: number;
     fontWeight: 400 | 500;
-    maxWidth?: number;
+    maxWidth: number | null;
   }>;
 }
 
-interface TextMeasureResultV1 {
-  requestId: string;
+interface TextMetricsSnapshotV1 {
   fontFingerprint: string;
   metrics: Array<{
     key: string;
@@ -535,7 +534,7 @@ interface TextMeasureResultV1 {
 }
 ```
 
-流程是 `resolve → missing metrics → host measure → resume resolve`。Engine 按 `fontFingerprint + run key` 缓存，字体加载变化时整体失效。若首期要求跨设备 Scene hash 完全一致，画布内容必须使用随应用提供并等待加载完成的固定字体；否则确定性只保证在相同字体度量输入下成立。
+流程是 `resolve → missing metrics → host measure → provide metrics → resume resolve`。Engine 按 `fontFingerprint + run key` 缓存，metrics 回填只增加 Scene revision，不改变 Document revision 或 Undo history。Phase 1A 已固定使用随应用加载的 `Noto Sans SC Variable`，Host 等待 400/500 weight 后才创建 Engine；`lineBreaks` 跨端统一使用 Unicode code-point index，避免 JavaScript UTF-16 surrogate pair 导致换行错位。
 
 ### 11.4 Layout 边界
 

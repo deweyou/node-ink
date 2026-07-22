@@ -83,6 +83,28 @@ impl EngineHandle {
         serde_json::to_string(&update).map_err(|error| js_error("serialization_failed", error))
     }
 
+    #[wasm_bindgen(js_name = beginTextEditAt)]
+    pub fn begin_text_edit_at(&mut self, point_json: &str) -> Result<String, JsValue> {
+        let point: Vec2 =
+            serde_json::from_str(point_json).map_err(|error| js_error("schema_invalid", error))?;
+        let target = self
+            .engine
+            .begin_text_edit_at(point)
+            .map_err(engine_error)?;
+        serde_json::to_string(&target).map_err(|error| js_error("serialization_failed", error))
+    }
+
+    #[wasm_bindgen(js_name = provideTextMetrics)]
+    pub fn provide_text_metrics(&mut self, metrics_json: &str) -> Result<String, JsValue> {
+        let metrics: TextMetricsSnapshotV1 = serde_json::from_str(metrics_json)
+            .map_err(|error| js_error("schema_invalid", error))?;
+        let update = self
+            .engine
+            .provide_text_metrics(metrics)
+            .map_err(engine_error)?;
+        serde_json::to_string(&update).map_err(|error| js_error("serialization_failed", error))
+    }
+
     #[wasm_bindgen(js_name = setActiveTool)]
     pub fn set_active_tool(&mut self, active_tool: &str) -> Result<String, JsValue> {
         let active_tool = parse_editor_tool(active_tool)?;
@@ -280,6 +302,7 @@ fn parse_editor_tool(active_tool: &str) -> Result<EditorToolV1, JsValue> {
     match active_tool {
         "select" => Ok(EditorToolV1::Select),
         "freehand" => Ok(EditorToolV1::Freehand),
+        "text" => Ok(EditorToolV1::Text),
         _ => Err(js_error("schema_invalid", "unsupported editor tool")),
     }
 }

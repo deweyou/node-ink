@@ -8,6 +8,7 @@ import {
   parseSceneResolution,
   parseSceneSnapshot,
   parseStrokeUpdate,
+  parseTextEditTarget,
   parseTextFixtureResolution,
   type CommandEnvelopeV1,
   type CameraActionV1,
@@ -32,8 +33,10 @@ import {
   type StrokeTransportV1,
   type StrokeUpdateV1,
   type TextFixtureResolutionV1,
+  type TextEditTargetV1,
   type TextMetricsSnapshotV1,
   type TextRunV1,
+  type Vec2,
 } from '@nodeink-internal/protocol';
 
 interface WasmEngineHandle {
@@ -45,6 +48,8 @@ interface WasmEngineHandle {
   executeCommand(commandJson: string): string;
   setActiveTool(tool: string): string;
   setSelection(elementId: string | undefined): string;
+  beginTextEditAt(pointJson: string): string;
+  provideTextMetrics(snapshotJson: string): string;
   executeDiagramOperation(batchJson: string): string;
   handlePointerEvents(eventsJson: string, commandId: string): string;
   handleStrokeBatchJson(batchJson: string, commandId: string): string;
@@ -148,6 +153,22 @@ class WasmEnginePort implements EnginePortV1 {
   async setSelection(elementId: string | null): Promise<EngineUpdateV1> {
     try {
       return parseEngineUpdate(this.requireHandle().setSelection(elementId ?? undefined));
+    } catch (error) {
+      throw normalizeEngineError(error);
+    }
+  }
+
+  async beginTextEditAt(point: Vec2): Promise<TextEditTargetV1> {
+    try {
+      return parseTextEditTarget(this.requireHandle().beginTextEditAt(JSON.stringify(point)));
+    } catch (error) {
+      throw normalizeEngineError(error);
+    }
+  }
+
+  async provideTextMetrics(snapshot: TextMetricsSnapshotV1): Promise<EngineUpdateV1> {
+    try {
+      return parseEngineUpdate(this.requireHandle().provideTextMetrics(JSON.stringify(snapshot)));
     } catch (error) {
       throw normalizeEngineError(error);
     }

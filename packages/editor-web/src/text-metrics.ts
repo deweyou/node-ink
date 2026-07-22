@@ -5,6 +5,8 @@ import type {
   TextRunV1,
 } from '@nodeink-internal/protocol';
 
+import { NODEINK_CANVAS_FONT_EPOCH, NODEINK_CANVAS_FONT_FAMILY } from './text-font';
+
 export interface TextMeasureBatchResultV1 {
   snapshot: TextMetricsSnapshotV1;
   cacheHitCount: number;
@@ -29,8 +31,8 @@ export class CanvasTextMetricsAdapter {
   #fontEpoch: string;
 
   constructor({
-    fixedFontFamily = 'Arial',
-    fontEpoch = 'nodeink-fixture-font-v1',
+    fixedFontFamily = NODEINK_CANVAS_FONT_FAMILY,
+    fontEpoch = NODEINK_CANVAS_FONT_EPOCH,
     createContext = defaultCanvasContext,
     now = () => performance.now(),
     fontStatus = () => document.fonts?.status ?? 'unsupported',
@@ -105,10 +107,12 @@ function measureRun(
 
 function newlineIndices(text: string): number[] {
   const indices: number[] = [];
-  for (let index = 0; index < text.length; index += 1) {
-    if (text[index] === '\n') {
+  let index = 0;
+  for (const character of text) {
+    if (character === '\n') {
       indices.push(index);
     }
+    index += 1;
   }
   return indices;
 }

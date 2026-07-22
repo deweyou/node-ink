@@ -8,6 +8,8 @@ declare module '*nodeink_engine.js' {
     executeCommand(commandJson: string): string;
     setActiveTool(tool: string): string;
     setSelection(elementId: string | undefined): string;
+    beginTextEditAt(pointJson: string): string;
+    provideTextMetrics(snapshotJson: string): string;
     executeDiagramOperation(batchJson: string): string;
     handlePointerEvents(eventsJson: string, commandId: string): string;
     handleStrokeBatchJson(batchJson: string, commandId: string): string;
