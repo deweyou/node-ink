@@ -58,8 +58,9 @@ Rust nodeink-core
 - Diagram Operation：Rust 将版本化批量意图映射到共享 Command/Transaction，支持 dry-run、原子 apply、重放和单步 Undo。
 - Framework-neutral lifecycle：React/Vue/Vanilla 共用 Controller/Engine/Renderer；dispose 释放 listener、subscription、DOM 与 WASM handle。
 
-这不是日常可用的编辑器，也不包含产品级自动保存 UI、Camera、选择框、产品级文本编辑、
-Mermaid 导入或公共 SDK；自由笔与 IME 仅覆盖 Spike fixture。
+Phase 0 本身不是日常可用的编辑器；其 S7/S8/S9 结果现已进入 Phase 1A 单文档启动、自动保存、
+刷新恢复与第二标签页只读路径。Camera、选择框、产品级文本编辑、Mermaid 导入或公共 SDK 仍不在
+本页交付边界；自由笔与 IME 仍只覆盖 Spike fixture。
 
 ## 验证证据
 
@@ -263,11 +264,11 @@ macOS provenance 曾让 wasm-pack 内置 wasm-opt 的替换流程触发 `Operati
 
 ## 下一步
 
-Phase 0 的 S0–S12 已全部达到退出条件。进入 Phase 1A 前：
+Phase 0 的 S0–S12 已全部达到退出条件。Phase 1A 当前继续：
 
 1. 确认 P-02 固定画布字体产品决策。
-2. 把 S7/S8/S9 的 verified snapshot、migration 与 lease 串入日常编辑器启动/保存 UI。
-3. 继续保留本页基准为回归门槛，不把 Spike fixture 直接宣称为公共 SDK。
+2. 已把 S7/S8/S9 的 verified snapshot、migration 与 lease 串入日常编辑器启动/保存 UI；后续在 Phase 1B 补显式接管和完整恢复体验。
+3. 继续保留本页基准为回归门槛，不把 Spike fixture 或当前 private package 宣称为公共 SDK。
 
 ---
-*Last updated: 2026-07-22 | Reason: add the independent Vue adapter and live host evidence*
+*Last updated: 2026-07-22 | Reason: link the verified persistence spikes to their Phase 1A product integration*

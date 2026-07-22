@@ -27,7 +27,41 @@ export type EditorActionV1 =
   | { type: 'pointer_events'; events: NormalizedPointerEventV1[] }
   | { type: 'stroke_batch'; batch: StrokeInputBatchV1; transport: StrokeTransportV1 }
   | { type: 'undo' }
-  | { type: 'redo' };
+  | { type: 'redo' }
+  | { type: 'retry_save' };
+
+export type EditorSaveStatusV1 = 'saved' | 'dirty' | 'saving' | 'save_failed' | 'readonly';
+export type EditorDocumentAccessV1 = 'writer' | 'readonly';
+export type EditorReadonlyReasonV1 =
+  | 'held_elsewhere'
+  | 'unsupported'
+  | 'recovered_fallback'
+  | 'migration_save_failed'
+  | 'readonly_diagnostic';
+export type EditorRecoveryV1 =
+  | 'blank'
+  | 'head'
+  | 'migrated_head'
+  | 'stable_fallback'
+  | 'previous_stable_fallback'
+  | 'migration_save_failed'
+  | 'readonly_diagnostic';
+
+export interface EditorPersistenceSnapshotV1 {
+  status: 'saved' | 'dirty' | 'saving' | 'save_failed';
+  persistedRevision: number;
+  pendingRevision: number;
+  errorMessage: string | null;
+}
+
+export interface EditorPersistencePortV1 {
+  getSnapshot(): EditorPersistenceSnapshotV1;
+  subscribe(listener: () => void): () => void;
+  markCommitted(revision: number): void;
+  retry(): Promise<void>;
+  flush(): Promise<void>;
+  dispose(): void;
+}
 
 export interface EditorUiSnapshotV1 {
   status: 'booting' | 'ready' | 'error' | 'disposed';
@@ -38,6 +72,11 @@ export interface EditorUiSnapshotV1 {
   canUndo: boolean;
   canRedo: boolean;
   errorMessage: string | null;
+  saveStatus: EditorSaveStatusV1;
+  saveErrorMessage: string | null;
+  documentAccess: EditorDocumentAccessV1;
+  readonlyReason: EditorReadonlyReasonV1 | null;
+  recovery: EditorRecoveryV1;
 }
 
 export interface EditorActionResultV1 {
@@ -67,28 +106,26 @@ export interface EditorWebControllerOptions {
   engine: EnginePortV1;
   renderer: RendererV1;
   createId?: () => string;
+  persistence?: EditorPersistencePortV1;
+  documentAccess?: EditorDocumentAccessV1;
+  readonlyReason?: EditorReadonlyReasonV1 | null;
+  recovery?: EditorRecoveryV1;
+  onDispose?: () => void | Promise<void>;
 }
-
-const initialSnapshot: EditorUiSnapshotV1 = {
-  status: 'booting',
-  documentRevision: 0,
-  sceneRevision: 0,
-  elementCount: 0,
-  activeElementId: null,
-  canUndo: false,
-  canRedo: false,
-  errorMessage: null,
-};
 
 export class EditorWebController implements EditorWebControllerV1 {
   readonly #engine: EnginePortV1;
   readonly #renderer: RendererV1;
   readonly #createId: () => string;
+  readonly #persistence: EditorPersistencePortV1 | null;
+  readonly #onDispose: (() => void | Promise<void>) | null;
   readonly #listeners = new Set<() => void>();
-  #snapshot = initialSnapshot;
+  #snapshot: EditorUiSnapshotV1;
   #documentId: string | null = null;
   #detachPointerInput: (() => void) | null = null;
   #detachHistoryShortcuts: (() => void) | null = null;
+  #detachVisibilityFlush: (() => void) | null = null;
+  #detachPersistence: (() => void) | null = null;
   #queue = Promise.resolve();
   #isDisposed = false;
 
@@ -96,24 +133,74 @@ export class EditorWebController implements EditorWebControllerV1 {
     this.#engine = options.engine;
     this.#renderer = options.renderer;
     this.#createId = options.createId ?? defaultId;
+    this.#persistence = options.persistence ?? null;
+    this.#onDispose = options.onDispose ?? null;
+    const documentAccess = options.documentAccess ?? 'writer';
+    const persistenceSnapshot = this.#persistence?.getSnapshot() ?? null;
+    this.#snapshot = {
+      status: 'booting',
+      documentRevision: 0,
+      sceneRevision: 0,
+      elementCount: 0,
+      activeElementId: null,
+      canUndo: false,
+      canRedo: false,
+      errorMessage: null,
+      saveStatus:
+        documentAccess === 'readonly' ? 'readonly' : (persistenceSnapshot?.status ?? 'saved'),
+      saveErrorMessage: persistenceSnapshot?.errorMessage ?? null,
+      documentAccess,
+      readonlyReason: options.readonlyReason ?? null,
+      recovery: options.recovery ?? 'blank',
+    };
+    this.#detachPersistence =
+      this.#persistence?.subscribe(() => {
+        const snapshot = this.#persistence?.getSnapshot();
+        if (!snapshot || this.#snapshot.documentAccess === 'readonly') {
+          return;
+        }
+        this.#snapshot = {
+          ...this.#snapshot,
+          saveStatus: snapshot.status,
+          saveErrorMessage: snapshot.errorMessage,
+        };
+        this.emit();
+      }) ?? null;
   }
 
   async mount(target: HTMLElement): Promise<void> {
     this.ensureActive();
     this.#renderer.mount(target);
     this.#detachPointerInput?.();
-    this.#detachPointerInput = attachPointerInput(target, (events) => {
-      void this.dispatch({ type: 'pointer_events', events });
-    });
+    this.#detachPointerInput =
+      this.#snapshot.documentAccess === 'writer'
+        ? attachPointerInput(target, (events) => {
+            void this.dispatch({ type: 'pointer_events', events });
+          })
+        : null;
     this.#detachHistoryShortcuts?.();
-    this.#detachHistoryShortcuts = attachHistoryShortcuts(target.ownerDocument, (action) => {
-      const isAvailable = action === 'undo' ? this.#snapshot.canUndo : this.#snapshot.canRedo;
-      if (this.#snapshot.status !== 'ready' || !isAvailable) {
-        return false;
-      }
-      void this.dispatch({ type: action });
-      return true;
-    });
+    this.#detachHistoryShortcuts =
+      this.#snapshot.documentAccess === 'writer'
+        ? attachHistoryShortcuts(target.ownerDocument, (action) => {
+            const isAvailable = action === 'undo' ? this.#snapshot.canUndo : this.#snapshot.canRedo;
+            if (this.#snapshot.status !== 'ready' || !isAvailable) {
+              return false;
+            }
+            void this.dispatch({ type: action });
+            return true;
+          })
+        : null;
+    this.#detachVisibilityFlush?.();
+    if (this.#persistence) {
+      const flushWhenHidden = () => {
+        if (target.ownerDocument.visibilityState === 'hidden') {
+          void this.#persistence?.flush();
+        }
+      };
+      target.ownerDocument.addEventListener('visibilitychange', flushWhenHidden);
+      this.#detachVisibilityFlush = () =>
+        target.ownerDocument.removeEventListener('visibilitychange', flushWhenHidden);
+    }
     try {
       this.applyUpdate(await this.#engine.currentUpdate());
     } catch (error) {
@@ -149,18 +236,46 @@ export class EditorWebController implements EditorWebControllerV1 {
     this.#detachPointerInput = null;
     this.#detachHistoryShortcuts?.();
     this.#detachHistoryShortcuts = null;
+    this.#detachVisibilityFlush?.();
+    this.#detachVisibilityFlush = null;
+    this.#detachPersistence?.();
+    this.#detachPersistence = null;
     this.#listeners.clear();
     this.#renderer.unmount();
-    this.#engine.dispose();
+    const persistenceFlush = this.#persistence?.flush() ?? null;
     this.#snapshot = { ...this.#snapshot, status: 'disposed' };
+    const finalize = () => {
+      this.#engine.dispose();
+      this.#persistence?.dispose();
+      return this.#onDispose?.();
+    };
+    if (persistenceFlush) {
+      void persistenceFlush.finally(finalize);
+    } else {
+      void finalize();
+    }
   }
 
   private async runAction(action: EditorActionV1): Promise<EditorActionResultV1> {
     this.ensureActive();
+    if (action.type === 'retry_save') {
+      if (!this.#persistence || this.#snapshot.documentAccess === 'readonly') {
+        return { ok: false, snapshot: this.#snapshot };
+      }
+      await this.#persistence.retry();
+      return { ok: this.#snapshot.saveStatus !== 'save_failed', snapshot: this.#snapshot };
+    }
+    if (this.#snapshot.documentAccess === 'readonly') {
+      return { ok: false, snapshot: this.#snapshot };
+    }
     const startedAt = performance.now();
     try {
+      const previousRevision = this.#snapshot.documentRevision;
       const execution = await this.executeAction(action);
       const renderResult = this.applyUpdate(execution.update);
+      if (this.#snapshot.documentRevision > previousRevision) {
+        this.#persistence?.markCommitted(this.#snapshot.documentRevision);
+      }
       return {
         ok: true,
         snapshot: this.#snapshot,
@@ -217,6 +332,9 @@ export class EditorWebController implements EditorWebControllerV1 {
         },
       };
     }
+    if (action.type !== 'create_rectangle' && action.type !== 'move_active') {
+      throw new Error(`Unsupported editor action: ${action.type}`);
+    }
     const envelope: CommandEnvelopeV1 = {
       protocolVersion,
       commandId,
@@ -248,6 +366,7 @@ export class EditorWebController implements EditorWebControllerV1 {
       update.operation?.changedElementIds.at(-1) ?? this.#snapshot.activeElementId,
     );
     this.#snapshot = {
+      ...this.#snapshot,
       status: 'ready',
       documentRevision: update.scene.documentRevision,
       sceneRevision: update.scene.sceneRevision,
@@ -288,6 +407,43 @@ export class EditorWebController implements EditorWebControllerV1 {
       listener();
     }
   }
+}
+
+export interface EditorPersistencePresentationV1 {
+  statusLabel: string;
+  notice: string | null;
+  canRetrySave: boolean;
+}
+
+export function getEditorPersistencePresentation(
+  snapshot: EditorUiSnapshotV1,
+): EditorPersistencePresentationV1 {
+  const statusLabel = {
+    saved: '已保存',
+    dirty: '未保存',
+    saving: '保存中…',
+    save_failed: '保存失败',
+    readonly: '只读',
+  }[snapshot.saveStatus];
+  const notice =
+    snapshot.recovery === 'readonly_diagnostic'
+      ? '无法安全打开此画布，原数据未被覆盖。'
+      : snapshot.readonlyReason === 'recovered_fallback'
+        ? '已恢复到上次稳定版本，原数据未被覆盖。'
+        : snapshot.readonlyReason === 'migration_save_failed'
+          ? '迁移结果未能安全保存，已只读打开。'
+          : snapshot.readonlyReason === 'held_elsewhere'
+            ? '此画布已在另一页面打开。关闭其他页面后刷新重试。'
+            : snapshot.readonlyReason === 'unsupported'
+              ? '当前浏览器无法保证安全写入，已只读打开。'
+              : snapshot.recovery === 'migrated_head'
+                ? '文档已安全升级并保存。'
+                : null;
+  return {
+    statusLabel,
+    notice,
+    canRetrySave: snapshot.saveStatus === 'save_failed',
+  };
 }
 
 interface ActionExecutionResult {

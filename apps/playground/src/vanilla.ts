@@ -1,4 +1,7 @@
-import type { EditorWebControllerV1 } from '@nodeink-internal/editor-web';
+import {
+  getEditorPersistencePresentation,
+  type EditorWebControllerV1,
+} from '@nodeink-internal/editor-web';
 
 import {
   exposePointerBenchmark,
@@ -41,6 +44,7 @@ rootElement.innerHTML = `
     <section class="nodeink-stage" aria-label="Infinite canvas proof">
       <div class="nodeink-canvas" data-canvas></div>
       <output class="nodeink-status" aria-live="polite" data-status></output>
+      <p class="nodeink-notice" role="status" data-notice hidden></p>
       <p class="nodeink-error" role="alert" data-error hidden></p>
     </section>
   </main>
@@ -48,11 +52,12 @@ rootElement.innerHTML = `
 
 const canvas = requireElement<HTMLElement>(rootElement, '[data-canvas]');
 const status = requireElement<HTMLOutputElement>(rootElement, '[data-status]');
+const notice = requireElement<HTMLParagraphElement>(rootElement, '[data-notice]');
 const error = requireElement<HTMLParagraphElement>(rootElement, '[data-error]');
 const controller = await createController();
 exposePointerBenchmark(controller);
 
-const renderControls = () => renderSnapshot(rootElement, status, error, controller);
+const renderControls = () => renderSnapshot(rootElement, status, notice, error, controller);
 controller.subscribe(renderControls);
 await controller.mount(canvas);
 renderControls();
@@ -145,6 +150,8 @@ rootElement.addEventListener('click', (event) => {
     void controller.dispatch({ type: 'undo' });
   } else if (action === 'redo') {
     void controller.dispatch({ type: 'redo' });
+  } else if (action === 'retry_save') {
+    void controller.dispatch({ type: 'retry_save' });
   }
 });
 
@@ -153,21 +160,40 @@ window.addEventListener('pagehide', () => controller.dispose(), { once: true });
 function renderSnapshot(
   root: HTMLElement,
   statusElement: HTMLOutputElement,
+  noticeElement: HTMLParagraphElement,
   errorElement: HTMLParagraphElement,
   editor: EditorWebControllerV1,
 ): void {
   const snapshot = editor.getSnapshot();
+  const persistence = getEditorPersistencePresentation(snapshot);
   statusElement.innerHTML = `
+    <span data-save-status="${snapshot.saveStatus}">${persistence.statusLabel}</span>
     <span>${snapshot.status}</span>
     <span>document r${snapshot.documentRevision}</span>
     <span>${snapshot.elementCount} elements</span>
   `;
-  errorElement.hidden = !snapshot.errorMessage;
-  errorElement.textContent = snapshot.errorMessage;
-  setDisabled(root, 'create_rectangle', snapshot.status !== 'ready');
-  setDisabled(root, 'move_active', snapshot.status !== 'ready' || !snapshot.activeElementId);
-  setDisabled(root, 'undo', !snapshot.canUndo);
-  setDisabled(root, 'redo', !snapshot.canRedo);
+  noticeElement.hidden = !persistence.notice;
+  noticeElement.textContent = persistence.notice;
+  const visibleError = snapshot.errorMessage ?? snapshot.saveErrorMessage;
+  errorElement.hidden = !visibleError;
+  errorElement.replaceChildren();
+  if (visibleError) {
+    const message = document.createElement('span');
+    message.textContent = snapshot.saveErrorMessage ? `保存失败：${visibleError}` : visibleError;
+    errorElement.append(message);
+    if (persistence.canRetrySave) {
+      const retry = document.createElement('button');
+      retry.type = 'button';
+      retry.dataset.action = 'retry_save';
+      retry.textContent = '重试';
+      errorElement.append(retry);
+    }
+  }
+  const isEditable = snapshot.status === 'ready' && snapshot.documentAccess === 'writer';
+  setDisabled(root, 'create_rectangle', !isEditable);
+  setDisabled(root, 'move_active', !isEditable || !snapshot.activeElementId);
+  setDisabled(root, 'undo', !isEditable || !snapshot.canUndo);
+  setDisabled(root, 'redo', !isEditable || !snapshot.canRedo);
 }
 
 function setDisabled(root: HTMLElement, action: string, disabled: boolean): void {

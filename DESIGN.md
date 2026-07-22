@@ -62,6 +62,8 @@ The interface should disappear until the user needs it. Content owns the visual 
 
 - UI actions and programmatic actions must converge on the same Controller and Rust Command path.
 - Tool changes are explicit; history availability is reflected immediately in control state.
+- Persistence uses five explicit presentation states shared by every host: `未保存`, `保存中`, `已保存`, `保存失败`, and `只读`.
+- A save failure remains visible with an explicit `重试` action. Read-only mode explains why editing is unavailable instead of silently disabling controls.
 - Avoid ornamental transitions. Honor reduced-motion preferences.
 - Errors stay visible until the cause is clear or the next successful operation resolves them.
 
@@ -76,15 +78,16 @@ The interface should disappear until the user needs it. Content owns the visual 
 
 - Keep the canvas primary and the active action unmistakable.
 - Reuse design tokens and the shared host shell across framework adapters.
-- Validate visible changes in both React and Vanilla hosts when shared UI contracts change.
+- Validate visible changes in React, Vue, and Vanilla hosts when shared UI contracts change.
 
 ## Don't
 
 - Do not copy tldraw or Excalidraw branding, iconography, or full feature density.
 - Do not put semantic geometry, layout, or document ownership into React components.
-- Do not invent the final canvas font, persistence status model, or mobile behavior before its product decision.
+- Do not invent the final canvas font or mobile behavior before its product decision.
+- Do not let a framework adapter invent save, recovery, or read-only copy independently of the shared presentation contract.
 - Do not add empty toolbar entries for Mermaid, AI, collaboration, or other future phases.
 
 ---
 
-_Last updated: 2026-07-21 | Reason: establish durable UI memory after the first Phase 0 dual-host canvas slice_
+_Last updated: 2026-07-22 | Reason: define shared autosave, failure, and read-only presentation states_

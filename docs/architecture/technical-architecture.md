@@ -785,7 +785,8 @@ JSON 协议仍必须有 `protocolVersion`，并在边界执行大小限制、深
 
 IndexedDB 只由 `persistence-web` 访问。Rust 输出版本化序列化文档并负责 schema validation/migration；TypeScript 负责事务、hash、catalog、写入调度和恢复编排。
 
-建议数据库名 `nodeink-local-v1`，对象仓库如下：
+持久化包的默认数据库名是 `nodeink-local-v1`；可见 playground 使用独立的
+`nodeink-playground-v1`，避免与 benchmark fixture 共用 catalog。对象仓库如下：
 
 ```ts
 interface DocumentCatalogRecordV1 {
@@ -824,6 +825,16 @@ interface SnapshotRecordV1 {
 
 ### 15.2 原子保存
 
+```mermaid
+stateDiagram-v2
+    [*] --> saved
+    saved --> dirty: Rust revision committed
+    dirty --> saving: 750ms debounce or flush
+    saving --> saved: read-back verified and stable
+    saving --> save_failed: persistence or validation failure
+    save_failed --> saving: explicit retry
+```
+
 ```text
 1. Engine transaction commits revision N
 2. Save scheduler marks dirty(N)
@@ -843,6 +854,10 @@ IndexedDB transaction的 durability 选项只是浏览器 hint。若环境支持
 
 自动保存初始 debounce 建议 750ms，并在实际输入测试后调整。页面 `visibilitychange` 时尝试刷新已序列化候选，但正确性不能依赖 `beforeunload` 完成异步写入。
 
+Phase 1A 已按 750ms 接入日常 Controller。`serializeDocument()` 在异步事务开始前同步取得
+Rust canonical payload；保存过程中出现更高 revision 时保留 dirty 并安排下一轮。并发
+flush 加入一次失败保存后停在 `save_failed`，只有明确重试才再次写入，避免后台自旋。
+
 ### 15.3 打开与迁移
 
 ```text
@@ -860,6 +875,10 @@ load catalog
 - 每次迁移是 `(fromVersion, toVersion)` 的确定性函数并有 fixture。
 - 迁移失败时保留原 payload 与报告，尝试稳定快照或进入只读恢复。
 - Phase 1 只保证向上迁移，不提供 down migration。
+- Phase 1A 启动先获取 lease，再按 head→stable→previous stable 验证候选；只有 verified head
+  可以继续作为 writer。迁移后的 head 必须先以新 revision 完成原子保存，才授予写入状态。
+- stable/previous stable fallback 一律只读，避免把损坏 head 静默覆盖。候选穷尽时仅提供
+  `readonly_diagnostic`，不创建可写空文档。
 
 ### 15.4 恢复策略
 
@@ -872,7 +891,8 @@ load catalog
 | Quota/空间不足 | 停止标记保存成功 | 清理回收站后重试 | 静默丢弃旧文档 |
 | Revision conflict | 终止写事务 | 刷新、只读、接管 | last-write-wins |
 
-恢复副本获得新 `documentId`，原始记录保持不变。通用文件导出仍不在 MVP；诊断恢复包是否作为异常路径例外由产品负责人决定。
+Phase 1A 的自动 fallback 只读打开，不创建副本也不覆盖原始记录。Phase 1B 若提供“恢复为副本”，
+副本必须获得新 `documentId`，原始记录保持不变。通用文件导出仍不在 MVP；诊断恢复包是否作为异常路径例外由产品负责人决定。
 
 ### 15.5 多标签页单写者
 
@@ -887,10 +907,11 @@ interface DocumentLease {
 }
 ```
 
-- Web Locks 是首选实现，并用 BroadcastChannel 传播“文档已更新/写入者关闭”等非权威提示。
+- Web Locks 是首选实现；Phase 1A 不引入 BroadcastChannel 或自制过期 lease 猜测写入权。
 - Web Locks 仍是 Working Draft，因此必须有 capability probe，不能让调用方依赖原生 API。
 - 无锁能力时使用 `expectedRevision` + IndexedDB 事务作为最终保护；无法证明单写者时第二标签页保持只读。
-- “接管”先重新加载最新稳定 revision，再获取新 lease；不能在旧内存 Document 上继续写。
+- 当前竞争标签页提示关闭其他页面后刷新；显式“接管”留到 Phase 1B。
+- 未来“接管”先重新加载最新稳定 revision，再获取新 lease；不能在旧内存 Document 上继续写。
 
 ### 15.6 快照与操作日志决策
 
@@ -1150,4 +1171,4 @@ vp build apps/playground ──→ production web bundle
 | Web 工具链 | Vite+ 统一入口，Cargo 保持 Rust 真相源 | Phase 0 起 | 低—中 |
 
 ---
-*Last updated: 2026-07-22 | Reason: add the private Vue adapter without changing core ownership*
+*Last updated: 2026-07-22 | Reason: record the integrated Phase 1A autosave, recovery, and lease behavior*

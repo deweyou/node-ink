@@ -23,6 +23,7 @@ import type {
 } from '@nodeink-internal/protocol';
 
 import { EditorWebController } from './index';
+import type { EditorPersistencePortV1, EditorPersistenceSnapshotV1 } from './index';
 
 describe('EditorWebController', () => {
   it('dispatches commands through the engine and updates the renderer', async () => {
@@ -272,7 +273,153 @@ describe('EditorWebController', () => {
     await Promise.resolve();
     expect(engine.undoCalls).toBe(1);
   });
+
+  it('marks committed revisions dirty, follows autosave state, and retries failures', async () => {
+    const persistence = new StubPersistence();
+    const controller = new EditorWebController({
+      engine: new StubEngine(),
+      renderer: new StubRenderer(),
+      persistence,
+      createId: () => 'rect-1',
+    });
+
+    await controller.mount(document.createElement('div'));
+    await controller.dispatch({ type: 'create_rectangle' });
+
+    expect(persistence.committedRevisions).toEqual([1]);
+    expect(controller.getSnapshot()).toMatchObject({
+      documentAccess: 'writer',
+      saveStatus: 'dirty',
+      saveErrorMessage: null,
+    });
+
+    persistence.setSnapshot({
+      status: 'save_failed',
+      persistedRevision: 0,
+      pendingRevision: 1,
+      errorMessage: 'quota exceeded',
+    });
+    expect(controller.getSnapshot()).toMatchObject({
+      saveStatus: 'save_failed',
+      saveErrorMessage: 'quota exceeded',
+    });
+
+    await controller.dispatch({ type: 'retry_save' });
+    expect(persistence.retryCalls).toBe(1);
+  });
+
+  it('keeps the engine alive until an in-flight persistence flush completes', async () => {
+    const engine = new StubEngine();
+    const persistence = new StubPersistence();
+    let resolveFlush: () => void = () => undefined;
+    persistence.flushPromise = new Promise<void>((resolve) => {
+      resolveFlush = resolve;
+    });
+    const onDispose = vi.fn(async () => undefined);
+    const controller = new EditorWebController({
+      engine,
+      renderer: new StubRenderer(),
+      persistence,
+      onDispose,
+    });
+
+    await controller.mount(document.createElement('div'));
+    controller.dispose();
+
+    expect(controller.getSnapshot().status).toBe('disposed');
+    expect(engine.disposeCalls).toBe(0);
+    expect(persistence.disposeCalls).toBe(0);
+    resolveFlush();
+    await vi.waitFor(() => expect(engine.disposeCalls).toBe(1));
+    expect(persistence.disposeCalls).toBe(1);
+    expect(onDispose).toHaveBeenCalledOnce();
+  });
+
+  it('keeps recovered fallbacks readonly and rejects document actions', async () => {
+    const engine = new StubEngine('existing-rect');
+    const controller = new EditorWebController({
+      engine,
+      renderer: new StubRenderer(),
+      documentAccess: 'readonly',
+      readonlyReason: 'recovered_fallback',
+      recovery: 'stable_fallback',
+    });
+
+    await controller.mount(document.createElement('div'));
+    const result = await controller.dispatch({ type: 'create_rectangle' });
+
+    expect(result).toMatchObject({
+      ok: false,
+      snapshot: {
+        status: 'ready',
+        saveStatus: 'readonly',
+        documentAccess: 'readonly',
+        readonlyReason: 'recovered_fallback',
+        recovery: 'stable_fallback',
+      },
+    });
+    expect(engine.commands).toHaveLength(0);
+  });
 });
+
+class StubPersistence implements EditorPersistencePortV1 {
+  readonly committedRevisions: number[] = [];
+  readonly #listeners = new Set<() => void>();
+  retryCalls = 0;
+  flushCalls = 0;
+  disposeCalls = 0;
+  flushPromise: Promise<void> | null = null;
+  #snapshot: EditorPersistenceSnapshotV1 = {
+    status: 'saved',
+    persistedRevision: 0,
+    pendingRevision: 0,
+    errorMessage: null,
+  };
+
+  getSnapshot() {
+    return this.#snapshot;
+  }
+
+  subscribe(listener: () => void): () => void {
+    this.#listeners.add(listener);
+    return () => this.#listeners.delete(listener);
+  }
+
+  markCommitted(revision: number): void {
+    this.committedRevisions.push(revision);
+    this.setSnapshot({
+      status: 'dirty',
+      persistedRevision: this.#snapshot.persistedRevision,
+      pendingRevision: revision,
+      errorMessage: null,
+    });
+  }
+
+  async retry(): Promise<void> {
+    this.retryCalls += 1;
+  }
+
+  async flush(): Promise<void> {
+    this.flushCalls += 1;
+    await this.flushPromise;
+  }
+
+  dispose(): void {
+    this.disposeCalls += 1;
+  }
+
+  setSnapshot(snapshot: {
+    status: 'saved' | 'dirty' | 'saving' | 'save_failed';
+    persistedRevision: number;
+    pendingRevision: number;
+    errorMessage: string | null;
+  }): void {
+    this.#snapshot = snapshot;
+    for (const listener of this.#listeners) {
+      listener();
+    }
+  }
+}
 
 class StubEngine implements EnginePortV1 {
   readonly commands: CommandEnvelopeV1[] = [];
@@ -416,6 +563,25 @@ class StubEngine implements EnginePortV1 {
         canonicalPayload: '{}',
       },
       report: null,
+    };
+  }
+
+  engineAlgorithmVersion(): string {
+    return 'nodeink-scene-v1';
+  }
+
+  serializeDocument() {
+    const document = {
+      schemaVersion: 1 as const,
+      documentId: 'doc-1',
+      revision: this.#revision,
+      rootOrder: this.#rectangleId ? [this.#rectangleId] : [],
+      elements: {},
+    };
+    return {
+      canonicalPayload: JSON.stringify(document),
+      document,
+      engineAlgorithmVersion: this.engineAlgorithmVersion(),
     };
   }
 
