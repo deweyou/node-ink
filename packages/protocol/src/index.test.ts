@@ -413,6 +413,14 @@ describe('protocol V1 with schema V4 documents', () => {
     { type: 'create_text', text: textElementFixture() },
     { type: 'move_elements', elementIds: ['rect-1'], delta: { x: 10, y: -5 } },
     { type: 'update_text', elementId: 'text-1', patch: { text: 'updated' } },
+    {
+      type: 'resize_text',
+      elementId: 'text-1',
+      x: 40,
+      y: 52,
+      fontSize: 36,
+      maxWidth: 180,
+    },
     { type: 'update_rectangle', elementId: 'rect-1', patch: { width: 200 } },
     {
       type: 'update_element_style',
@@ -491,6 +499,22 @@ describe('protocol V1 with schema V4 documents', () => {
   });
 
   it.each([
+    commandEnvelopeFixture({
+      type: 'resize_text',
+      elementId: 'text-1',
+      x: 40,
+      y: 52,
+      fontSize: 0,
+      maxWidth: 180,
+    }),
+    commandEnvelopeFixture({
+      type: 'resize_text',
+      elementId: 'text-1',
+      x: 40,
+      y: 52,
+      fontSize: 24,
+      maxWidth: 0,
+    }),
     commandEnvelopeFixture({
       type: 'transform_elements',
       elementIds: ['rect-1'],

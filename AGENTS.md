@@ -4,23 +4,24 @@ NodeInk is a local-first, desktop Web canvas whose persistent semantics live in 
 
 ## Knowledge Base
 
-| Document                                                                                       | What it covers                                                   |
-| ---------------------------------------------------------------------------------------------- | ---------------------------------------------------------------- |
-| [README.md](README.md)                                                                         | Local setup, demo URLs, and verification commands                |
-| [DESIGN.md](DESIGN.md)                                                                         | Durable UI/UX and visual design contract                         |
-| [docs/project-structure.md](docs/project-structure.md)                                         | Package ownership, dependency direction, and startup path        |
-| [docs/architecture/technical-architecture.md](docs/architecture/technical-architecture.md)     | Product engine, protocol, persistence, and renderer architecture |
-| [docs/decisions/open-questions.md](docs/decisions/open-questions.md)                           | Confirmed decisions and choices that must not be guessed         |
-| [docs/planning/phase0-vertical-slice.md](docs/planning/phase0-vertical-slice.md)               | Implemented Phase 0 boundary and its verification evidence       |
-| [docs/planning/phase1a-persistence-recovery.md](docs/planning/phase1a-persistence-recovery.md) | Integrated local document startup, autosave, recovery, and lease |
-| [docs/planning/phase1a-selection-tool.md](docs/planning/phase1a-selection-tool.md)             | Rust-owned single selection, hit testing, move, and delete       |
-| [docs/planning/phase1b-lease-takeover.md](docs/planning/phase1b-lease-takeover.md)             | Explicit same-origin writer hand-off and verified reload         |
-| [docs/planning/phase1b-basic-shapes.md](docs/planning/phase1b-basic-shapes.md)                 | Schema V4 basic shapes, Scene paths, and shared host controls    |
-| [docs/planning/phase1b-shape-creation.md](docs/planning/phase1b-shape-creation.md)             | Rust-owned drag/click shape creation and transient previews      |
-| [docs/planning/phase1b-shape-vertex-editing.md](docs/planning/phase1b-shape-vertex-editing.md) | Rust-owned path vertex handles, previews, and transactions       |
-| [docs/planning/phase1b-curved-path-editing.md](docs/planning/phase1b-curved-path-editing.md)   | Persistent Line/Arrow curves and midpoint bend editing           |
-| [docs/.state.md](docs/.state.md)                                                               | Last memory review and active risks                              |
-| [docs/.todo.md](docs/.todo.md)                                                                 | Prioritized repository-memory follow-ups                         |
+| Document                                                                                                 | What it covers                                                   |
+| -------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------- |
+| [README.md](README.md)                                                                                   | Local setup, demo URLs, and verification commands                |
+| [DESIGN.md](DESIGN.md)                                                                                   | Durable UI/UX and visual design contract                         |
+| [docs/project-structure.md](docs/project-structure.md)                                                   | Package ownership, dependency direction, and startup path        |
+| [docs/architecture/technical-architecture.md](docs/architecture/technical-architecture.md)               | Product engine, protocol, persistence, and renderer architecture |
+| [docs/decisions/open-questions.md](docs/decisions/open-questions.md)                                     | Confirmed decisions and choices that must not be guessed         |
+| [docs/planning/phase0-vertical-slice.md](docs/planning/phase0-vertical-slice.md)                         | Implemented Phase 0 boundary and its verification evidence       |
+| [docs/planning/phase1a-persistence-recovery.md](docs/planning/phase1a-persistence-recovery.md)           | Integrated local document startup, autosave, recovery, and lease |
+| [docs/planning/phase1a-selection-tool.md](docs/planning/phase1a-selection-tool.md)                       | Rust-owned single selection, hit testing, move, and delete       |
+| [docs/planning/phase1b-lease-takeover.md](docs/planning/phase1b-lease-takeover.md)                       | Explicit same-origin writer hand-off and verified reload         |
+| [docs/planning/phase1b-basic-shapes.md](docs/planning/phase1b-basic-shapes.md)                           | Schema V4 basic shapes, Scene paths, and shared host controls    |
+| [docs/planning/phase1b-shape-creation.md](docs/planning/phase1b-shape-creation.md)                       | Rust-owned drag/click shape creation and transient previews      |
+| [docs/planning/phase1b-shape-vertex-editing.md](docs/planning/phase1b-shape-vertex-editing.md)           | Rust-owned path vertex handles, previews, and transactions       |
+| [docs/planning/phase1b-curved-path-editing.md](docs/planning/phase1b-curved-path-editing.md)             | Persistent Line/Arrow curves and midpoint bend editing           |
+| [docs/planning/phase1b-text-resize-accessibility.md](docs/planning/phase1b-text-resize-accessibility.md) | Semantic Text resize and accessible selection handles            |
+| [docs/.state.md](docs/.state.md)                                                                         | Last memory review and active risks                              |
+| [docs/.todo.md](docs/.todo.md)                                                                           | Prioritized repository-memory follow-ups                         |
 
 ## Hard Constraints
 

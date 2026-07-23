@@ -263,6 +263,51 @@ describe('SvgRenderer', () => {
     );
   });
 
+  it('exposes focusable selection controls and preserves keyboard focus across overlays', () => {
+    const target = document.createElement('div');
+    const renderer = new SvgRenderer();
+    renderer.mount(target);
+    const overlay = {
+      selectionBounds: { x: 80, y: 70, width: 40, height: 20 },
+      selectionOrientedBounds: {
+        center: { x: 100, y: 80 },
+        width: 40,
+        height: 20,
+        rotation: 0,
+      },
+      selectionHandles: selectionHandles(),
+      selectionPaddingWorld: 6,
+      marquee: null,
+      guides: [],
+    };
+
+    renderer.setOverlay(overlay);
+
+    const svg = target.querySelector('svg');
+    const east = target.querySelector<SVGElement>('[data-nodeink-selection-handle="east"]');
+    expect(svg?.getAttribute('role')).toBe('group');
+    expect(svg?.getAttribute('aria-roledescription')).toBe('canvas');
+    expect(target.querySelector('[data-nodeink-overlay]')?.getAttribute('aria-hidden')).toBeNull();
+    expect(east?.getAttribute('role')).toBe('button');
+    expect(east?.getAttribute('tabindex')).toBe('0');
+    expect(east?.getAttribute('aria-label')).toBe('Right resize handle');
+    expect(east?.getAttribute('aria-keyshortcuts')).toContain('ArrowRight');
+    expect(
+      target.querySelector('[data-nodeink-selection-outline]')?.getAttribute('aria-hidden'),
+    ).toBe('true');
+
+    east?.dispatchEvent(new FocusEvent('focus'));
+    east?.setAttribute('aria-pressed', 'true');
+    expect(east?.dataset.nodeinkSelectionHandleFocused).toBe('true');
+    renderer.setOverlay({ ...overlay, selectionBounds: { ...overlay.selectionBounds, width: 48 } });
+
+    const replacement = target.querySelector<SVGElement>('[data-nodeink-selection-handle="east"]');
+    expect(replacement).not.toBe(east);
+    expect(replacement?.dataset.nodeinkSelectionHandleFocused).toBe('true');
+    expect(replacement?.getAttribute('aria-pressed')).toBe('true');
+    expect(replacement?.getAttribute('stroke-width')).toBe('3');
+  });
+
   it('renders path editing handles at stable screen sizes without a bounding ring', () => {
     const target = document.createElement('div');
     const renderer = new SvgRenderer();

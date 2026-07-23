@@ -38,9 +38,9 @@ pub use operation::{
 };
 pub use pointer::{NormalizedPointerEventV1, PointerModifiersV1, PointerPhaseV1};
 use pointer::{
-    PointerMachine, PointerPreview, PointerSelectionChange, PointerTransformKind,
-    PointerTransformPreview, PointerTransition, TargetedCurveHandle, TargetedPointerEvent,
-    TargetedVertexHandle,
+    PointerMachine, PointerPreview, PointerSelectionChange, PointerTextResizePreview,
+    PointerTransformKind, PointerTransformPreview, PointerTransition, TargetedCurveHandle,
+    TargetedPointerEvent, TargetedTextResize, TargetedVertexHandle,
 };
 pub use scene_patch::{ScenePatchV1, benchmark_scene_patch, benchmark_scene_snapshot, diff_scene};
 pub use selection::{
@@ -72,7 +72,7 @@ pub use text::{
     TextFixtureResolutionV1, TextFixtureSceneV1, TextMeasureRequestV1, TextMetricsSnapshotV1,
     TextMetricsV1, TextRunV1,
 };
-use text::{TextMetricsCache, resolve_text_fixture, scene_runs};
+use text::{TextMetricsCache, resolve_text_fixture, scene_runs, text_layout_width};
 pub use tool::EditorToolV1;
 use tool::ToolState;
 pub use transform::Affine2D;
@@ -400,6 +400,13 @@ pub enum CommandV1 {
     UpdateText {
         element_id: ElementId,
         patch: TextPatchV1,
+    },
+    ResizeText {
+        element_id: ElementId,
+        x: f64,
+        y: f64,
+        font_size: f64,
+        max_width: Option<f64>,
     },
     UpdateRectangle {
         element_id: ElementId,
@@ -918,6 +925,15 @@ impl Engine {
                     | Some(HitSelectionHandle::Vertex { .. })
                     | None => None,
                 };
+                let target_text_resize = match (
+                    target_handle,
+                    selection_state.selected_element_ids.as_slice(),
+                ) {
+                    (Some(handle), [element_id]) if handle != SelectionHandleIdV1::Rotate => {
+                        targeted_text_resize(&self.document, element_id, handle, &self.text_metrics)
+                    }
+                    _ => None,
+                };
                 let target_element_id = (is_down && hit_handle.is_none())
                     .then(|| {
                         hit_test_document_with_mode(
@@ -940,6 +956,7 @@ impl Engine {
                     target_handle,
                     target_vertex,
                     target_curve,
+                    target_text_resize,
                     oriented_bounds: selection_state.oriented_bounds,
                 }
             })
@@ -985,6 +1002,14 @@ impl Engine {
                 self.scene_revision += 1;
                 (
                     self.update_with_preview(Some(&PointerPreview::Transform(preview))),
+                    false,
+                )
+            }
+            PointerTransition::Preview(PointerPreview::TextResize(preview)) => {
+                self.selection.clear_guides();
+                self.scene_revision += 1;
+                (
+                    self.update_with_preview(Some(&PointerPreview::TextResize(preview))),
                     false,
                 )
             }
@@ -1102,6 +1127,32 @@ impl Engine {
                     command: CommandV1::UpdatePathCurve {
                         element_id: preview.element_id,
                         curve: preview.curve,
+                    },
+                };
+                (
+                    self.execute_command_without_pointer_reset(
+                        envelope,
+                        SelectionAfterCommand::Preserve,
+                    )?,
+                    true,
+                )
+            }
+            PointerTransition::TextResizeCommit {
+                preview,
+                expected_revision,
+            } => {
+                self.selection.clear_guides();
+                let envelope = CommandEnvelopeV1 {
+                    protocol_version: PROTOCOL_VERSION,
+                    command_id,
+                    document_id: self.document.document_id.clone(),
+                    expected_revision,
+                    command: CommandV1::ResizeText {
+                        element_id: preview.element_id,
+                        x: preview.x,
+                        y: preview.y,
+                        font_size: preview.font_size,
+                        max_width: preview.max_width,
                     },
                 };
                 (
@@ -1430,7 +1481,12 @@ impl Engine {
 
     pub fn current_update(&self) -> EngineUpdateV1 {
         let preview = self.shape_creation_machine.preview();
-        self.update_with_operation_and_previews(None, None, None, preview.as_ref())
+        self.update_with_operation_and_previews(
+            None,
+            self.pointer_machine.preview(),
+            None,
+            preview.as_ref(),
+        )
     }
 
     pub fn set_active_tool(&mut self, active_tool: EditorToolV1) -> EngineUpdateV1 {
@@ -1686,7 +1742,9 @@ impl Engine {
         &mut self,
         snapshot: TextMetricsSnapshotV1,
     ) -> Result<EngineUpdateV1, EngineErrorV1> {
-        if self.text_metrics.provide(&self.document, snapshot)? {
+        let preview_document = preview_document(&self.document, self.pointer_machine.preview());
+        let document = preview_document.as_ref().unwrap_or(&self.document);
+        if self.text_metrics.provide(document, snapshot)? {
             self.scene_revision += 1;
         }
         Ok(self.current_update())
@@ -1807,6 +1865,7 @@ impl Engine {
                 Some((preview.element_ids.as_slice(), preview.transform))
             }
             PointerPreview::Vertex(_)
+            | PointerPreview::TextResize(_)
             | PointerPreview::Curve(_)
             | PointerPreview::Marquee { .. } => None,
         });
@@ -1817,24 +1876,30 @@ impl Engine {
                 preview.points.as_slice(),
             )),
             PointerPreview::Transform(_)
+            | PointerPreview::TextResize(_)
             | PointerPreview::Curve(_)
             | PointerPreview::Marquee { .. } => None,
         });
         let curve_preview = pointer_preview.and_then(|preview| match preview {
             PointerPreview::Curve(preview) => Some((preview.element_id.as_str(), preview.curve)),
             PointerPreview::Transform(_)
+            | PointerPreview::TextResize(_)
             | PointerPreview::Vertex(_)
             | PointerPreview::Marquee { .. } => None,
         });
+        let preview_document = preview_document(&self.document, pointer_preview);
+        let document = preview_document.as_ref().unwrap_or(&self.document);
+        let scene_pointer_preview =
+            pointer_preview.filter(|preview| !matches!(preview, PointerPreview::TextResize(_)));
         EngineUpdateV1 {
             operation,
             scene: resolve_scene(
-                &self.document,
+                document,
                 self.scene_revision,
-                pointer_preview,
+                scene_pointer_preview,
                 stroke_preview,
                 shape_preview,
-                &self.document.render_profile,
+                &document.render_profile,
                 &self.text_metrics,
             ),
             history: HistoryStateV1 {
@@ -1842,7 +1907,7 @@ impl Engine {
                 can_redo: !self.redo_stack.is_empty(),
             },
             selection: self.selection.snapshot(
-                &self.document,
+                document,
                 transform_preview,
                 vertex_preview,
                 curve_preview,
@@ -1850,10 +1915,9 @@ impl Engine {
                 self.camera.zoom,
             ),
             active_tool: self.tool_state.active_tool(),
-            text_measure_request: self.text_metrics.request_for_document(
-                &self.document,
-                format!("text-measure-{}", self.scene_revision),
-            ),
+            text_measure_request: self
+                .text_metrics
+                .request_for_document(document, format!("text-measure-{}", self.scene_revision)),
         }
     }
 }
@@ -1918,6 +1982,9 @@ fn selection_after_command(
             } else {
                 SelectionAfterCommand::Set(vec![element_id.clone()], Some(element_id.clone()))
             }
+        }
+        CommandV1::ResizeText { element_id, .. } => {
+            SelectionAfterCommand::Set(vec![element_id.clone()], Some(element_id.clone()))
         }
         CommandV1::MoveElements { element_ids, .. } => element_ids
             .first()
@@ -2107,6 +2174,35 @@ fn apply_command(
             if let Some(value) = patch.max_width {
                 text.max_width = value;
             }
+            validate_text(text)?;
+            Ok(CommandEffect::changed(vec![element_id]))
+        }
+        CommandV1::ResizeText {
+            element_id,
+            x,
+            y,
+            font_size,
+            max_width,
+        } => {
+            let element = document.elements.get_mut(&element_id).ok_or_else(|| {
+                EngineErrorV1::ElementNotFound {
+                    element_id: element_id.clone(),
+                }
+            })?;
+            let ElementRecordV1::Text(text) = element else {
+                return Err(EngineErrorV1::ElementNotText { element_id });
+            };
+            if text.x == x
+                && text.y == y
+                && text.font_size == font_size
+                && text.max_width == max_width
+            {
+                return Ok(CommandEffect::unchanged());
+            }
+            text.x = x;
+            text.y = y;
+            text.font_size = font_size;
+            text.max_width = max_width;
             validate_text(text)?;
             Ok(CommandEffect::changed(vec![element_id]))
         }
@@ -3089,10 +3185,11 @@ fn element_local_visual_bounds(
             stroke_visual_bounds(&stroke.points, stroke.size.stroke_width())
         }
         ElementRecordV1::Text(text) => text_metrics.metric_for(text).map(|metric| {
+            let width = text_layout_width(text, metric);
             VisualAabb::new(
-                aligned_text_x(text.x, metric.width, text.text_align),
+                aligned_text_x(text.x, width, text.text_align),
                 text.y,
-                metric.width,
+                width,
                 metric.height,
             )
             .expect("validated text metrics create valid bounds")
@@ -3471,6 +3568,34 @@ fn targeted_curve_handle(
     })
 }
 
+fn targeted_text_resize(
+    document: &NodeInkDocumentV1,
+    element_id: &str,
+    handle: SelectionHandleIdV1,
+    text_metrics: &TextMetricsCache,
+) -> Option<TargetedTextResize> {
+    let text = document.elements.get(element_id)?.as_text()?;
+    let metric = text_metrics.metric_for(text)?;
+    let world_to_local = resolved_world_transforms(document, None)
+        .ok()?
+        .get(element_id)
+        .copied()?
+        .inverse()
+        .ok()?;
+    Some(TargetedTextResize {
+        element_id: element_id.to_string(),
+        handle,
+        world_to_local,
+        x: text.x,
+        y: text.y,
+        font_size: text.font_size,
+        max_width: text.max_width,
+        text_align: text.text_align,
+        measured_width: text_layout_width(text, metric),
+        measured_height: metric.height,
+    })
+}
+
 fn targeted_vertex_handle(
     document: &NodeInkDocumentV1,
     element_id: &str,
@@ -3496,6 +3621,32 @@ fn targeted_vertex_handle(
         points,
         world_to_local,
     })
+}
+
+fn preview_document(
+    document: &NodeInkDocumentV1,
+    pointer_preview: Option<&PointerPreview>,
+) -> Option<NodeInkDocumentV1> {
+    let PointerPreview::TextResize(preview) = pointer_preview? else {
+        return None;
+    };
+    let mut candidate = document.clone();
+    apply_text_resize_preview(&mut candidate, preview)?;
+    Some(candidate)
+}
+
+fn apply_text_resize_preview(
+    document: &mut NodeInkDocumentV1,
+    preview: &PointerTextResizePreview,
+) -> Option<()> {
+    let ElementRecordV1::Text(text) = document.elements.get_mut(&preview.element_id)? else {
+        return None;
+    };
+    text.x = preview.x;
+    text.y = preview.y;
+    text.font_size = preview.font_size;
+    text.max_width = preview.max_width;
+    Some(())
 }
 
 fn editable_path_points(element: &ElementRecordV1) -> Option<&[Vec2]> {
@@ -6749,7 +6900,7 @@ mod tests {
         let selected = engine
             .set_selection(vec!["text-1".to_string()], Some("text-1".to_string()))
             .unwrap();
-        assert_eq!(selected.selection.visual_bounds.unwrap().x, 0.0);
+        assert_eq!(selected.selection.visual_bounds.unwrap().x, -20.0);
         assert_eq!(
             selected.selection.style,
             Some(SelectionStyleV1::Text {
@@ -6902,7 +7053,7 @@ mod tests {
             Some(SelectionBoundsV1 {
                 x: 40.0,
                 y: 52.0,
-                width: 112.0,
+                width: 120.0,
                 height: 72.0,
             })
         );
@@ -6946,6 +7097,196 @@ mod tests {
             .unwrap();
         assert_eq!(repeated.scene.scene_revision, 2);
         assert_eq!(repeated.scene, resolved.scene);
+    }
+
+    #[test]
+    fn text_side_resize_previews_reflow_and_commits_one_semantic_undo_entry() {
+        let mut text = product_text("text-1", "NodeInk text");
+        text.max_width = None;
+        let original = text.clone();
+        let mut engine = Engine::open(NodeInkDocumentV1::blank("text-side-resize")).unwrap();
+        let created = engine
+            .execute_command(envelope(
+                engine.document(),
+                "create-text",
+                CommandV1::CreateText { text },
+            ))
+            .unwrap();
+        let request = created.text_measure_request.unwrap();
+        let selected = engine
+            .provide_text_metrics(product_metrics(&request, 80.0, 30.0, vec![]))
+            .unwrap();
+        let east = selected
+            .selection
+            .handles
+            .iter()
+            .find(|handle| handle.id == SelectionHandleIdV1::East)
+            .unwrap()
+            .position;
+
+        engine
+            .handle_pointer_events(
+                "resize-text".to_string(),
+                vec![pointer_event_at(PointerPhaseV1::Down, 1, east.x, east.y)],
+            )
+            .unwrap();
+        let preview = engine
+            .handle_pointer_events(
+                "resize-text".to_string(),
+                vec![pointer_event_at(
+                    PointerPhaseV1::Move,
+                    2,
+                    east.x + 40.0,
+                    east.y,
+                )],
+            )
+            .unwrap();
+
+        assert!(!preview.did_commit);
+        assert_eq!(
+            engine.document().elements["text-1"].as_text(),
+            Some(&original)
+        );
+        assert_eq!(
+            preview.update.text_measure_request.as_ref().unwrap().runs[0].max_width,
+            Some(120.0)
+        );
+        assert_eq!(
+            engine
+                .current_update()
+                .text_measure_request
+                .as_ref()
+                .unwrap()
+                .runs[0]
+                .max_width,
+            Some(120.0)
+        );
+        let resolved_preview = engine
+            .provide_text_metrics(product_metrics(
+                preview.update.text_measure_request.as_ref().unwrap(),
+                112.0,
+                60.0,
+                vec![6],
+            ))
+            .unwrap();
+        assert_eq!(
+            resolved_preview.selection.visual_bounds.unwrap().width,
+            120.0
+        );
+
+        let committed = engine
+            .handle_pointer_events(
+                "resize-text".to_string(),
+                vec![pointer_event_at(
+                    PointerPhaseV1::Up,
+                    3,
+                    east.x + 40.0,
+                    east.y,
+                )],
+            )
+            .unwrap();
+        assert!(committed.did_commit);
+        let ElementRecordV1::Text(text) = &engine.document().elements["text-1"] else {
+            panic!("text remains semantic");
+        };
+        assert_eq!(text.font_size, 24.0);
+        assert_eq!(text.max_width, Some(120.0));
+        assert_eq!(text.transform, Affine2D::IDENTITY);
+        assert!(committed.update.history.can_undo);
+
+        engine.undo().unwrap();
+        let ElementRecordV1::Text(text) = &engine.document().elements["text-1"] else {
+            panic!("undo restores text");
+        };
+        assert_eq!(text.max_width, None);
+        assert_eq!(text.font_size, 24.0);
+    }
+
+    #[test]
+    fn text_corner_resize_scales_font_and_fixed_width_without_affine_distortion() {
+        let text = product_text("text-1", "NodeInk text");
+        let mut engine = Engine::open(NodeInkDocumentV1::blank("text-corner-resize")).unwrap();
+        let created = engine
+            .execute_command(envelope(
+                engine.document(),
+                "create-text",
+                CommandV1::CreateText { text },
+            ))
+            .unwrap();
+        let request = created.text_measure_request.unwrap();
+        let selected = engine
+            .provide_text_metrics(product_metrics(&request, 80.0, 30.0, vec![]))
+            .unwrap();
+        let south_east = selected
+            .selection
+            .handles
+            .iter()
+            .find(|handle| handle.id == SelectionHandleIdV1::SouthEast)
+            .unwrap()
+            .position;
+
+        engine
+            .handle_pointer_events(
+                "scale-text".to_string(),
+                vec![pointer_event_at(
+                    PointerPhaseV1::Down,
+                    1,
+                    south_east.x,
+                    south_east.y,
+                )],
+            )
+            .unwrap();
+        let preview = engine
+            .handle_pointer_events(
+                "scale-text".to_string(),
+                vec![pointer_event_at(
+                    PointerPhaseV1::Move,
+                    2,
+                    south_east.x + 40.0,
+                    south_east.y + 15.0,
+                )],
+            )
+            .unwrap();
+        let request = preview.update.text_measure_request.unwrap();
+        let expected_scale = (160.0 * 120.0 + 45.0 * 30.0) / (120.0_f64.powi(2) + 30.0_f64.powi(2));
+        let expected_font_size = 24.0 * expected_scale;
+        let expected_max_width = 120.0 * expected_scale;
+        assert!((request.runs[0].font_size - expected_font_size).abs() < 1e-10);
+        assert!((request.runs[0].max_width.unwrap() - expected_max_width).abs() < 1e-10);
+        engine
+            .provide_text_metrics(product_metrics(
+                &request,
+                80.0 * expected_scale,
+                30.0 * expected_scale,
+                vec![],
+            ))
+            .unwrap();
+
+        let committed = engine
+            .handle_pointer_events(
+                "scale-text".to_string(),
+                vec![pointer_event_at(
+                    PointerPhaseV1::Up,
+                    3,
+                    south_east.x + 40.0,
+                    south_east.y + 15.0,
+                )],
+            )
+            .unwrap();
+        assert!(committed.did_commit);
+        let ElementRecordV1::Text(text) = &engine.document().elements["text-1"] else {
+            panic!("text remains semantic");
+        };
+        assert!((text.font_size - expected_font_size).abs() < 1e-10);
+        assert!((text.max_width.unwrap() - expected_max_width).abs() < 1e-10);
+        assert_eq!(text.x, 40.0);
+        assert_eq!(text.y, 52.0);
+        assert_eq!(text.transform, Affine2D::IDENTITY);
+        let SceneNodeV1::Text(scene_text) = &committed.update.scene.nodes["text-1:text"] else {
+            panic!("scaled text resolves through text metrics");
+        };
+        assert_eq!(scene_text.transform, Affine2D::IDENTITY);
+        assert!((scene_text.runs[0].font_size - expected_font_size).abs() < 1e-10);
     }
 
     #[test]

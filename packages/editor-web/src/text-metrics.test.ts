@@ -46,19 +46,72 @@ describe('CanvasTextMetricsAdapter', () => {
     };
 
     const first = adapter.measure(request);
+    const measuredCallCount = measureText.mock.calls.length;
     const cached = adapter.measure(request);
 
     expect(first).toMatchObject({ cacheHitCount: 0, measuredRunCount: 3, durationMs: 2 });
     expect(first.snapshot.metrics[0]).toMatchObject({
       key: 'latin',
-      width: 55,
-      height: 50,
+      width: 50,
+      height: 100,
       baseline: 16,
-      lineBreaks: [7],
+      lineBreaks: [5, 7, 13],
     });
     expect(first.snapshot.metrics[2]?.lineBreaks).toEqual([1]);
     expect(cached).toMatchObject({ cacheHitCount: 3, measuredRunCount: 0, durationMs: 2 });
-    expect(measureText).toHaveBeenCalledTimes(5);
+    expect(measuredCallCount).toBeGreaterThan(5);
+    expect(measureText).toHaveBeenCalledTimes(measuredCallCount);
+  });
+
+  it('soft-wraps unbroken text at max width without splitting Unicode code points', () => {
+    const measureText = vi.fn((text: string) => ({
+      width: Array.from(text).length * 10,
+      actualBoundingBoxAscent: 16,
+    }));
+    const adapter = new CanvasTextMetricsAdapter({
+      createContext: () => ({ font: '', measureText }) as never,
+      fontStatus: () => 'loaded',
+    });
+
+    const measured = adapter.measure({
+      requestId: 'soft-wrap',
+      fontFingerprint: adapter.fingerprint(),
+      runs: [
+        {
+          key: 'digits',
+          text: '1234567',
+          fontFamily: 'Arial',
+          fontSize: 20,
+          fontWeight: 400,
+          maxWidth: 25,
+        },
+        {
+          key: 'emoji',
+          text: '🎨🎨🎨',
+          fontFamily: 'Arial',
+          fontSize: 20,
+          fontWeight: 400,
+          maxWidth: 25,
+        },
+      ],
+    });
+
+    expect(measured.snapshot.metrics).toEqual([
+      {
+        key: 'digits',
+        width: 20,
+        height: 100,
+        baseline: 16,
+        lineBreaks: [2, 4, 6],
+      },
+      {
+        key: 'emoji',
+        width: 20,
+        height: 50,
+        baseline: 16,
+        lineBreaks: [2],
+      },
+    ]);
   });
 
   it('changes fingerprint and clears cache after a font epoch change', () => {

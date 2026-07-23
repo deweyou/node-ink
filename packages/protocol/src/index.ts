@@ -183,6 +183,14 @@ export type CommandV1 =
   | { type: 'create_stroke'; stroke: StrokeElementV1 }
   | { type: 'create_text'; text: TextElementV1 }
   | { type: 'update_text'; elementId: string; patch: TextPatchV1 }
+  | {
+      type: 'resize_text';
+      elementId: string;
+      x: number;
+      y: number;
+      fontSize: number;
+      maxWidth: number | null;
+    }
   | { type: 'update_rectangle'; elementId: string; patch: RectanglePatchV1 }
   | { type: 'update_path_points'; elementId: string; points: Vec2[] }
   | { type: 'update_path_curve'; elementId: string; curve: PathCurveV1 | null }
@@ -1125,6 +1133,15 @@ function isCommand(value: unknown): value is CommandV1 {
         hasOnlyKeys(value, ['type', 'elementId', 'patch']) &&
         isNonEmptyString(value.elementId) &&
         isTextPatch(value.patch)
+      );
+    case 'resize_text':
+      return (
+        hasOnlyKeys(value, ['type', 'elementId', 'x', 'y', 'fontSize', 'maxWidth']) &&
+        isNonEmptyString(value.elementId) &&
+        isFiniteNumber(value.x) &&
+        isFiniteNumber(value.y) &&
+        isValidFontSize(value.fontSize) &&
+        (value.maxWidth === null || isPositiveFiniteNumber(value.maxWidth))
       );
     case 'update_rectangle':
       return (

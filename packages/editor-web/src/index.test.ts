@@ -1250,6 +1250,9 @@ describe('EditorWebController', () => {
     await controller.mount(secondTarget);
 
     expect(firstAdd.mock.calls.map(([type]) => type)).toEqual([
+      'focusin',
+      'keydown',
+      'pointerdown',
       'pointerdown',
       'pointermove',
       'pointerup',
@@ -1264,6 +1267,9 @@ describe('EditorWebController', () => {
       'dblclick',
     ]);
     expect(firstRemove.mock.calls.map(([type]) => type)).toEqual([
+      'focusin',
+      'keydown',
+      'pointerdown',
       'pointerdown',
       'pointermove',
       'pointerup',
@@ -1277,7 +1283,7 @@ describe('EditorWebController', () => {
       'lostpointercapture',
       'dblclick',
     ]);
-    expect(secondAdd).toHaveBeenCalledTimes(12);
+    expect(secondAdd).toHaveBeenCalledTimes(15);
     expect(secondRemove).not.toHaveBeenCalled();
     expect(renderer.mountCalls).toBe(2);
 
@@ -1297,6 +1303,9 @@ describe('EditorWebController', () => {
       'pointercancel',
       'lostpointercapture',
       'wheel',
+      'focusin',
+      'keydown',
+      'pointerdown',
     ]);
     expect(engine.disposeCalls).toBe(1);
     expect(renderer.unmountCalls).toBe(1);

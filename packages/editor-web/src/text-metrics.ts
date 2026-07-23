@@ -88,7 +88,7 @@ function measureRun(
   run: TextRunV1,
 ): TextMetricsV1 {
   context.font = `${run.fontWeight} ${run.fontSize}px ${run.fontFamily}`;
-  const lines = run.text.split('\n');
+  const { lines, lineBreaks } = layoutLines(context, run.text, run.maxWidth);
   let baseline = run.fontSize * 0.8;
   const measuredWidths = lines.map((line) => {
     const measurement = context.measureText(line);
@@ -101,20 +101,76 @@ function measureRun(
     width,
     height: lines.length * run.fontSize * 1.25,
     baseline,
-    lineBreaks: newlineIndices(run.text),
+    lineBreaks,
   };
 }
 
-function newlineIndices(text: string): number[] {
-  const indices: number[] = [];
-  let index = 0;
-  for (const character of text) {
-    if (character === '\n') {
-      indices.push(index);
+interface WrappedLine {
+  text: string;
+  offset: number;
+}
+
+function layoutLines(
+  context: Pick<CanvasRenderingContext2D, 'font' | 'measureText'>,
+  text: string,
+  maxWidth: number | null,
+): { lines: string[]; lineBreaks: number[] } {
+  const characters = Array.from(text);
+  const lines: string[] = [];
+  const lineBreaks: number[] = [];
+  let paragraphStart = 0;
+
+  for (let index = 0; index <= characters.length; index += 1) {
+    if (index < characters.length && characters[index] !== '\n') {
+      continue;
     }
-    index += 1;
+    const paragraph = characters.slice(paragraphStart, index);
+    const wrappedLines = wrapParagraph(context, paragraph, maxWidth);
+    for (const [lineIndex, line] of wrappedLines.entries()) {
+      if (lineIndex > 0) {
+        lineBreaks.push(paragraphStart + line.offset);
+      }
+      lines.push(line.text);
+    }
+    if (index < characters.length) {
+      lineBreaks.push(index);
+      paragraphStart = index + 1;
+    }
   }
-  return indices;
+
+  return { lines, lineBreaks };
+}
+
+function wrapParagraph(
+  context: Pick<CanvasRenderingContext2D, 'font' | 'measureText'>,
+  characters: string[],
+  maxWidth: number | null,
+): WrappedLine[] {
+  if (characters.length === 0) {
+    return [{ text: '', offset: 0 }];
+  }
+  const paragraph = characters.join('');
+  if (maxWidth === null || context.measureText(paragraph).width <= maxWidth) {
+    return [{ text: paragraph, offset: 0 }];
+  }
+
+  const lines: WrappedLine[] = [];
+  let lineStart = 0;
+  while (lineStart < characters.length) {
+    let lineEnd = lineStart + 1;
+    while (
+      lineEnd < characters.length &&
+      context.measureText(characters.slice(lineStart, lineEnd + 1).join('')).width <= maxWidth
+    ) {
+      lineEnd += 1;
+    }
+    lines.push({
+      text: characters.slice(lineStart, lineEnd).join(''),
+      offset: lineStart,
+    });
+    lineStart = lineEnd;
+  }
+  return lines;
 }
 
 function cacheKey(fingerprint: string, run: TextRunV1): string {
