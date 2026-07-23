@@ -53,14 +53,19 @@ export class SvgRenderer implements RendererV1 {
     if (overlay.marquee) {
       group.append(createMarquee(overlay.marquee));
     }
-    const outline = overlay.selectionOrientedBounds
-      ? createOrientedSelectionRectangle(
-          overlay.selectionOrientedBounds,
-          overlay.selectionPaddingWorld,
-        )
-      : overlay.selectionBounds
-        ? createSelectionRectangle(overlay.selectionBounds, overlay.selectionPaddingWorld)
-        : null;
+    const isVertexSelection =
+      overlay.selectionHandles.length > 0 &&
+      overlay.selectionHandles.every((handle) => handle.kind === 'vertex');
+    const outline = isVertexSelection
+      ? null
+      : overlay.selectionOrientedBounds
+        ? createOrientedSelectionRectangle(
+            overlay.selectionOrientedBounds,
+            overlay.selectionPaddingWorld,
+          )
+        : overlay.selectionBounds
+          ? createSelectionRectangle(overlay.selectionBounds, overlay.selectionPaddingWorld)
+          : null;
     if (outline) {
       outline.dataset.nodeinkSelectionOutline = 'true';
       outline.setAttribute('stroke', selectionColor);
@@ -335,7 +340,7 @@ function createSelectionHandle(
     circle.setAttribute('cx', String(handle.position.x));
     circle.setAttribute('cy', String(handle.position.y));
     circle.setAttribute('r', String(rotateHandleRadiusPx * worldPerScreenPixel));
-    applyHandlePaint(circle, handle.id);
+    applyHandlePaint(circle, handle);
     return circle;
   }
   const rectangle = document.createElementNS(svgNamespace, 'rect');
@@ -344,13 +349,22 @@ function createSelectionHandle(
   rectangle.setAttribute('y', String(handle.position.y - size / 2));
   rectangle.setAttribute('width', String(size));
   rectangle.setAttribute('height', String(size));
-  applyHandlePaint(rectangle, handle.id);
+  applyHandlePaint(rectangle, handle);
   return rectangle;
 }
 
-function applyHandlePaint(element: SVGElement, handleId: string): void {
-  element.dataset.nodeinkSelectionHandle = handleId;
-  element.setAttribute('fill', 'var(--nodeink-selection-handle-fill, #ffffff)');
+function applyHandlePaint(
+  element: SVGElement,
+  handle: EditorOverlayV1['selectionHandles'][number],
+): void {
+  element.dataset.nodeinkSelectionHandle =
+    handle.kind === 'vertex' ? `vertex:${handle.vertexIndex}` : handle.id;
+  element.setAttribute(
+    'fill',
+    handle.kind === 'vertex' && handle.selected
+      ? selectionColor
+      : 'var(--nodeink-selection-handle-fill, #ffffff)',
+  );
   element.setAttribute('stroke', selectionColor);
   element.setAttribute('stroke-width', '1.5');
   element.setAttribute('vector-effect', 'non-scaling-stroke');

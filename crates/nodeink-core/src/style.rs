@@ -3,14 +3,55 @@ use serde::{Deserialize, Serialize};
 pub const DEFAULT_RECTANGLE_FILL_COLOR: &str = "#d1fae5";
 pub const DEFAULT_RECTANGLE_STROKE_COLOR: &str = "#047857";
 pub const DEFAULT_INK_COLOR: &str = "#0f172a";
-pub const DEFAULT_RECTANGLE_STROKE_WIDTH: f64 = 2.0;
-pub const DEFAULT_LINE_STROKE_WIDTH: f64 = 2.0;
-pub const DEFAULT_STROKE_WIDTH: f64 = 3.0;
+pub const DEFAULT_ELEMENT_SIZE: ElementSizeV1 = ElementSizeV1::M;
 
-const MIN_STROKE_WIDTH: f64 = 0.1;
-const MAX_STROKE_WIDTH: f64 = 128.0;
 const MIN_FONT_SIZE: f64 = 1.0;
 const MAX_FONT_SIZE: f64 = 512.0;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ElementSizeV1 {
+    S,
+    M,
+    L,
+    Xl,
+}
+
+impl ElementSizeV1 {
+    pub const fn stroke_width(self) -> f64 {
+        match self {
+            Self::S => 2.0,
+            Self::M => 4.0,
+            Self::L => 6.0,
+            Self::Xl => 8.0,
+        }
+    }
+
+    pub const fn arrowhead_length(self) -> f64 {
+        match self {
+            Self::S => 28.0,
+            Self::M => 40.0,
+            Self::L => 56.0,
+            Self::Xl => 72.0,
+        }
+    }
+
+    pub const fn arrowhead_opening_width(self) -> f64 {
+        self.arrowhead_length() * 0.9
+    }
+
+    pub(crate) fn from_legacy_stroke_width(stroke_width: f64) -> Self {
+        if stroke_width <= 2.0 {
+            Self::S
+        } else if stroke_width <= 4.0 {
+            Self::M
+        } else if stroke_width <= 6.0 {
+            Self::L
+        } else {
+            Self::Xl
+        }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -84,33 +125,33 @@ pub enum ElementStylePatchV1 {
     Rect {
         fill: Option<FillV1>,
         stroke: Option<String>,
-        stroke_width: Option<f64>,
+        size: Option<ElementSizeV1>,
     },
     Ellipse {
         fill: Option<FillV1>,
         stroke: Option<String>,
-        stroke_width: Option<f64>,
+        size: Option<ElementSizeV1>,
     },
     Diamond {
         fill: Option<FillV1>,
         stroke: Option<String>,
-        stroke_width: Option<f64>,
+        size: Option<ElementSizeV1>,
     },
     Line {
         stroke: Option<String>,
-        stroke_width: Option<f64>,
+        size: Option<ElementSizeV1>,
     },
     Polyline {
         stroke: Option<String>,
-        stroke_width: Option<f64>,
+        size: Option<ElementSizeV1>,
     },
     Arrow {
         stroke: Option<String>,
-        stroke_width: Option<f64>,
+        size: Option<ElementSizeV1>,
     },
     Stroke {
         stroke: Option<String>,
-        stroke_width: Option<f64>,
+        size: Option<ElementSizeV1>,
     },
     Text {
         color: Option<String>,
@@ -125,7 +166,7 @@ impl Default for ElementStylePatchV1 {
         Self::Rect {
             fill: None,
             stroke: None,
-            stroke_width: None,
+            size: None,
         }
     }
 }
@@ -133,37 +174,15 @@ impl Default for ElementStylePatchV1 {
 impl ElementStylePatchV1 {
     pub(crate) fn is_empty(&self) -> bool {
         match self {
-            Self::Rect {
-                fill,
-                stroke,
-                stroke_width,
+            Self::Rect { fill, stroke, size }
+            | Self::Ellipse { fill, stroke, size }
+            | Self::Diamond { fill, stroke, size } => {
+                fill.is_none() && stroke.is_none() && size.is_none()
             }
-            | Self::Ellipse {
-                fill,
-                stroke,
-                stroke_width,
-            }
-            | Self::Diamond {
-                fill,
-                stroke,
-                stroke_width,
-            } => fill.is_none() && stroke.is_none() && stroke_width.is_none(),
-            Self::Line {
-                stroke,
-                stroke_width,
-            }
-            | Self::Polyline {
-                stroke,
-                stroke_width,
-            }
-            | Self::Arrow {
-                stroke,
-                stroke_width,
-            }
-            | Self::Stroke {
-                stroke,
-                stroke_width,
-            } => stroke.is_none() && stroke_width.is_none(),
+            Self::Line { stroke, size }
+            | Self::Polyline { stroke, size }
+            | Self::Arrow { stroke, size }
+            | Self::Stroke { stroke, size } => stroke.is_none() && size.is_none(),
             Self::Text {
                 color,
                 text_align,
@@ -189,33 +208,33 @@ pub enum SelectionStyleV1 {
     Rect {
         fill: FillV1,
         stroke: String,
-        stroke_width: f64,
+        size: ElementSizeV1,
     },
     Ellipse {
         fill: FillV1,
         stroke: String,
-        stroke_width: f64,
+        size: ElementSizeV1,
     },
     Diamond {
         fill: FillV1,
         stroke: String,
-        stroke_width: f64,
+        size: ElementSizeV1,
     },
     Line {
         stroke: String,
-        stroke_width: f64,
+        size: ElementSizeV1,
     },
     Polyline {
         stroke: String,
-        stroke_width: f64,
+        size: ElementSizeV1,
     },
     Arrow {
         stroke: String,
-        stroke_width: f64,
+        size: ElementSizeV1,
     },
     Stroke {
         stroke: String,
-        stroke_width: f64,
+        size: ElementSizeV1,
     },
     Text {
         color: String,
@@ -232,10 +251,6 @@ pub(crate) fn is_canonical_color(color: &str) -> bool {
             .bytes()
             .skip(1)
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-}
-
-pub(crate) fn is_valid_stroke_width(width: f64) -> bool {
-    width.is_finite() && (MIN_STROKE_WIDTH..=MAX_STROKE_WIDTH).contains(&width)
 }
 
 pub(crate) fn is_valid_font_size(size: f64) -> bool {
@@ -277,28 +292,28 @@ mod tests {
             ElementStylePatchV1::Ellipse {
                 fill: None,
                 stroke: None,
-                stroke_width: None,
+                size: None,
             },
             ElementStylePatchV1::Diamond {
                 fill: None,
                 stroke: None,
-                stroke_width: None,
+                size: None,
             },
             ElementStylePatchV1::Line {
                 stroke: None,
-                stroke_width: None,
+                size: None,
             },
             ElementStylePatchV1::Polyline {
                 stroke: None,
-                stroke_width: None,
+                size: None,
             },
             ElementStylePatchV1::Arrow {
                 stroke: None,
-                stroke_width: None,
+                size: None,
             },
             ElementStylePatchV1::Stroke {
                 stroke: None,
-                stroke_width: None,
+                size: None,
             },
             ElementStylePatchV1::Text {
                 color: None,
@@ -313,28 +328,28 @@ mod tests {
             ElementStylePatchV1::Ellipse {
                 fill: Some(FillV1::None),
                 stroke: None,
-                stroke_width: None,
+                size: None,
             },
             ElementStylePatchV1::Diamond {
                 fill: None,
                 stroke: Some("#2563eb".to_string()),
-                stroke_width: None,
+                size: None,
             },
             ElementStylePatchV1::Line {
                 stroke: None,
-                stroke_width: Some(4.0),
+                size: Some(ElementSizeV1::M),
             },
             ElementStylePatchV1::Polyline {
                 stroke: Some("#2563eb".to_string()),
-                stroke_width: None,
+                size: None,
             },
             ElementStylePatchV1::Arrow {
                 stroke: None,
-                stroke_width: Some(4.0),
+                size: Some(ElementSizeV1::M),
             },
             ElementStylePatchV1::Stroke {
                 stroke: Some("#2563eb".to_string()),
-                stroke_width: None,
+                size: None,
             },
             ElementStylePatchV1::Text {
                 color: None,
@@ -344,5 +359,22 @@ mod tests {
             },
         ];
         assert!(changed.iter().all(|patch| !patch.is_empty()));
+    }
+
+    #[test]
+    fn element_sizes_resolve_stroke_and_arrowhead_metrics() {
+        let metrics = [
+            (ElementSizeV1::S, 2.0, 28.0, 25.2),
+            (ElementSizeV1::M, 4.0, 40.0, 36.0),
+            (ElementSizeV1::L, 6.0, 56.0, 50.4),
+            (ElementSizeV1::Xl, 8.0, 72.0, 64.8),
+        ];
+
+        for (size, stroke_width, arrowhead_length, arrowhead_opening_width) in metrics {
+            assert_eq!(size.stroke_width(), stroke_width);
+            assert_eq!(size.arrowhead_length(), arrowhead_length);
+            assert_eq!(size.arrowhead_opening_width(), arrowhead_opening_width);
+        }
+        assert_eq!(DEFAULT_ELEMENT_SIZE, ElementSizeV1::M);
     }
 }

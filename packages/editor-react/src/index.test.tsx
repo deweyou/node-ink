@@ -222,7 +222,7 @@ describe('NodeInkEditor', () => {
           kind: 'rect',
           fill: { kind: 'solid', color: '#d1fae5' },
           stroke: '#047857',
-          strokeWidth: 2,
+          size: 'm',
         },
       });
     });
@@ -231,11 +231,11 @@ describe('NodeInkEditor', () => {
     expect(labelledButton(target, 'Fill Mint').ariaPressed).toBe('true');
     expect(labelledButton(target, 'Fill Blue').ariaPressed).toBe('false');
     expect(labelledButton(target, 'Stroke Emerald').ariaPressed).toBe('true');
-    expect(button(target, '2px').ariaPressed).toBe('true');
+    expect(button(target, 'M').ariaPressed).toBe('true');
 
     await act(async () => labelledButton(target, 'Fill Blue').click());
     await act(async () => labelledButton(target, 'Stroke Blue').click());
-    await act(async () => button(target, '4px').click());
+    await act(async () => button(target, 'L').click());
     expect(controller.actions.slice(-3)).toEqual([
       {
         type: 'update_selection_style',
@@ -247,7 +247,7 @@ describe('NodeInkEditor', () => {
       },
       {
         type: 'update_selection_style',
-        patch: { kind: 'rect', strokeWidth: 4 },
+        patch: { kind: 'rect', size: 'l' },
       },
     ]);
 
@@ -259,7 +259,7 @@ describe('NodeInkEditor', () => {
           kind: 'ellipse',
           fill: { kind: 'solid', color: '#d1fae5' },
           stroke: '#047857',
-          strokeWidth: 2,
+          size: 'm',
         },
       });
     });
@@ -277,7 +277,7 @@ describe('NodeInkEditor', () => {
         selectionStyle: {
           kind: 'arrow',
           stroke: '#0f172a',
-          strokeWidth: 2,
+          size: 'm',
         },
       });
     });

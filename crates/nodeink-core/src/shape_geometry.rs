@@ -1,5 +1,5 @@
 use crate::{
-    Vec2,
+    ElementSizeV1, Vec2,
     selection_geometry::VisualAabb,
     transform::{Affine2D, Point2D},
 };
@@ -62,9 +62,9 @@ pub(crate) fn line_path_data(points: &[Vec2]) -> String {
     path
 }
 
-pub(crate) fn arrow_path_data(points: &[Vec2], stroke_width: f64) -> String {
+pub(crate) fn arrow_path_data(points: &[Vec2], size: ElementSizeV1) -> String {
     let mut path = line_path_data(points);
-    if let Some([left, tip, right]) = arrowhead_points(points, stroke_width) {
+    if let Some([left, tip, right]) = arrowhead_points(points, size) {
         path.push_str(&format!(
             " M {} {} L {} {} L {} {}",
             left.x, left.y, tip.x, tip.y, right.x, right.y
@@ -73,16 +73,36 @@ pub(crate) fn arrow_path_data(points: &[Vec2], stroke_width: f64) -> String {
     path
 }
 
+pub(crate) fn resolved_arrow_path_data(
+    points: &[Vec2],
+    size: ElementSizeV1,
+    world_transform: Affine2D,
+) -> String {
+    resolved_path_points(points, world_transform)
+        .map_or_else(String::new, |points| arrow_path_data(&points, size))
+}
+
+pub(crate) fn resolved_arrow_visual_bounds(
+    points: &[Vec2],
+    size: ElementSizeV1,
+    world_transform: Affine2D,
+) -> Option<VisualAabb> {
+    let points = resolved_path_points(points, world_transform)?;
+    path_visual_bounds(&points, size.stroke_width(), Some(size))
+}
+
 pub(crate) fn path_visual_bounds(
     points: &[Vec2],
     stroke_width: f64,
-    include_arrowhead: bool,
+    arrow_size: Option<ElementSizeV1>,
 ) -> Option<VisualAabb> {
     let mut painted_points = points
         .iter()
         .map(|point| Point2D::new(point.x, point.y))
         .collect::<Vec<_>>();
-    if include_arrowhead && let Some([left, tip, right]) = arrowhead_points(points, stroke_width) {
+    if let Some(size) = arrow_size
+        && let Some([left, tip, right]) = arrowhead_points(points, size)
+    {
         painted_points.extend([left, tip, right]);
     }
     bounds_for_points(&painted_points, stroke_width / 2.0)
@@ -116,7 +136,7 @@ pub(crate) fn hit_test_box_shape(
 pub(crate) fn hit_test_path(
     points: &[Vec2],
     stroke_width: f64,
-    include_arrowhead: bool,
+    arrow_size: Option<ElementSizeV1>,
     world_transform: Affine2D,
     point: Vec2,
     tolerance: f64,
@@ -130,7 +150,9 @@ pub(crate) fn hit_test_path(
             )
         })
         .collect::<Vec<_>>();
-    if include_arrowhead && let Some([left, tip, right]) = arrowhead_points(points, stroke_width) {
+    if let Some(size) = arrow_size
+        && let Some([left, tip, right]) = arrowhead_points(points, size)
+    {
         segments.extend([(left, tip), (tip, right)]);
     }
     let radius = stroke_width / 2.0 + tolerance;
@@ -146,7 +168,27 @@ pub(crate) fn hit_test_path(
     })
 }
 
-fn arrowhead_points(points: &[Vec2], stroke_width: f64) -> Option<[Point2D; 3]> {
+pub(crate) fn hit_test_resolved_arrow(
+    points: &[Vec2],
+    size: ElementSizeV1,
+    world_transform: Affine2D,
+    point: Vec2,
+    tolerance: f64,
+) -> bool {
+    let Some(points) = resolved_path_points(points, world_transform) else {
+        return false;
+    };
+    hit_test_path(
+        &points,
+        size.stroke_width(),
+        Some(size),
+        Affine2D::IDENTITY,
+        point,
+        tolerance,
+    )
+}
+
+fn arrowhead_points(points: &[Vec2], size: ElementSizeV1) -> Option<[Point2D; 3]> {
     let [.., previous, end] = points else {
         return None;
     };
@@ -158,8 +200,8 @@ fn arrowhead_points(points: &[Vec2], stroke_width: f64) -> Option<[Point2D; 3]> 
     }
     let direction_x = delta_x / segment_length;
     let direction_y = delta_y / segment_length;
-    let length = (stroke_width * 4.0).max(12.0).min(segment_length * 0.45);
-    let half_width = length * 0.45;
+    let length = size.arrowhead_length().min(segment_length * 0.45);
+    let half_width = size.arrowhead_opening_width().min(length * 0.9) / 2.0;
     let base_x = end.x - direction_x * length;
     let base_y = end.y - direction_y * length;
     let perpendicular_x = -direction_y;
@@ -175,6 +217,21 @@ fn arrowhead_points(points: &[Vec2], stroke_width: f64) -> Option<[Point2D; 3]> 
             base_y - perpendicular_y * half_width,
         ),
     ])
+}
+
+fn resolved_path_points(points: &[Vec2], world_transform: Affine2D) -> Option<Vec<Vec2>> {
+    points
+        .iter()
+        .map(|point| {
+            world_transform
+                .apply(Point2D::new(point.x, point.y))
+                .ok()
+                .map(|point| Vec2 {
+                    x: point.x,
+                    y: point.y,
+                })
+        })
+        .collect()
 }
 
 fn bounds_for_points(points: &[Point2D], padding: f64) -> Option<VisualAabb> {
@@ -243,8 +300,11 @@ mod tests {
             "M 1 2 L 3 4"
         );
         assert_eq!(
-            arrow_path_data(&[Vec2 { x: 0.0, y: 0.0 }, Vec2 { x: 100.0, y: 0.0 }], 2.0),
-            "M 0 0 L 100 0 M 88 5.4 L 100 0 L 88 -5.4"
+            arrow_path_data(
+                &[Vec2 { x: 0.0, y: 0.0 }, Vec2 { x: 100.0, y: 0.0 }],
+                ElementSizeV1::S,
+            ),
+            "M 0 0 L 100 0 M 72 12.6 L 100 0 L 72 -12.6"
         );
     }
 
@@ -272,13 +332,66 @@ mod tests {
         assert!(hit_test_path(
             &points,
             2.0,
-            true,
+            Some(ElementSizeV1::S),
             Affine2D::IDENTITY,
             Vec2 { x: 90.0, y: 4.0 },
             2.0,
         ));
-        let bounds = path_visual_bounds(&points, 2.0, true).expect("arrow bounds resolve");
+        let bounds =
+            path_visual_bounds(&points, 2.0, Some(ElementSizeV1::S)).expect("arrow bounds resolve");
         assert!(bounds.min_y() < -5.0);
         assert!(bounds.max_y() > 5.0);
+    }
+
+    #[test]
+    fn resolved_arrowhead_keeps_world_shape_under_non_uniform_transform() {
+        let transform = Affine2D::scale(2.0, 3.0).expect("scale is valid");
+        let horizontal = [Vec2 { x: 0.0, y: 0.0 }, Vec2 { x: 100.0, y: 0.0 }];
+        let diagonal = [Vec2 { x: 0.0, y: 0.0 }, Vec2 { x: 100.0, y: 100.0 }];
+
+        for points in [&horizontal[..], &diagonal[..]] {
+            let resolved = resolved_path_points(points, transform).expect("points resolve");
+            let [left, tip, right] =
+                arrowhead_points(&resolved, ElementSizeV1::S).expect("arrowhead resolves");
+            let base = Point2D::new((left.x + right.x) / 2.0, (left.y + right.y) / 2.0);
+
+            assert_close(distance(base, tip), 28.0);
+            assert_close(distance(left, right), 25.2);
+            assert_close(distance(left, tip), distance(right, tip));
+        }
+
+        assert_eq!(
+            resolved_arrow_path_data(&horizontal, ElementSizeV1::S, transform),
+            "M 0 0 L 200 0 M 172 12.6 L 200 0 L 172 -12.6"
+        );
+        let bounds = resolved_arrow_visual_bounds(&horizontal, ElementSizeV1::S, transform)
+            .expect("resolved arrow bounds");
+        assert_close(bounds.min_y(), -13.6);
+        assert_close(bounds.max_y(), 13.6);
+        assert!(hit_test_resolved_arrow(
+            &horizontal,
+            ElementSizeV1::S,
+            transform,
+            Vec2 { x: 186.0, y: 6.3 },
+            0.25,
+        ));
+        assert!(!hit_test_resolved_arrow(
+            &horizontal,
+            ElementSizeV1::S,
+            transform,
+            Vec2 { x: 160.0, y: 20.0 },
+            0.25,
+        ));
+    }
+
+    fn distance(first: Point2D, second: Point2D) -> f64 {
+        (first.x - second.x).hypot(first.y - second.y)
+    }
+
+    fn assert_close(actual: f64, expected: f64) {
+        assert!(
+            (actual - expected).abs() < 1e-9,
+            "expected {expected}, got {actual}"
+        );
     }
 }

@@ -175,6 +175,30 @@ impl EngineHandle {
         serde_json::to_string(&update).map_err(|error| js_error("serialization_failed", error))
     }
 
+    #[wasm_bindgen(js_name = insertPolylineVertexAt)]
+    pub fn insert_polyline_vertex_at(
+        &mut self,
+        point_json: &str,
+        command_id: String,
+    ) -> Result<String, JsValue> {
+        let point: Vec2 =
+            serde_json::from_str(point_json).map_err(|error| js_error("schema_invalid", error))?;
+        let update = self
+            .engine
+            .insert_polyline_vertex_at(command_id, point)
+            .map_err(engine_error)?;
+        serde_json::to_string(&update).map_err(|error| js_error("serialization_failed", error))
+    }
+
+    #[wasm_bindgen(js_name = deleteSelectedVertex)]
+    pub fn delete_selected_vertex(&mut self, command_id: String) -> Result<String, JsValue> {
+        let update = self
+            .engine
+            .delete_selected_vertex(command_id)
+            .map_err(engine_error)?;
+        serde_json::to_string(&update).map_err(|error| js_error("serialization_failed", error))
+    }
+
     #[wasm_bindgen(js_name = handleStrokeBatchJson)]
     pub fn handle_stroke_batch_json(
         &mut self,

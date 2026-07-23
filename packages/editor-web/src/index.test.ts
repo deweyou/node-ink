@@ -9,6 +9,7 @@ import type {
   EnginePortV1,
   EngineUpdateV1,
   EditorOverlayV1,
+  ElementSizeV1,
   NormalizedPointerEventV1,
   PointerUpdateV1,
   RendererV1,
@@ -608,6 +609,33 @@ describe('EditorWebController', () => {
     });
   });
 
+  it('routes Delete to the selected Rust vertex instead of deleting the whole element', async () => {
+    const engine = new StubEngine('polyline-1');
+    engine.selectionHandles = [
+      {
+        id: 'vertex',
+        kind: 'vertex',
+        position: { x: 40, y: 52 },
+        vertexIndex: 1,
+        selected: true,
+      },
+    ];
+    engine.deleteVertexDidCommit = true;
+    await engine.setSelection(['polyline-1'], 'polyline-1');
+    const controller = new EditorWebController({
+      engine,
+      renderer: new StubRenderer(),
+      createId: () => 'delete-vertex',
+    });
+    await controller.mount(document.createElement('div'));
+
+    const deleted = await controller.dispatch({ type: 'delete_selection' });
+
+    expect(deleted.vertexMetrics).toEqual({ didCommit: true });
+    expect(engine.deleteVertexCalls).toBe(1);
+    expect(engine.commands).toHaveLength(0);
+  });
+
   it('projects Rust multi-selection state and every overlay primitive into the shared snapshot', async () => {
     const engine = new StubEngine('rect-1');
     engine.selectionHandles = [{ id: 'north_west', kind: 'resize', position: { x: 40, y: 52 } }];
@@ -988,6 +1016,7 @@ describe('EditorWebController', () => {
       }),
     );
     await vi.waitFor(() => expect(engine.commands).toHaveLength(1));
+    expect(engine.insertVertexCalls).toBe(1);
     expect(engine.commands[0]?.command).toEqual({
       type: 'update_text',
       elementId: 'text-1',
@@ -1007,6 +1036,34 @@ describe('EditorWebController', () => {
       type: 'delete_elements',
       elementIds: ['text-1'],
     });
+  });
+
+  it('inserts a Polyline vertex on Select double-click without opening the text editor', async () => {
+    const engine = new StubEngine('polyline-1');
+    engine.insertVertexDidCommit = true;
+    const controller = new EditorWebController({
+      engine,
+      renderer: new StubRenderer(),
+      createId: () => 'insert-vertex',
+    });
+    const target = document.createElement('div');
+    target.getBoundingClientRect = vi.fn(
+      () => ({ width: 400, height: 300, left: 0, top: 0 }) as DOMRect,
+    );
+    await controller.mount(target);
+
+    target.dispatchEvent(
+      new MouseEvent('dblclick', {
+        bubbles: true,
+        cancelable: true,
+        button: 0,
+        clientX: 80,
+        clientY: 60,
+      }),
+    );
+
+    await vi.waitFor(() => expect(engine.insertVertexCalls).toBe(1));
+    expect(target.querySelector('textarea')).toBeNull();
   });
 
   it('cancels an empty text draft without creating history', async () => {
@@ -1788,6 +1845,10 @@ class StubEngine implements EnginePortV1 {
   redoCalls = 0;
   finishShapeCalls = 0;
   removeShapePointCalls = 0;
+  insertVertexCalls = 0;
+  deleteVertexCalls = 0;
+  insertVertexDidCommit = false;
+  deleteVertexDidCommit = false;
   disposeCalls = 0;
   readonly cameraActions: CameraActionV1[] = [];
   readonly setCameras: CameraV1[] = [];
@@ -1804,7 +1865,7 @@ class StubEngine implements EnginePortV1 {
   #rectangleStyle: Omit<Extract<SelectionStyleV1, { kind: 'rect' }>, 'kind'> = {
     fill: { kind: 'solid' as const, color: '#d1fae5' },
     stroke: '#047857',
-    strokeWidth: 2,
+    size: 'm',
   };
   #renderProfile: RenderProfileV1 = { kind: 'clean', version: 1 };
   #textElement: TextElementV1 | null = null;
@@ -1880,7 +1941,7 @@ class StubEngine implements EnginePortV1 {
       this.#rectangleStyle = {
         fill: command.command.rectangle.fill,
         stroke: command.command.rectangle.stroke,
-        strokeWidth: command.command.rectangle.strokeWidth,
+        size: command.command.rectangle.size,
       };
       changedElementIds = [command.command.rectangle.id];
       didChange = true;
@@ -2070,6 +2131,22 @@ class StubEngine implements EnginePortV1 {
     return this.update();
   }
 
+  async insertPolylineVertexAt(): Promise<{ update: EngineUpdateV1; didCommit: boolean }> {
+    this.insertVertexCalls += 1;
+    return {
+      update: this.update(),
+      didCommit: this.insertVertexDidCommit,
+    };
+  }
+
+  async deleteSelectedVertex(): Promise<{ update: EngineUpdateV1; didCommit: boolean }> {
+    this.deleteVertexCalls += 1;
+    return {
+      update: this.update(),
+      didCommit: this.deleteVertexDidCommit,
+    };
+  }
+
   async handleStrokeBatch(
     batch: StrokeInputBatchV1,
     _commandId: string,
@@ -2137,10 +2214,10 @@ class StubEngine implements EnginePortV1 {
     return {
       result: {
         sourceSchemaVersion: 1,
-        targetSchemaVersion: 4,
+        targetSchemaVersion: 5,
         migrated: true,
         document: {
-          schemaVersion: 4 as const,
+          schemaVersion: 5 as const,
           documentId: 'doc-1',
           revision: 0,
           renderProfile: { kind: 'clean' as const, version: 1 as const },
@@ -2168,7 +2245,7 @@ class StubEngine implements EnginePortV1 {
           height: 104,
           fill: this.#rectangleStyle.fill,
           stroke: this.#rectangleStyle.stroke,
-          strokeWidth: this.#rectangleStyle.strokeWidth,
+          size: this.#rectangleStyle.size,
           transform: identityTransform(),
         }
       : null;
@@ -2178,7 +2255,7 @@ class StubEngine implements EnginePortV1 {
       ...(text ? { [text.id]: text } : {}),
     };
     const document = {
-      schemaVersion: 4 as const,
+      schemaVersion: 5 as const,
       documentId: 'doc-1',
       revision: this.#revision,
       renderProfile: this.#renderProfile,
@@ -2382,7 +2459,7 @@ function stubScene(
   rectangleStyle: Omit<Extract<SelectionStyleV1, { kind: 'rect' }>, 'kind'> = {
     fill: { kind: 'solid', color: '#d1fae5' },
     stroke: '#047857',
-    strokeWidth: 2,
+    size: 'm',
   },
   renderProfile: RenderProfileV1 = { kind: 'clean', version: 1 },
 ): SceneSnapshotV1 {
@@ -2401,7 +2478,7 @@ function stubScene(
             fill:
               rectangleStyle.fill.kind === 'solid' ? rectangleStyle.fill.color : ('none' as const),
             stroke: rectangleStyle.stroke,
-            strokeWidth: rectangleStyle.strokeWidth,
+            strokeWidth: strokeWidthForSize(rectangleStyle.size),
             transform: identityTransform(),
           },
         }
@@ -2470,6 +2547,10 @@ function sameValue(first: unknown, second: unknown): boolean {
 
 function identityTransform() {
   return { a: 1, b: 0, c: 0, d: 1, e: 0, f: 0 } as const;
+}
+
+function strokeWidthForSize(size: ElementSizeV1): number {
+  return { s: 2, m: 4, l: 6, xl: 8 }[size];
 }
 
 function pointerEvent(

@@ -138,16 +138,16 @@ describe('openLocalDocumentV1', () => {
       recovery: 'migrated_head',
       persistedRevision: 5,
       document: {
-        schemaVersion: 4,
+        schemaVersion: 5,
         revision: 5,
         renderProfile: { kind: 'clean', version: 1 },
         elements: {
           'rect-1': {
             fill: { kind: 'solid', color: '#d1fae5' },
             stroke: '#047857',
-            strokeWidth: 2,
+            size: 'm',
           },
-          'stroke-1': { stroke: '#0f172a', strokeWidth: 3 },
+          'stroke-1': { stroke: '#0f172a', size: 'm' },
           'text-1': { color: '#0f172a', textAlign: 'start' },
         },
       },
@@ -157,7 +157,7 @@ describe('openLocalDocumentV1', () => {
         documentId: 'doc-1',
         revision: 5,
         expectedPreviousRevision: 4,
-        schemaVersion: 4,
+        schemaVersion: 5,
         engineAlgorithmVersion: 'nodeink-scene-v2',
       }),
     );
@@ -402,7 +402,8 @@ function migrationPort() {
         sourceSchemaVersion !== 1 &&
         sourceSchemaVersion !== 2 &&
         sourceSchemaVersion !== 3 &&
-        sourceSchemaVersion !== 4
+        sourceSchemaVersion !== 4 &&
+        sourceSchemaVersion !== 5
       ) {
         return {
           result: null,
@@ -410,20 +411,20 @@ function migrationPort() {
             stage: 'schema',
             code: 'unknown_schema',
             sourceSchemaVersion,
-            targetSchemaVersion: 4,
+            targetSchemaVersion: 5,
             message: 'unsupported schema',
             recovery: 'try_next_snapshot_then_readonly_diagnostic',
           },
         };
       }
-      const migrated = sourceSchemaVersion !== 4;
+      const migrated = sourceSchemaVersion !== 5;
       const document: NodeInkDocumentV1 = migrated
         ? migrateLegacyDocument(parsed as LegacyDocumentFixture)
         : (parsed as NodeInkDocumentV1);
       return {
         result: {
           sourceSchemaVersion,
-          targetSchemaVersion: 4,
+          targetSchemaVersion: 5,
           migrated,
           document,
           canonicalPayload: JSON.stringify(document),
@@ -490,7 +491,7 @@ type LegacyElementFixture =
 
 function migrateLegacyDocument(legacy: LegacyDocumentFixture): NodeInkDocumentV1 {
   return {
-    schemaVersion: 4,
+    schemaVersion: 5,
     documentId: legacy.documentId,
     revision: legacy.revision + 1,
     renderProfile: { kind: 'clean', version: 1 },
@@ -510,12 +511,19 @@ function migrateLegacyElement(element: LegacyElementFixture): ElementRecordV1 {
       ...element,
       fill: { kind: 'solid', color: '#d1fae5' },
       stroke: '#047857',
-      strokeWidth: 2,
+      size: 'm',
       transform: identityTransform(),
     };
   }
   if (element.kind === 'stroke') {
-    return { ...element, stroke: '#0f172a', transform: identityTransform() };
+    return {
+      kind: 'stroke',
+      id: element.id,
+      points: element.points,
+      stroke: '#0f172a',
+      size: element.strokeWidth <= 2 ? 's' : element.strokeWidth <= 4 ? 'm' : 'l',
+      transform: identityTransform(),
+    };
   }
   return {
     ...element,

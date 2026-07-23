@@ -1,7 +1,7 @@
 import {
   NODEINK_COLOR_PRESETS,
   NODEINK_FILL_PRESETS,
-  NODEINK_STROKE_WIDTH_PRESETS,
+  NODEINK_SIZE_PRESETS,
   NODEINK_TEXT_ALIGN_PRESETS,
   NODEINK_TEXT_SIZE_PRESETS,
   fillPresetMatches,
@@ -9,7 +9,12 @@ import {
   getEditorPersistencePresentation,
   type EditorWebControllerV1,
 } from '@nodeink-internal/editor-web';
-import type { ElementStylePatchV1, FillV1, SelectionStyleV1 } from '@nodeink-internal/protocol';
+import type {
+  ElementSizeV1,
+  ElementStylePatchV1,
+  FillV1,
+  SelectionStyleV1,
+} from '@nodeink-internal/protocol';
 
 import {
   exposePointerBenchmark,
@@ -405,10 +410,10 @@ function renderStylePanel(panel: HTMLElement, style: SelectionStyleV1 | null): v
           ).join(''),
         ),
         colorGroupMarkup('Stroke', style.stroke, 'stroke'),
-        widthGroupMarkup(style.strokeWidth),
+        sizeGroupMarkup(style.size),
       ]
     : style.kind !== 'text'
-      ? [colorGroupMarkup('Color', style.stroke, 'stroke'), widthGroupMarkup(style.strokeWidth)]
+      ? [colorGroupMarkup('Color', style.stroke, 'stroke'), sizeGroupMarkup(style.size)]
       : [
           colorGroupMarkup('Color', style.color, 'color'),
           styleGroupMarkup(
@@ -444,12 +449,12 @@ function colorGroupMarkup(label: string, value: string, property: 'stroke' | 'co
   );
 }
 
-function widthGroupMarkup(value: number): string {
+function sizeGroupMarkup(value: ElementSizeV1): string {
   return styleGroupMarkup(
-    'Width',
-    NODEINK_STROKE_WIDTH_PRESETS.map(
-      (strokeWidth) =>
-        `<button type="button" data-action="update_selection_style" data-style-property="strokeWidth" data-style-value="${strokeWidth}" aria-pressed="${String(value === strokeWidth)}">${strokeWidth}px</button>`,
+    'Size',
+    NODEINK_SIZE_PRESETS.map(
+      (preset) =>
+        `<button type="button" data-action="update_selection_style" data-style-property="size" data-style-value="${preset.value}" aria-pressed="${String(value === preset.value)}">${preset.label}</button>`,
     ).join(''),
   );
 }
@@ -492,11 +497,9 @@ function stylePatchFromButton(
     const stroke = NODEINK_COLOR_PRESETS.find((preset) => preset.id === value)?.value;
     return stroke ? lineOrClosedShapeStylePatch(style.kind, { stroke }) : null;
   }
-  if (style.kind !== 'text' && property === 'strokeWidth') {
-    const strokeWidth = Number(value);
-    return NODEINK_STROKE_WIDTH_PRESETS.includes(strokeWidth as 1 | 2 | 4)
-      ? lineOrClosedShapeStylePatch(style.kind, { strokeWidth })
-      : null;
+  if (style.kind !== 'text' && property === 'size') {
+    const size = NODEINK_SIZE_PRESETS.find((preset) => preset.value === value)?.value;
+    return size ? lineOrClosedShapeStylePatch(style.kind, { size }) : null;
   }
   if (style.kind === 'text' && property === 'color') {
     const color = NODEINK_COLOR_PRESETS.find((preset) => preset.id === value)?.value;
@@ -527,7 +530,7 @@ function closedShapeStylePatch(
 
 function lineOrClosedShapeStylePatch(
   kind: DrawableStyleKind,
-  patch: { stroke?: string; strokeWidth?: number },
+  patch: { stroke?: string; size?: ElementSizeV1 },
 ): ElementStylePatchV1 {
   return { kind, ...patch } as ElementStylePatchV1;
 }

@@ -212,15 +212,15 @@
 
 - `renderProfile` 仍是 Rust Document 的持久字段，但 2026-07-23 起 React、Vue、Vanilla 产品 UI 不再暴露 `Clean | Sketch`，当前界面和新文档统一使用 Clean。现有字段不做破坏性迁移，旧快照仍可由引擎读取。
 - Sketch v1 固定 preset（`seed=1313817669`、`roughness=1.2`、`bowing=0.8`、`fillStyle=hachure`）与确定性 resolver 仅作为内部兼容、benchmark 和架构验证边界保留，不再构成当前视觉产品契约。核心编辑能力成熟后再统一设计风格系统/Sketch v2。
-- 元素样式同样属于 Document：矩形持久 fill/stroke/strokeWidth，自由笔持久 stroke/strokeWidth，文本持久 color/fontSize/fontWeight/textAlign。Style 与 Profile 修改都通过一次 Rust Command/Transaction，并形成一个可理解的 Undo entry。
-- Phase 1A 使用固定 preset：fill 为 mint/blue/amber/none，stroke/text color 为 ink/emerald/blue/rose，线宽为 1/2/4px，字号为 18/24/32px，文本对齐为 start/center/end。协议只接受显式 none 或 canonical 小写六位 sRGB hex，不接受任意 CSS paint。
+- 元素样式同样属于 Document；Phase 1A 最初持久化数值 strokeWidth，Schema V5 已由 D-33 将线类样式升级为语义 Size。Style 修改继续通过一次 Rust Command/Transaction，并形成一个可理解的 Undo entry。
+- Phase 1A 保留固定 fill、stroke/text color、字号与文本对齐 preset；数值线宽 preset 已由 D-33 的 `S/M/L/XL` 取代。协议只接受显式 none 或 canonical 小写六位 sRGB hex，不接受任意 CSS paint。
 - Rust 从选中语义元素派生只读 style presentation；React、Vue、Vanilla 不读取 SVG 属性或反序列化 Document 来猜测当前值。右侧样式面板是画布 overlay，只在可编辑选择存在时显示。
 - schemaVersion 2 通过 Rust copy-on-write migration 把 V1 默认成 Clean 与当前视觉样式；迁移不修改源 bytes。Scene 自描述 resolved Profile，Clean/Sketch 都消费持久 paint，Sketch 随机几何仍只由 Rust resolver 生成。
 
 ### D-31 Phase 1B 选择、变换、层级与编辑动作
 
 - 框选按 painted visual bounds 相交；`Shift` 对点击/框选结果执行 toggle。普通点击组内内容选择最外层 Group，`Cmd/Ctrl+click` 穿透到 leaf；允许嵌套 Group，但 Group 只接收同 parent 兄弟项。
-- 选择框提供 8 个 resize handle 与 1 个 rotate handle；不允许越零翻转。`Shift` 等比、`Alt` 中心缩放、`Shift` 移动锁定主方向轴、`Shift` 旋转吸附到绝对 45° 倍数。PointerDown 后文档手势持有权保持到 PointerUp，Camera/modifier 门控变化不能丢弃完成事件；DOM capture loss、pointer cancel 与窗口失焦提交最后一个可见 transform，只有 `Escape` 或工具切换等显式编辑器取消才恢复手势前文档。Stroke width 不随 resize 变粗，混合多选/Group 使用完整 affine composition。
+- 选择框提供 8 个 resize handle 与 1 个 rotate handle；不允许越零翻转。`Shift` 等比、`Alt` 中心缩放、`Shift` 移动锁定主方向轴、`Shift` 旋转吸附到绝对 45° 倍数。PointerDown 后文档手势持有权保持到 PointerUp，Camera/modifier 门控变化不能丢弃完成事件；DOM capture loss、pointer cancel 与窗口失焦提交最后一个可见 transform，只有 `Escape` 或工具切换等显式编辑器取消才恢复手势前文档。元素 Size 不随 resize 改写，混合多选/Group 使用完整 affine composition。
 - Group 插入原选择最高绘制位置并保留 child order；删除 Group 删除 subtree，保留 child 必须显式 Ungroup。Z-order 仅作用同 parent，稳定保留多选内部顺序，边界动作是 no-op。
 - Clipboard 是 Rust 生成/校验、TS 仅暂存的内部版本化 opaque payload；Copy 无 revision，Cut/Paste 各一个 Undo entry，Paste 全量 remap ID 并按 24px screen-space 级联偏移。
 - 本期只做六种 Align，不做 Distribute。Snap 只对未选元素 edges/centers，阈值 6px screen-space，`Cmd/Ctrl` 临时关闭；tie-break 为最小修正量、绘制顺序、稳定 ID，Guide 只在实际 snap 时展示。
@@ -230,10 +230,20 @@
 - 基础图形新增 `Ellipse`、`Diamond`、`Line`、`Polyline` 与 `Arrow` 五种持久语义 kind；它们不是 Renderer 根据 path 猜出的展示别名。普通 `Arrow` 是自由几何，不含节点绑定、端口或自动路由，也不替代未来的 `Connector`。
 - Rectangle、Ellipse、Diamond、Line 与 Arrow 使用统一的一次性直接创建：点击工具栏只进入工具，不改变 Document；有效拖拽在 Rust 预览，PointerUp 形成一个 Command/Transaction、选中新元素并回到 Select。小于 3px screen-space 的拖拽不创建且保留当前工具；`Shift` 约束等边框形或 45° 线段，`Alt` 让框形从中心展开。
 - Polyline 通过逐点点击构造 Rust 瞬态 preview，至少三个固定点后由双击或 `Enter` 一次提交；`Backspace` 删除最后一点，`Escape` 或工具切换取消。未完成几何不进入 Document、Undo、元素计数或持久化。内部 programmatic create action 保留为 SDK/自动化入口，但不再是产品工具栏行为。
-- `Ellipse` 与 `Diamond` 使用 fill/stroke/strokeWidth；`Line`、`Polyline` 与 `Arrow` 只使用 stroke/strokeWidth。Line 固定两个点，Polyline 至少三个点，Arrow 至少两个点，连续重复点在 Rust Command 和协议边界被拒绝。
+- `Ellipse` 与 `Diamond` 最初使用 fill/stroke/strokeWidth，`Line`、`Polyline` 与 `Arrow` 最初使用 stroke/strokeWidth；这些 Schema V4 字段由 D-33 的 Schema V5 Size 迁移取代。Line 固定两个点，Polyline 至少三个点，Arrow 至少两个点，连续重复点在 Rust Command 和协议边界被拒绝。Arrow 箭头由 Rust 根据最终 world-space 末段方向解析；元素或 Group 的非等比 affine 只改变箭身端点与方向，不拉伸箭头长度和张角，Scene、bounds 与 hit-test 共用该几何。
+- 单选 Line 或 Arrow 时只显示首尾端点手柄、单选 Polyline 时只显示每个持久 point 对应的 screen-space 稳定顶点手柄；线类顶点编辑态不绘制矩形 bounds ring，也不显示八向 resize/rotate 手柄。拖动 path 本体仍移动完整元素。顶点拖动由 Rust 产生 preview，PointerUp 只提交一次 `update_path_points` Transaction，`Shift` 把相邻线段吸附到 45° 增量；DOM interruption 提交最后可见 preview，`Escape` 或工具切换取消。
+- 双击选中 Polyline 的线段会在离指针最近、10px screen-space 内的投影点插入顶点并选中它；`Delete`/`Backspace` 删除已选顶点但不能少于三个点。Line 与 Arrow 本期只编辑既有端点，不增删点；Connector binding、ports 与 routing 继续独立设计。
 - Rust Document/Command/Transaction 持有几何与样式真相，并把五种图形确定性解析为通用 `ScenePathV1`。Renderer 不复制椭圆、菱形或箭头算法；React、Vue 与 Vanilla 只通过同一个 framework-neutral Controller 触发显式创建和样式 Command。
 - Schema V4 以 copy-on-write 方式接收 V3 文档，迁移只提升 schemaVersion 与 revision，不改写既有元素语义，也不修改源 payload。协议版本仍为内部 V1；当前 private package 不借此承诺公共 SDK 稳定性。
-- 当前产品仍以 Clean 为唯一验收视觉。基础图形不会套用已退役的 Sketch v1 随机几何；统一风格系统与 Sketch v2 留到核心编辑能力成熟后整体设计。
+- 基础图形不会自动套用旧 Sketch v1 随机几何；旧 profile 只是兼容字段，不是产品级主题。未来手绘、虚线等处理必须作为元素样式进入同一画板并可混用。
+
+### D-33 Schema V5 元素级 Size 与非主题化风格
+
+- Rectangle、Ellipse、Diamond、Line、Polyline、Arrow 与 Stroke 持久化 `size: 's' | 'm' | 'l' | 'xl'`，默认 `m`；Text 的 fontSize 继续是独立语义。本期 Style 面板统一显示 `Size` 的 S/M/L/XL，不再暴露数字 Width。
+- Rust 将 Size 解析为 Scene paint：S/M/L/XL 分别对应 2/4/6/8 document-unit stroke width。Renderer 仍只消费数值 `SceneRectV1/ScenePathV1.strokeWidth`，不认识 Size，也不持有样式真相。
+- Arrow 的 Size 同时决定箭身宽度、箭头长度与开口宽度：S=`2/28/25.2`、M=`4/40/36`、L=`6/56/50.4`、XL=`8/72/64.8`。较大的开放式箭头保证普通画布缩放下仍有足够辨识度。箭尖固定在持久 endpoint；非等比 transform 不扭曲箭头，Scene、bounds 与 hit-test 共用 Rust 解析结果。
+- Schema V5 copy-on-write 接收 V4 数值 strokeWidth：`<=2 → s`、`<=4 → m`、`<=6 → l`、其余有效值 `→ xl`，revision 增加 1，源 payload 不修改。V0–V3 继续通过同一 Rust migration 路径直达 V5。
+- 产品不定义 `Clean` 与 `Sketch` 两套整板主题。旧 `renderProfile` 暂留作兼容 seam；solid/dashed/dotted、元素级 hand-drawn/roughness、旧字段最终迁移与删除均进入 TODO，待核心编辑能力稳定后作为可混用的元素样式设计。
 
 ## 22. 需要产品负责人决策的问题
 

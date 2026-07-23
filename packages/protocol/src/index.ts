@@ -1,10 +1,10 @@
 export const protocolVersion = 1 as const;
-export const schemaVersion = 4 as const;
+export const schemaVersion = 5 as const;
 export const canvasFontFamily = 'Noto Sans SC Variable' as const;
 export const nodeInkClipboardMime = 'application/x-nodeink-elements+json' as const;
 
 export interface NodeInkDocumentV1 {
-  schemaVersion: 4;
+  schemaVersion: 5;
   documentId: string;
   revision: number;
   renderProfile: RenderProfileV1;
@@ -24,6 +24,8 @@ export type ElementRecordV1 =
   | GroupElementV1;
 
 export type FillV1 = { kind: 'none' } | { kind: 'solid'; color: string };
+
+export type ElementSizeV1 = 's' | 'm' | 'l' | 'xl';
 
 export type TextAlignV1 = 'start' | 'center' | 'end';
 
@@ -46,7 +48,7 @@ export interface RectElementV1 {
   height: number;
   fill: FillV1;
   stroke: string;
-  strokeWidth: number;
+  size: ElementSizeV1;
 }
 
 export interface EllipseElementV1 {
@@ -59,7 +61,7 @@ export interface EllipseElementV1 {
   height: number;
   fill: FillV1;
   stroke: string;
-  strokeWidth: number;
+  size: ElementSizeV1;
 }
 
 export interface DiamondElementV1 {
@@ -72,7 +74,7 @@ export interface DiamondElementV1 {
   height: number;
   fill: FillV1;
   stroke: string;
-  strokeWidth: number;
+  size: ElementSizeV1;
 }
 
 export interface LineElementV1 {
@@ -81,7 +83,7 @@ export interface LineElementV1 {
   transform: Affine2D;
   points: Vec2[];
   stroke: string;
-  strokeWidth: number;
+  size: ElementSizeV1;
 }
 
 export interface PolylineElementV1 {
@@ -90,7 +92,7 @@ export interface PolylineElementV1 {
   transform: Affine2D;
   points: Vec2[];
   stroke: string;
-  strokeWidth: number;
+  size: ElementSizeV1;
 }
 
 export interface ArrowElementV1 {
@@ -99,7 +101,7 @@ export interface ArrowElementV1 {
   transform: Affine2D;
   points: Vec2[];
   stroke: string;
-  strokeWidth: number;
+  size: ElementSizeV1;
 }
 
 export interface StrokeElementV1 {
@@ -107,7 +109,7 @@ export interface StrokeElementV1 {
   id: string;
   transform: Affine2D;
   points: Vec2[];
-  strokeWidth: number;
+  size: ElementSizeV1;
   stroke: string;
 }
 
@@ -178,6 +180,7 @@ export type CommandV1 =
   | { type: 'create_text'; text: TextElementV1 }
   | { type: 'update_text'; elementId: string; patch: TextPatchV1 }
   | { type: 'update_rectangle'; elementId: string; patch: RectanglePatchV1 }
+  | { type: 'update_path_points'; elementId: string; points: Vec2[] }
   | { type: 'update_element_style'; elementId: string; patch: ElementStylePatchV1 }
   | { type: 'set_render_profile'; renderProfile: RenderProfileV1 }
   | { type: 'transform_elements'; elementIds: string[]; transform: Affine2D }
@@ -213,39 +216,39 @@ export type ElementStylePatchV1 =
       kind: 'rect';
       fill?: FillV1;
       stroke?: string;
-      strokeWidth?: number;
+      size?: ElementSizeV1;
     }
   | {
       kind: 'ellipse';
       fill?: FillV1;
       stroke?: string;
-      strokeWidth?: number;
+      size?: ElementSizeV1;
     }
   | {
       kind: 'diamond';
       fill?: FillV1;
       stroke?: string;
-      strokeWidth?: number;
+      size?: ElementSizeV1;
     }
   | {
       kind: 'line';
       stroke?: string;
-      strokeWidth?: number;
+      size?: ElementSizeV1;
     }
   | {
       kind: 'polyline';
       stroke?: string;
-      strokeWidth?: number;
+      size?: ElementSizeV1;
     }
   | {
       kind: 'arrow';
       stroke?: string;
-      strokeWidth?: number;
+      size?: ElementSizeV1;
     }
   | {
       kind: 'stroke';
       stroke?: string;
-      strokeWidth?: number;
+      size?: ElementSizeV1;
     }
   | {
       kind: 'text';
@@ -364,13 +367,24 @@ export type SelectionHandleIdV1 =
   | 'south'
   | 'south_west'
   | 'west'
-  | 'rotate';
+  | 'rotate'
+  | 'vertex';
 
-export interface SelectionHandleV1 {
-  id: SelectionHandleIdV1;
+export interface SelectionTransformHandleV1 {
+  id: Exclude<SelectionHandleIdV1, 'vertex'>;
   kind: 'resize' | 'rotate';
   position: Vec2;
 }
+
+export interface SelectionVertexHandleV1 {
+  id: 'vertex';
+  kind: 'vertex';
+  position: Vec2;
+  vertexIndex: number;
+  selected: boolean;
+}
+
+export type SelectionHandleV1 = SelectionTransformHandleV1 | SelectionVertexHandleV1;
 
 export interface SelectionMarqueeV1 {
   bounds: SelectionBoundsV1;
@@ -401,39 +415,39 @@ export type SelectionStyleV1 =
       kind: 'rect';
       fill: FillV1;
       stroke: string;
-      strokeWidth: number;
+      size: ElementSizeV1;
     }
   | {
       kind: 'ellipse';
       fill: FillV1;
       stroke: string;
-      strokeWidth: number;
+      size: ElementSizeV1;
     }
   | {
       kind: 'diamond';
       fill: FillV1;
       stroke: string;
-      strokeWidth: number;
+      size: ElementSizeV1;
     }
   | {
       kind: 'line';
       stroke: string;
-      strokeWidth: number;
+      size: ElementSizeV1;
     }
   | {
       kind: 'polyline';
       stroke: string;
-      strokeWidth: number;
+      size: ElementSizeV1;
     }
   | {
       kind: 'arrow';
       stroke: string;
-      strokeWidth: number;
+      size: ElementSizeV1;
     }
   | {
       kind: 'stroke';
       stroke: string;
-      strokeWidth: number;
+      size: ElementSizeV1;
     }
   | {
       kind: 'text';
@@ -636,6 +650,8 @@ export interface EnginePortV1 {
   ): Promise<PointerUpdateV1>;
   finishShapeCreation(): Promise<PointerUpdateV1>;
   removeShapeCreationPoint(): Promise<EngineUpdateV1>;
+  insertPolylineVertexAt(point: Vec2, commandId: string): Promise<VertexEditUpdateV1>;
+  deleteSelectedVertex(commandId: string): Promise<VertexEditUpdateV1>;
   handleStrokeBatch(
     batch: StrokeInputBatchV1,
     commandId: string,
@@ -686,6 +702,11 @@ export interface PointerUpdateV1 {
   update: EngineUpdateV1;
   processedEventCount: number;
   ignoredEventCount: number;
+  didCommit: boolean;
+}
+
+export interface VertexEditUpdateV1 {
+  update: EngineUpdateV1;
   didCommit: boolean;
 }
 
@@ -933,6 +954,17 @@ export function parsePointerUpdate(value: string): PointerUpdateV1 {
   };
 }
 
+export function parseVertexEditUpdate(value: string): VertexEditUpdateV1 {
+  const parsed: unknown = JSON.parse(value);
+  if (!isRecord(parsed) || !isRecord(parsed.update) || typeof parsed.didCommit !== 'boolean') {
+    throw new Error('Engine returned an invalid vertex edit update payload');
+  }
+  return {
+    update: parseEngineUpdate(JSON.stringify(parsed.update)),
+    didCommit: parsed.didCommit,
+  };
+}
+
 export function parseStrokeUpdate(value: string): StrokeUpdateV1 {
   const parsed: unknown = JSON.parse(value);
   if (
@@ -1085,6 +1117,21 @@ function isCommand(value: unknown): value is CommandV1 {
         isNonEmptyString(value.elementId) &&
         isRectanglePatch(value.patch)
       );
+    case 'update_path_points':
+      return (
+        hasOnlyKeys(value, ['type', 'elementId', 'points']) &&
+        isNonEmptyString(value.elementId) &&
+        Array.isArray(value.points) &&
+        value.points.length >= 2 &&
+        value.points.length <= 65_536 &&
+        value.points.every(isVec2) &&
+        value.points.every(
+          (point, index, points) =>
+            index === 0 ||
+            point.x !== (points[index - 1] as Vec2).x ||
+            point.y !== (points[index - 1] as Vec2).y,
+        )
+      );
     case 'update_element_style':
       return (
         hasOnlyKeys(value, ['type', 'elementId', 'patch']) &&
@@ -1171,22 +1218,18 @@ function isElementStylePatch(value: unknown): value is ElementStylePatchV1 {
   const keys = Object.keys(value);
   if (value.kind === 'rect') {
     return (
-      keys.every(
-        (key) => key === 'kind' || key === 'fill' || key === 'stroke' || key === 'strokeWidth',
-      ) &&
+      keys.every((key) => key === 'kind' || key === 'fill' || key === 'stroke' || key === 'size') &&
       (value.fill === undefined || isFill(value.fill)) &&
       (value.stroke === undefined || isCanonicalColor(value.stroke)) &&
-      (value.strokeWidth === undefined || isValidStrokeWidth(value.strokeWidth))
+      (value.size === undefined || isElementSize(value.size))
     );
   }
   if (value.kind === 'ellipse' || value.kind === 'diamond') {
     return (
-      keys.every(
-        (key) => key === 'kind' || key === 'fill' || key === 'stroke' || key === 'strokeWidth',
-      ) &&
+      keys.every((key) => key === 'kind' || key === 'fill' || key === 'stroke' || key === 'size') &&
       (value.fill === undefined || isFill(value.fill)) &&
       (value.stroke === undefined || isCanonicalColor(value.stroke)) &&
-      (value.strokeWidth === undefined || isValidStrokeWidth(value.strokeWidth))
+      (value.size === undefined || isElementSize(value.size))
     );
   }
   if (
@@ -1196,9 +1239,9 @@ function isElementStylePatch(value: unknown): value is ElementStylePatchV1 {
     value.kind === 'stroke'
   ) {
     return (
-      keys.every((key) => key === 'kind' || key === 'stroke' || key === 'strokeWidth') &&
+      keys.every((key) => key === 'kind' || key === 'stroke' || key === 'size') &&
       (value.stroke === undefined || isCanonicalColor(value.stroke)) &&
-      (value.strokeWidth === undefined || isValidStrokeWidth(value.strokeWidth))
+      (value.size === undefined || isElementSize(value.size))
     );
   }
   return (
@@ -1353,7 +1396,7 @@ function isRectElement(value: unknown): value is RectElementV1 {
       'height',
       'fill',
       'stroke',
-      'strokeWidth',
+      'size',
     ]) &&
     value.kind === 'rect' &&
     isNonEmptyString(value.id) &&
@@ -1364,7 +1407,7 @@ function isRectElement(value: unknown): value is RectElementV1 {
     isPositiveFiniteNumber(value.height) &&
     isFill(value.fill) &&
     isCanonicalColor(value.stroke) &&
-    isValidStrokeWidth(value.strokeWidth)
+    isElementSize(value.size)
   );
 }
 
@@ -1392,7 +1435,7 @@ function isClosedShapeElement(
       'height',
       'fill',
       'stroke',
-      'strokeWidth',
+      'size',
     ]) &&
     value.kind === kind &&
     isNonEmptyString(value.id) &&
@@ -1403,7 +1446,7 @@ function isClosedShapeElement(
     isPositiveFiniteNumber(value.height) &&
     isFill(value.fill) &&
     isCanonicalColor(value.stroke) &&
-    isValidStrokeWidth(value.strokeWidth)
+    isElementSize(value.size)
   );
 }
 
@@ -1430,7 +1473,7 @@ function isLineShapeElement(
   }
   const points = value.points;
   return (
-    hasOnlyKeys(value, ['kind', 'id', 'transform', 'points', 'strokeWidth', 'stroke']) &&
+    hasOnlyKeys(value, ['kind', 'id', 'transform', 'points', 'size', 'stroke']) &&
     value.kind === kind &&
     isNonEmptyString(value.id) &&
     isAffine2D(value.transform) &&
@@ -1443,7 +1486,7 @@ function isLineShapeElement(
         point.x !== (points[index - 1] as Vec2).x ||
         point.y !== (points[index - 1] as Vec2).y,
     ) &&
-    isValidStrokeWidth(value.strokeWidth) &&
+    isElementSize(value.size) &&
     isCanonicalColor(value.stroke)
   );
 }
@@ -1451,14 +1494,14 @@ function isLineShapeElement(
 function isStrokeElement(value: unknown): value is StrokeElementV1 {
   return (
     isRecord(value) &&
-    hasOnlyKeys(value, ['kind', 'id', 'transform', 'points', 'strokeWidth', 'stroke']) &&
+    hasOnlyKeys(value, ['kind', 'id', 'transform', 'points', 'size', 'stroke']) &&
     value.kind === 'stroke' &&
     isNonEmptyString(value.id) &&
     isAffine2D(value.transform) &&
     Array.isArray(value.points) &&
     value.points.length >= 2 &&
     value.points.every(isVec2) &&
-    isValidStrokeWidth(value.strokeWidth) &&
+    isElementSize(value.size) &&
     isCanonicalColor(value.stroke)
   );
 }
@@ -1689,8 +1732,8 @@ function isPositiveFiniteNumber(value: unknown): value is number {
   return isFiniteNumber(value) && value > 0;
 }
 
-function isValidStrokeWidth(value: unknown): value is number {
-  return isFiniteNumber(value) && value >= 0.1 && value <= 128;
+function isElementSize(value: unknown): value is ElementSizeV1 {
+  return value === 's' || value === 'm' || value === 'l' || value === 'xl';
 }
 
 function isValidFontSize(value: unknown): value is number {
@@ -1722,7 +1765,11 @@ function isSelectionState(value: unknown): value is SelectionStateV1 {
     !isOrientedSelectionBounds(value.orientedBounds) ||
     !Array.isArray(value.handles) ||
     !value.handles.every(isSelectionHandle) ||
-    new Set(value.handles.map((handle) => handle.id)).size !== value.handles.length ||
+    new Set(
+      value.handles.map((handle) =>
+        handle.kind === 'vertex' ? `vertex:${handle.vertexIndex}` : handle.id,
+      ),
+    ).size !== value.handles.length ||
     !isSelectionMarquee(value.marquee) ||
     !Array.isArray(value.guides) ||
     !value.guides.every(isAlignmentGuide) ||
@@ -1774,12 +1821,22 @@ function isOrientedSelectionBounds(value: unknown): value is OrientedSelectionBo
 }
 
 function isSelectionHandle(value: unknown): value is SelectionHandleV1 {
+  if (!isRecord(value) || !isVec2(value.position)) {
+    return false;
+  }
+  if (value.kind === 'vertex') {
+    return (
+      hasOnlyKeys(value, ['id', 'kind', 'position', 'vertexIndex', 'selected']) &&
+      value.id === 'vertex' &&
+      isNonNegativeSafeInteger(value.vertexIndex) &&
+      typeof value.selected === 'boolean'
+    );
+  }
   if (
-    !isRecord(value) ||
     !hasOnlyKeys(value, ['id', 'kind', 'position']) ||
     !isSelectionHandleId(value.id) ||
     (value.kind !== 'resize' && value.kind !== 'rotate') ||
-    !isVec2(value.position)
+    value.id === 'vertex'
   ) {
     return false;
   }
@@ -1796,7 +1853,8 @@ function isSelectionHandleId(value: unknown): value is SelectionHandleIdV1 {
     value === 'south' ||
     value === 'south_west' ||
     value === 'west' ||
-    value === 'rotate'
+    value === 'rotate' ||
+    value === 'vertex'
   );
 }
 
@@ -1832,18 +1890,18 @@ function isSelectionStyle(value: unknown): value is SelectionStyleV1 {
   }
   if (value.kind === 'rect') {
     return (
-      hasOnlyKeys(value, ['kind', 'fill', 'stroke', 'strokeWidth']) &&
+      hasOnlyKeys(value, ['kind', 'fill', 'stroke', 'size']) &&
       isFill(value.fill) &&
       isCanonicalColor(value.stroke) &&
-      isValidStrokeWidth(value.strokeWidth)
+      isElementSize(value.size)
     );
   }
   if (value.kind === 'ellipse' || value.kind === 'diamond') {
     return (
-      hasOnlyKeys(value, ['kind', 'fill', 'stroke', 'strokeWidth']) &&
+      hasOnlyKeys(value, ['kind', 'fill', 'stroke', 'size']) &&
       isFill(value.fill) &&
       isCanonicalColor(value.stroke) &&
-      isValidStrokeWidth(value.strokeWidth)
+      isElementSize(value.size)
     );
   }
   if (
@@ -1853,9 +1911,9 @@ function isSelectionStyle(value: unknown): value is SelectionStyleV1 {
     value.kind === 'stroke'
   ) {
     return (
-      hasOnlyKeys(value, ['kind', 'stroke', 'strokeWidth']) &&
+      hasOnlyKeys(value, ['kind', 'stroke', 'size']) &&
       isCanonicalColor(value.stroke) &&
-      isValidStrokeWidth(value.strokeWidth)
+      isElementSize(value.size)
     );
   }
   return (

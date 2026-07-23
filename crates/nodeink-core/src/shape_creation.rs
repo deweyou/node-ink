@@ -2,10 +2,7 @@ use crate::{
     Affine2D, ArrowElementV1, DiamondElementV1, EditorToolV1, ElementRecordV1, EllipseElementV1,
     FillV1, LineElementV1, NormalizedPointerEventV1, PointerModifiersV1, PointerPhaseV1,
     PolylineElementV1, RectElementV1, Vec2,
-    style::{
-        DEFAULT_INK_COLOR, DEFAULT_LINE_STROKE_WIDTH, DEFAULT_RECTANGLE_STROKE_COLOR,
-        DEFAULT_RECTANGLE_STROKE_WIDTH,
-    },
+    style::{DEFAULT_ELEMENT_SIZE, DEFAULT_INK_COLOR, DEFAULT_RECTANGLE_STROKE_COLOR},
 };
 
 const CREATION_DRAG_THRESHOLD_SCREEN_PX: f64 = 3.0;
@@ -146,7 +143,7 @@ impl ShapeCreationMachine {
             transform: Affine2D::identity(),
             points: points.clone(),
             stroke: DEFAULT_INK_COLOR.to_string(),
-            stroke_width: DEFAULT_LINE_STROKE_WIDTH,
+            size: DEFAULT_ELEMENT_SIZE,
         });
         let commit = ShapeCreationCommit {
             command_id: command_id.clone(),
@@ -432,7 +429,7 @@ fn drag_preview(
                     height: bounds.height,
                     fill,
                     stroke,
-                    stroke_width: DEFAULT_RECTANGLE_STROKE_WIDTH,
+                    size: DEFAULT_ELEMENT_SIZE,
                 }),
                 EditorToolV1::Ellipse => ElementRecordV1::Ellipse(EllipseElementV1 {
                     id: element_id.to_string(),
@@ -443,7 +440,7 @@ fn drag_preview(
                     height: bounds.height,
                     fill,
                     stroke,
-                    stroke_width: DEFAULT_RECTANGLE_STROKE_WIDTH,
+                    size: DEFAULT_ELEMENT_SIZE,
                 }),
                 EditorToolV1::Diamond => ElementRecordV1::Diamond(DiamondElementV1 {
                     id: element_id.to_string(),
@@ -454,7 +451,7 @@ fn drag_preview(
                     height: bounds.height,
                     fill,
                     stroke,
-                    stroke_width: DEFAULT_RECTANGLE_STROKE_WIDTH,
+                    size: DEFAULT_ELEMENT_SIZE,
                 }),
                 _ => unreachable!("closed shape tool was matched above"),
             })
@@ -472,7 +469,7 @@ fn drag_preview(
                     transform: Affine2D::identity(),
                     points,
                     stroke: DEFAULT_INK_COLOR.to_string(),
-                    stroke_width: DEFAULT_LINE_STROKE_WIDTH,
+                    size: DEFAULT_ELEMENT_SIZE,
                 })
             } else {
                 ElementRecordV1::Arrow(ArrowElementV1 {
@@ -480,7 +477,7 @@ fn drag_preview(
                     transform: Affine2D::identity(),
                     points,
                     stroke: DEFAULT_INK_COLOR.to_string(),
-                    stroke_width: DEFAULT_LINE_STROKE_WIDTH,
+                    size: DEFAULT_ELEMENT_SIZE,
                 })
             })
         }
@@ -511,7 +508,7 @@ fn polyline_preview(
             transform: Affine2D::identity(),
             points,
             stroke: DEFAULT_INK_COLOR.to_string(),
-            stroke_width: DEFAULT_LINE_STROKE_WIDTH,
+            size: DEFAULT_ELEMENT_SIZE,
         })
     })
 }

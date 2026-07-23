@@ -4,9 +4,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::{
-    Affine2D, DEFAULT_INK_COLOR, DEFAULT_RECTANGLE_STROKE_COLOR, DEFAULT_RECTANGLE_STROKE_WIDTH,
-    ElementRecordV1, FillV1, NodeInkDocumentV1, RectElementV1, RenderProfileV1, SCHEMA_VERSION,
-    StrokeElementV1, TextAlignV1, TextElementV1, validate_document,
+    Affine2D, DEFAULT_ELEMENT_SIZE, DEFAULT_INK_COLOR, DEFAULT_RECTANGLE_STROKE_COLOR,
+    ElementRecordV1, ElementSizeV1, FillV1, NodeInkDocumentV1, RectElementV1, RenderProfileV1,
+    SCHEMA_VERSION, StrokeElementV1, TextAlignV1, TextElementV1, validate_document,
 };
 #[cfg(test)]
 use crate::{DEFAULT_RECTANGLE_FILL_COLOR, Engine, SceneNodeV1};
@@ -100,14 +100,14 @@ impl LegacyElementRecord {
                 height: rectangle.height,
                 fill: FillV1::default_rectangle(),
                 stroke: DEFAULT_RECTANGLE_STROKE_COLOR.to_string(),
-                stroke_width: DEFAULT_RECTANGLE_STROKE_WIDTH,
+                size: DEFAULT_ELEMENT_SIZE,
             }),
             Self::Stroke(stroke) => ElementRecordV1::Stroke(StrokeElementV1 {
                 id: stroke.id,
                 transform: Affine2D::identity(),
                 points: stroke.points,
                 stroke: DEFAULT_INK_COLOR.to_string(),
-                stroke_width: stroke.stroke_width,
+                size: ElementSizeV1::from_legacy_stroke_width(stroke.stroke_width),
             }),
             Self::Text(text) => ElementRecordV1::Text(TextElementV1 {
                 id: text.id,
@@ -158,6 +158,7 @@ fn migrate_document_payload_inner(payload: &str) -> Result<MigrationResultV1, Mi
 
     match schema_version {
         SCHEMA_VERSION => open_current(value, schema_version),
+        4 => migrate_v4(value),
         3 => migrate_v3(value),
         2 => migrate_v2(value),
         0 | 1 => migrate_legacy(value, schema_version),
@@ -170,34 +171,14 @@ fn migrate_document_payload_inner(payload: &str) -> Result<MigrationResultV1, Mi
     }
 }
 
+fn migrate_v4(mut value: Value) -> Result<MigrationResultV1, MigrationReportV1> {
+    migrate_stroke_sizes(&mut value, 4)?;
+    advance_migrated_document(value, 4)
+}
+
 fn migrate_v3(mut value: Value) -> Result<MigrationResultV1, MigrationReportV1> {
-    let document = value.as_object_mut().ok_or_else(|| {
-        report(
-            "migration",
-            "v3_shape_invalid",
-            Some(3),
-            "schema V3 document must be an object",
-        )
-    })?;
-    let revision = document
-        .get("revision")
-        .and_then(Value::as_u64)
-        .and_then(|revision| revision.checked_add(1))
-        .ok_or_else(|| {
-            report(
-                "migration",
-                "revision_overflow",
-                Some(3),
-                "schema V3 revision cannot advance for copy-on-write migration",
-            )
-        })?;
-    document.insert("schemaVersion".to_string(), Value::from(SCHEMA_VERSION));
-    document.insert("revision".to_string(), Value::from(revision));
-    let migrated: NodeInkDocumentV1 = serde_json::from_value(value)
-        .map_err(|error| report("migration", "migrated_document_invalid", Some(3), error))?;
-    validate_document(&migrated)
-        .map_err(|error| report("migration", "migrated_document_invalid", Some(3), error))?;
-    Ok(success(3, true, migrated))
+    migrate_stroke_sizes(&mut value, 3)?;
+    advance_migrated_document(value, 3)
 }
 
 fn migrate_v2(mut value: Value) -> Result<MigrationResultV1, MigrationReportV1> {
@@ -257,13 +238,107 @@ fn migrate_v2(mut value: Value) -> Result<MigrationResultV1, MigrationReportV1> 
             }
         }
     }
+    let _ = revision;
+    migrate_stroke_sizes(&mut value, 2)?;
+    advance_migrated_document(value, 2)
+}
+
+fn migrate_stroke_sizes(
+    value: &mut Value,
+    source_schema_version: u32,
+) -> Result<(), MigrationReportV1> {
+    let elements = value
+        .as_object_mut()
+        .and_then(|document| document.get_mut("elements"))
+        .and_then(Value::as_object_mut)
+        .ok_or_else(|| {
+            report(
+                "migration",
+                "migration_failed",
+                Some(source_schema_version),
+                "document elements must be an object",
+            )
+        })?;
+    for (element_id, element) in elements {
+        let object = element.as_object_mut().ok_or_else(|| {
+            report(
+                "migration",
+                "migration_failed",
+                Some(source_schema_version),
+                format!("element {element_id} must be an object"),
+            )
+        })?;
+        let kind = object.get("kind").and_then(Value::as_str);
+        if matches!(
+            kind,
+            Some("rect" | "ellipse" | "diamond" | "line" | "polyline" | "arrow" | "stroke")
+        ) {
+            let stroke_width = object
+                .remove("strokeWidth")
+                .and_then(|width| width.as_f64())
+                .ok_or_else(|| {
+                    report(
+                        "migration",
+                        "migration_failed",
+                        Some(source_schema_version),
+                        format!("element {element_id} must contain a finite strokeWidth"),
+                    )
+                })?;
+            let size = ElementSizeV1::from_legacy_stroke_width(stroke_width);
+            object.insert(
+                "size".to_string(),
+                serde_json::to_value(size).expect("size serialization is infallible"),
+            );
+        }
+    }
+    Ok(())
+}
+
+fn advance_migrated_document(
+    mut value: Value,
+    source_schema_version: u32,
+) -> Result<MigrationResultV1, MigrationReportV1> {
+    let document = value.as_object_mut().ok_or_else(|| {
+        report(
+            "migration",
+            "migration_failed",
+            Some(source_schema_version),
+            "document must be an object",
+        )
+    })?;
+    let revision = document
+        .get("revision")
+        .and_then(Value::as_u64)
+        .and_then(|revision| revision.checked_add(1))
+        .ok_or_else(|| {
+            report(
+                "migration",
+                "revision_overflow",
+                Some(source_schema_version),
+                format!(
+                    "schema V{source_schema_version} revision cannot advance for copy-on-write migration"
+                ),
+            )
+        })?;
     document.insert("schemaVersion".to_string(), Value::from(SCHEMA_VERSION));
     document.insert("revision".to_string(), Value::from(revision));
-    let migrated: NodeInkDocumentV1 = serde_json::from_value(value)
-        .map_err(|error| report("migration", "migrated_document_invalid", Some(2), error))?;
-    validate_document(&migrated)
-        .map_err(|error| report("migration", "migrated_document_invalid", Some(2), error))?;
-    Ok(success(2, true, migrated))
+    let migrated: NodeInkDocumentV1 = serde_json::from_value(value).map_err(|error| {
+        report(
+            "migration",
+            "migrated_document_invalid",
+            Some(source_schema_version),
+            error,
+        )
+    })?;
+    validate_document(&migrated).map_err(|error| {
+        report(
+            "migration",
+            "migrated_document_invalid",
+            Some(source_schema_version),
+            error,
+        )
+    })?;
+    Ok(success(source_schema_version, true, migrated))
 }
 
 fn open_current(value: Value, schema_version: u32) -> Result<MigrationResultV1, MigrationReportV1> {
@@ -383,14 +458,15 @@ mod tests {
 
         assert!(result.migrated);
         assert_eq!(result.source_schema_version, 3);
-        assert_eq!(result.target_schema_version, 4);
+        assert_eq!(result.target_schema_version, 5);
         assert_eq!(result.document.revision, 9);
         assert_eq!(result.document.root_order, ["rect-1"]);
         let ElementRecordV1::Rect(rectangle) = &result.document.elements["rect-1"] else {
             panic!("V3 rectangle must remain a rectangle");
         };
         assert_eq!((rectangle.transform.e, rectangle.transform.f), (12.0, 8.0));
-        assert!(result.canonical_payload.contains(r#""schemaVersion":4"#));
+        assert_eq!(rectangle.size, ElementSizeV1::S);
+        assert!(result.canonical_payload.contains(r#""schemaVersion":5"#));
         assert_eq!(source, source_copy);
     }
 
@@ -402,7 +478,7 @@ mod tests {
         let result = attempt.result.expect("valid V2 must open");
         assert!(result.migrated);
         assert_eq!(result.source_schema_version, 2);
-        assert_eq!(result.target_schema_version, 4);
+        assert_eq!(result.target_schema_version, 5);
         assert_eq!(result.document.revision, 1);
         assert!(
             result
@@ -411,7 +487,7 @@ mod tests {
                 .values()
                 .all(|element| element.transform() == Affine2D::identity())
         );
-        assert!(result.canonical_payload.contains(r#""schemaVersion":4"#));
+        assert!(result.canonical_payload.contains(r#""schemaVersion":5"#));
         assert!(attempt.report.is_none());
     }
 
@@ -451,7 +527,7 @@ mod tests {
     }
 
     #[test]
-    fn legacy_v0_migrates_a_copy_to_v4() {
+    fn legacy_v0_migrates_a_copy_to_v5() {
         let source = r#"{"schemaVersion":0,"documentId":"doc-1","revision":4,"rootOrder":["rect-1"],"elements":{"rect-1":{"kind":"rect","id":"rect-1","x":1.0,"y":2.0,"width":3.0,"height":4.0}}}"#;
         let source_copy = source.to_string();
         let attempt = migrate_document_payload(source);
@@ -459,9 +535,9 @@ mod tests {
         let result = attempt.result.expect("valid V0 must migrate");
         assert!(result.migrated);
         assert_eq!(result.source_schema_version, 0);
-        assert_eq!(result.target_schema_version, 4);
+        assert_eq!(result.target_schema_version, 5);
         assert_eq!(result.document.revision, 5);
-        assert!(result.canonical_payload.contains(r#""schemaVersion":4"#));
+        assert!(result.canonical_payload.contains(r#""schemaVersion":5"#));
         assert_eq!(result.document.render_profile, RenderProfileV1::clean());
         assert_eq!(source, source_copy);
     }
@@ -477,7 +553,7 @@ mod tests {
 
         assert!(result.migrated);
         assert_eq!(result.source_schema_version, 1);
-        assert_eq!(result.target_schema_version, 4);
+        assert_eq!(result.target_schema_version, 5);
         assert_eq!(result.document.revision, 8);
         assert_eq!(result.document.render_profile, RenderProfileV1::clean());
         let ElementRecordV1::Rect(rectangle) = &result.document.elements["rect-1"] else {
@@ -485,12 +561,12 @@ mod tests {
         };
         assert_eq!(rectangle.fill, FillV1::default_rectangle());
         assert_eq!(rectangle.stroke, DEFAULT_RECTANGLE_STROKE_COLOR);
-        assert_eq!(rectangle.stroke_width, DEFAULT_RECTANGLE_STROKE_WIDTH);
+        assert_eq!(rectangle.size, ElementSizeV1::M);
         let ElementRecordV1::Stroke(stroke) = &result.document.elements["stroke-1"] else {
             panic!("legacy stroke must remain a stroke");
         };
         assert_eq!(stroke.stroke, DEFAULT_INK_COLOR);
-        assert_eq!(stroke.stroke_width, 3.0);
+        assert_eq!(stroke.size, ElementSizeV1::M);
         let ElementRecordV1::Text(text) = &result.document.elements["text-1"] else {
             panic!("legacy text must remain text");
         };
@@ -526,7 +602,7 @@ mod tests {
     #[test]
     fn corrupt_current_document_and_invalid_json_are_structured() {
         let corrupt = migrate_document_payload(
-            r#"{"schemaVersion":4,"documentId":"doc-1","revision":"bad","renderProfile":{"kind":"clean","version":1},"rootOrder":[],"elements":{}}"#,
+            r#"{"schemaVersion":5,"documentId":"doc-1","revision":"bad","renderProfile":{"kind":"clean","version":1},"rootOrder":[],"elements":{}}"#,
         );
         let invalid_json = migrate_document_payload("{");
 
@@ -557,7 +633,7 @@ mod tests {
     #[test]
     fn current_and_legacy_document_shape_failures_are_distinguished() {
         let current_invariant = migrate_document_payload(
-            r#"{"schemaVersion":4,"documentId":"","revision":0,"renderProfile":{"kind":"clean","version":1},"rootOrder":[],"elements":{}}"#,
+            r#"{"schemaVersion":5,"documentId":"","revision":0,"renderProfile":{"kind":"clean","version":1},"rootOrder":[],"elements":{}}"#,
         );
         let legacy_shape = migrate_document_payload(
             r#"{"schemaVersion":0,"documentId":"doc-1","revision":0,"rootOrder":[]}"#,
@@ -565,5 +641,88 @@ mod tests {
 
         assert_eq!(current_invariant.report.unwrap().code, "document_invalid");
         assert_eq!(legacy_shape.report.unwrap().code, "legacy_shape_invalid");
+    }
+
+    #[test]
+    fn valid_v4_maps_numeric_widths_to_semantic_sizes_copy_on_write() {
+        let source = r##"{"schemaVersion":4,"documentId":"doc-1","revision":3,"renderProfile":{"kind":"clean","version":1},"rootOrder":["rect-s","arrow-m","stroke-l","line-xl"],"elements":{"rect-s":{"kind":"rect","id":"rect-s","transform":{"a":1.0,"b":0.0,"c":0.0,"d":1.0,"e":0.0,"f":0.0},"x":0.0,"y":0.0,"width":30.0,"height":20.0,"fill":{"kind":"solid","color":"#d1fae5"},"stroke":"#047857","strokeWidth":2.0},"arrow-m":{"kind":"arrow","id":"arrow-m","transform":{"a":1.0,"b":0.0,"c":0.0,"d":1.0,"e":0.0,"f":0.0},"points":[{"x":0.0,"y":0.0},{"x":20.0,"y":10.0}],"stroke":"#0f172a","strokeWidth":4.0},"stroke-l":{"kind":"stroke","id":"stroke-l","transform":{"a":1.0,"b":0.0,"c":0.0,"d":1.0,"e":0.0,"f":0.0},"points":[{"x":0.0,"y":0.0},{"x":5.0,"y":5.0}],"stroke":"#0f172a","strokeWidth":6.0},"line-xl":{"kind":"line","id":"line-xl","transform":{"a":1.0,"b":0.0,"c":0.0,"d":1.0,"e":0.0,"f":0.0},"points":[{"x":0.0,"y":0.0},{"x":10.0,"y":0.0}],"stroke":"#0f172a","strokeWidth":8.0}}}"##;
+        let source_copy = source.to_string();
+
+        let result = migrate_document_payload(source)
+            .result
+            .expect("valid V4 must migrate");
+
+        assert!(result.migrated);
+        assert_eq!(result.source_schema_version, 4);
+        assert_eq!(result.target_schema_version, 5);
+        assert_eq!(result.document.revision, 4);
+        let ElementRecordV1::Rect(rectangle) = &result.document.elements["rect-s"] else {
+            panic!("rect-s must stay a rectangle");
+        };
+        let ElementRecordV1::Arrow(arrow) = &result.document.elements["arrow-m"] else {
+            panic!("arrow-m must stay an arrow");
+        };
+        let ElementRecordV1::Stroke(stroke) = &result.document.elements["stroke-l"] else {
+            panic!("stroke-l must stay a stroke");
+        };
+        let ElementRecordV1::Line(line) = &result.document.elements["line-xl"] else {
+            panic!("line-xl must stay a line");
+        };
+        assert_eq!(rectangle.size, ElementSizeV1::S);
+        assert_eq!(arrow.size, ElementSizeV1::M);
+        assert_eq!(stroke.size, ElementSizeV1::L);
+        assert_eq!(line.size, ElementSizeV1::Xl);
+        assert!(result.canonical_payload.contains(r#""schemaVersion":5"#));
+        assert!(!result.canonical_payload.contains("strokeWidth"));
+        assert_eq!(source, source_copy);
+    }
+
+    #[test]
+    fn v4_migration_failures_are_structured() {
+        let fixtures = [
+            (r#"{"schemaVersion":4,"revision":0}"#, "migration_failed"),
+            (
+                r#"{"schemaVersion":4,"revision":0,"elements":{"bad":1}}"#,
+                "migration_failed",
+            ),
+            (
+                r#"{"schemaVersion":4,"revision":0,"elements":{"rect-1":{"kind":"rect"}}}"#,
+                "migration_failed",
+            ),
+            (
+                r#"{"schemaVersion":4,"revision":18446744073709551615,"elements":{}}"#,
+                "revision_overflow",
+            ),
+            (
+                r##"{"schemaVersion":4,"documentId":"doc-1","revision":0,"renderProfile":{"kind":"clean","version":1},"rootOrder":["text-1"],"elements":{"text-1":{"kind":"text","id":"text-1","x":0.0,"y":0.0,"text":"NodeInk","fontFamily":"Noto Sans SC Variable","fontSize":24.0,"fontWeight":400,"maxWidth":null,"fontFingerprint":"font-v1","color":"#0f172a","textAlign":"start"}}}"##,
+                "migrated_document_invalid",
+            ),
+            (
+                r#"{"schemaVersion":4,"documentId":"","revision":0,"renderProfile":{"kind":"clean","version":1},"rootOrder":[],"elements":{}}"#,
+                "migrated_document_invalid",
+            ),
+        ];
+
+        for (payload, expected_code) in fixtures {
+            let attempt = migrate_document_payload(payload);
+            assert_eq!(
+                attempt.report.expect("invalid V4 must report").code,
+                expected_code
+            );
+        }
+    }
+
+    #[test]
+    fn current_v5_opens_without_migration() {
+        let payload = r#"{"schemaVersion":5,"documentId":"doc-1","revision":7,"renderProfile":{"kind":"clean","version":1},"rootOrder":[],"elements":{}}"#;
+        let result = migrate_document_payload(payload)
+            .result
+            .expect("valid V5 must open");
+
+        assert!(!result.migrated);
+        assert_eq!(result.source_schema_version, 5);
+        assert_eq!(result.target_schema_version, 5);
+        assert_eq!(result.document.revision, 7);
+        assert_eq!(result.canonical_payload, payload);
     }
 }

@@ -32,6 +32,8 @@ const wasm = vi.hoisted(() => {
     handlePointerEvents: vi.fn(),
     finishShapeCreation: vi.fn(),
     removeShapeCreationPoint: vi.fn(),
+    insertPolylineVertexAt: vi.fn(),
+    deleteSelectedVertex: vi.fn(),
     handleStrokeBatchJson: vi.fn(),
     handleStrokePoints: vi.fn(),
     resolveSceneProfile: vi.fn(),
@@ -78,6 +80,8 @@ describe('createWasmEngine', () => {
     wasm.handle.handlePointerEvents.mockReturnValue(pointerUpdate());
     wasm.handle.finishShapeCreation.mockReturnValue(pointerUpdate());
     wasm.handle.removeShapeCreationPoint.mockReturnValue(update);
+    wasm.handle.insertPolylineVertexAt.mockReturnValue(vertexEditUpdate());
+    wasm.handle.deleteSelectedVertex.mockReturnValue(vertexEditUpdate());
     wasm.handle.handleStrokeBatchJson.mockReturnValue(strokeUpdate());
     wasm.handle.handleStrokePoints.mockReturnValue(strokeUpdate());
     wasm.handle.resolveSceneProfile.mockReturnValue(sceneResolution());
@@ -245,6 +249,12 @@ describe('createWasmEngine', () => {
     await expect(engine.removeShapeCreationPoint()).resolves.toMatchObject({
       scene: { documentRevision: 0 },
     });
+    await expect(
+      engine.insertPolylineVertexAt({ x: 12, y: 18 }, 'insert-vertex'),
+    ).resolves.toMatchObject({ didCommit: true });
+    await expect(engine.deleteSelectedVertex('delete-vertex')).resolves.toMatchObject({
+      didCommit: true,
+    });
     const strokeBatch = {
       pointerId: 7,
       sequenceStart: 11,
@@ -329,6 +339,11 @@ describe('createWasmEngine', () => {
     );
     expect(wasm.handle.finishShapeCreation).toHaveBeenCalledOnce();
     expect(wasm.handle.removeShapeCreationPoint).toHaveBeenCalledOnce();
+    expect(wasm.handle.insertPolylineVertexAt).toHaveBeenCalledWith(
+      '{"x":12,"y":18}',
+      'insert-vertex',
+    );
+    expect(wasm.handle.deleteSelectedVertex).toHaveBeenCalledWith('delete-vertex');
     expect(wasm.handle.handleStrokeBatchJson).toHaveBeenCalledWith(
       JSON.stringify(strokeBatch),
       'stroke-json',
@@ -631,6 +646,13 @@ function pointerUpdate(): string {
   });
 }
 
+function vertexEditUpdate(): string {
+  return JSON.stringify({
+    update: JSON.parse(validUpdate()),
+    didCommit: true,
+  });
+}
+
 function strokeUpdate(): string {
   return JSON.stringify({
     update: JSON.parse(validUpdate()),
@@ -686,7 +708,7 @@ function migrationAttempt(): string {
   return JSON.stringify({
     result: {
       sourceSchemaVersion: 0,
-      targetSchemaVersion: 4,
+      targetSchemaVersion: 5,
       migrated: true,
       document: createBlankDocument('doc-1'),
       canonicalPayload: JSON.stringify(createBlankDocument('doc-1')),
@@ -706,7 +728,7 @@ function rectangleElement() {
     height: 4,
     fill: { kind: 'solid' as const, color: '#d1fae5' },
     stroke: '#047857',
-    strokeWidth: 2,
+    size: 'm' as const,
   };
 }
 

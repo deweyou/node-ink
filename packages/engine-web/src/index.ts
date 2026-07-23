@@ -12,6 +12,7 @@ import {
   parseStrokeUpdate,
   parseTextEditTarget,
   parseTextFixtureResolution,
+  parseVertexEditUpdate,
   type CommandEnvelopeV1,
   type CameraActionV1,
   type CameraV1,
@@ -40,6 +41,7 @@ import {
   type TextMetricsSnapshotV1,
   type TextRunV1,
   type Vec2,
+  type VertexEditUpdateV1,
 } from '@nodeink-internal/protocol';
 
 interface WasmEngineHandle {
@@ -58,6 +60,8 @@ interface WasmEngineHandle {
   handlePointerEvents(eventsJson: string, commandId: string): string;
   finishShapeCreation(): string;
   removeShapeCreationPoint(): string;
+  insertPolylineVertexAt(pointJson: string, commandId: string): string;
+  deleteSelectedVertex(commandId: string): string;
   handleStrokeBatchJson(batchJson: string, commandId: string): string;
   handleStrokePoints(
     pointerId: number,
@@ -233,6 +237,24 @@ class WasmEnginePort implements EnginePortV1 {
   async removeShapeCreationPoint(): Promise<EngineUpdateV1> {
     try {
       return parseEngineUpdate(this.requireHandle().removeShapeCreationPoint());
+    } catch (error) {
+      throw normalizeEngineError(error);
+    }
+  }
+
+  async insertPolylineVertexAt(point: Vec2, commandId: string): Promise<VertexEditUpdateV1> {
+    try {
+      return parseVertexEditUpdate(
+        this.requireHandle().insertPolylineVertexAt(JSON.stringify(point), commandId),
+      );
+    } catch (error) {
+      throw normalizeEngineError(error);
+    }
+  }
+
+  async deleteSelectedVertex(commandId: string): Promise<VertexEditUpdateV1> {
+    try {
+      return parseVertexEditUpdate(this.requireHandle().deleteSelectedVertex(commandId));
     } catch (error) {
       throw normalizeEngineError(error);
     }

@@ -263,6 +263,54 @@ describe('SvgRenderer', () => {
     );
   });
 
+  it('renders indexed vertex handles at stable screen sizes and marks the active vertex', () => {
+    const target = document.createElement('div');
+    const renderer = new SvgRenderer();
+    renderer.mount(target);
+    const overlay = {
+      selectionBounds: { x: 20, y: 20, width: 80, height: 40 },
+      selectionOrientedBounds: {
+        center: { x: 60, y: 40 },
+        width: 80,
+        height: 40,
+        rotation: 0,
+      },
+      selectionHandles: [
+        {
+          id: 'vertex' as const,
+          kind: 'vertex' as const,
+          position: { x: 20, y: 20 },
+          vertexIndex: 0,
+          selected: false,
+        },
+        {
+          id: 'vertex' as const,
+          kind: 'vertex' as const,
+          position: { x: 100, y: 60 },
+          vertexIndex: 1,
+          selected: true,
+        },
+      ],
+      selectionPaddingWorld: 3,
+      marquee: null,
+      guides: [],
+    };
+
+    renderer.setOverlay(overlay);
+
+    const first = target.querySelector('[data-nodeink-selection-handle="vertex:0"]');
+    const selected = target.querySelector('[data-nodeink-selection-handle="vertex:1"]');
+    expect(target.querySelector('[data-nodeink-selection-outline]')).toBeNull();
+    expect(first?.getAttribute('width')).toBe('4');
+    expect(first?.getAttribute('fill')).toContain('--nodeink-selection-handle-fill');
+    expect(selected?.getAttribute('fill')).toContain('--nodeink-selection-color');
+
+    renderer.setOverlay({ ...overlay, selectionPaddingWorld: 6 });
+    expect(
+      target.querySelector('[data-nodeink-selection-handle="vertex:0"]')?.getAttribute('width'),
+    ).toBe('8');
+  });
+
   it.each([Number.NaN, Number.POSITIVE_INFINITY, -1])(
     'rejects invalid selection padding %s',
     (selectionPaddingWorld) => {

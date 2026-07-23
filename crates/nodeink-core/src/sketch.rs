@@ -105,7 +105,7 @@ pub(crate) fn sketch_rectangle(
             "none".to_string()
         },
         stroke: rectangle.stroke.clone(),
-        stroke_width: rectangle.stroke_width,
+        stroke_width: rectangle.size.stroke_width(),
     }];
     if *fill_style == SketchFillStyleV1::Hachure
         && let Some(fill_color) = rectangle.fill.solid_color()
@@ -143,7 +143,7 @@ pub(crate) fn sketch_stroke(stroke: &StrokeElementV1, profile: &RenderProfileV1)
         path_data: path_data(&points),
         fill: "none".to_string(),
         stroke: stroke.stroke.clone(),
-        stroke_width: stroke.stroke_width,
+        stroke_width: stroke.size.stroke_width(),
     }
 }
 
