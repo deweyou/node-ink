@@ -158,6 +158,7 @@ fn migrate_document_payload_inner(payload: &str) -> Result<MigrationResultV1, Mi
 
     match schema_version {
         SCHEMA_VERSION => open_current(value, schema_version),
+        3 => migrate_v3(value),
         2 => migrate_v2(value),
         0 | 1 => migrate_legacy(value, schema_version),
         version => Err(report(
@@ -167,6 +168,36 @@ fn migrate_document_payload_inner(payload: &str) -> Result<MigrationResultV1, Mi
             format!("schema version {version} is not supported"),
         )),
     }
+}
+
+fn migrate_v3(mut value: Value) -> Result<MigrationResultV1, MigrationReportV1> {
+    let document = value.as_object_mut().ok_or_else(|| {
+        report(
+            "migration",
+            "v3_shape_invalid",
+            Some(3),
+            "schema V3 document must be an object",
+        )
+    })?;
+    let revision = document
+        .get("revision")
+        .and_then(Value::as_u64)
+        .and_then(|revision| revision.checked_add(1))
+        .ok_or_else(|| {
+            report(
+                "migration",
+                "revision_overflow",
+                Some(3),
+                "schema V3 revision cannot advance for copy-on-write migration",
+            )
+        })?;
+    document.insert("schemaVersion".to_string(), Value::from(SCHEMA_VERSION));
+    document.insert("revision".to_string(), Value::from(revision));
+    let migrated: NodeInkDocumentV1 = serde_json::from_value(value)
+        .map_err(|error| report("migration", "migrated_document_invalid", Some(3), error))?;
+    validate_document(&migrated)
+        .map_err(|error| report("migration", "migrated_document_invalid", Some(3), error))?;
+    Ok(success(3, true, migrated))
 }
 
 fn migrate_v2(mut value: Value) -> Result<MigrationResultV1, MigrationReportV1> {
@@ -342,6 +373,28 @@ mod tests {
     use super::*;
 
     #[test]
+    fn valid_v3_migrates_copy_on_write_without_changing_semantics() {
+        let source = r##"{"schemaVersion":3,"documentId":"doc-1","revision":8,"renderProfile":{"kind":"clean","version":1},"rootOrder":["rect-1"],"elements":{"rect-1":{"kind":"rect","id":"rect-1","transform":{"a":1.0,"b":0.0,"c":0.0,"d":1.0,"e":12.0,"f":8.0},"x":1.0,"y":2.0,"width":30.0,"height":40.0,"fill":{"kind":"solid","color":"#d1fae5"},"stroke":"#047857","strokeWidth":2.0}}}"##;
+        let source_copy = source.to_string();
+
+        let result = migrate_document_payload(source)
+            .result
+            .expect("valid V3 must migrate");
+
+        assert!(result.migrated);
+        assert_eq!(result.source_schema_version, 3);
+        assert_eq!(result.target_schema_version, 4);
+        assert_eq!(result.document.revision, 9);
+        assert_eq!(result.document.root_order, ["rect-1"]);
+        let ElementRecordV1::Rect(rectangle) = &result.document.elements["rect-1"] else {
+            panic!("V3 rectangle must remain a rectangle");
+        };
+        assert_eq!((rectangle.transform.e, rectangle.transform.f), (12.0, 8.0));
+        assert!(result.canonical_payload.contains(r#""schemaVersion":4"#));
+        assert_eq!(source, source_copy);
+    }
+
+    #[test]
     fn valid_v2_migrates_with_identity_transforms() {
         let payload = r##"{"schemaVersion":2,"documentId":"doc-1","revision":0,"renderProfile":{"kind":"clean","version":1},"rootOrder":["rect-1","stroke-1","text-1"],"elements":{"rect-1":{"kind":"rect","id":"rect-1","x":1.0,"y":2.0,"width":3.0,"height":4.0,"fill":{"kind":"solid","color":"#d1fae5"},"stroke":"#047857","strokeWidth":2.0},"stroke-1":{"kind":"stroke","id":"stroke-1","points":[{"x":0.0,"y":0.0},{"x":1.0,"y":1.0}],"strokeWidth":3.0,"stroke":"#0f172a"},"text-1":{"kind":"text","id":"text-1","x":5.0,"y":6.0,"text":"NodeInk","fontFamily":"Noto Sans SC Variable","fontSize":24.0,"fontWeight":400,"maxWidth":null,"fontFingerprint":"font-v1","color":"#0f172a","textAlign":"start"}}}"##;
         let attempt = migrate_document_payload(payload);
@@ -349,7 +402,7 @@ mod tests {
         let result = attempt.result.expect("valid V2 must open");
         assert!(result.migrated);
         assert_eq!(result.source_schema_version, 2);
-        assert_eq!(result.target_schema_version, 3);
+        assert_eq!(result.target_schema_version, 4);
         assert_eq!(result.document.revision, 1);
         assert!(
             result
@@ -358,7 +411,7 @@ mod tests {
                 .values()
                 .all(|element| element.transform() == Affine2D::identity())
         );
-        assert!(result.canonical_payload.contains(r#""schemaVersion":3"#));
+        assert!(result.canonical_payload.contains(r#""schemaVersion":4"#));
         assert!(attempt.report.is_none());
     }
 
@@ -398,7 +451,7 @@ mod tests {
     }
 
     #[test]
-    fn legacy_v0_migrates_a_copy_to_v3() {
+    fn legacy_v0_migrates_a_copy_to_v4() {
         let source = r#"{"schemaVersion":0,"documentId":"doc-1","revision":4,"rootOrder":["rect-1"],"elements":{"rect-1":{"kind":"rect","id":"rect-1","x":1.0,"y":2.0,"width":3.0,"height":4.0}}}"#;
         let source_copy = source.to_string();
         let attempt = migrate_document_payload(source);
@@ -406,9 +459,9 @@ mod tests {
         let result = attempt.result.expect("valid V0 must migrate");
         assert!(result.migrated);
         assert_eq!(result.source_schema_version, 0);
-        assert_eq!(result.target_schema_version, 3);
+        assert_eq!(result.target_schema_version, 4);
         assert_eq!(result.document.revision, 5);
-        assert!(result.canonical_payload.contains(r#""schemaVersion":3"#));
+        assert!(result.canonical_payload.contains(r#""schemaVersion":4"#));
         assert_eq!(result.document.render_profile, RenderProfileV1::clean());
         assert_eq!(source, source_copy);
     }
@@ -424,7 +477,7 @@ mod tests {
 
         assert!(result.migrated);
         assert_eq!(result.source_schema_version, 1);
-        assert_eq!(result.target_schema_version, 3);
+        assert_eq!(result.target_schema_version, 4);
         assert_eq!(result.document.revision, 8);
         assert_eq!(result.document.render_profile, RenderProfileV1::clean());
         let ElementRecordV1::Rect(rectangle) = &result.document.elements["rect-1"] else {
@@ -473,7 +526,7 @@ mod tests {
     #[test]
     fn corrupt_current_document_and_invalid_json_are_structured() {
         let corrupt = migrate_document_payload(
-            r#"{"schemaVersion":3,"documentId":"doc-1","revision":"bad","renderProfile":{"kind":"clean","version":1},"rootOrder":[],"elements":{}}"#,
+            r#"{"schemaVersion":4,"documentId":"doc-1","revision":"bad","renderProfile":{"kind":"clean","version":1},"rootOrder":[],"elements":{}}"#,
         );
         let invalid_json = migrate_document_payload("{");
 
@@ -504,7 +557,7 @@ mod tests {
     #[test]
     fn current_and_legacy_document_shape_failures_are_distinguished() {
         let current_invariant = migrate_document_payload(
-            r#"{"schemaVersion":3,"documentId":"","revision":0,"renderProfile":{"kind":"clean","version":1},"rootOrder":[],"elements":{}}"#,
+            r#"{"schemaVersion":4,"documentId":"","revision":0,"renderProfile":{"kind":"clean","version":1},"rootOrder":[],"elements":{}}"#,
         );
         let legacy_shape = migrate_document_payload(
             r#"{"schemaVersion":0,"documentId":"doc-1","revision":0,"rootOrder":[]}"#,

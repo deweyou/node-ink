@@ -5,13 +5,18 @@ import {
   type CameraActionV1,
   type CameraV1,
   type CommandEnvelopeV1,
+  type ArrowElementV1,
+  type DiamondElementV1,
+  type EllipseElementV1,
   type EnginePortV1,
   type EditorToolV1,
   type ElementStylePatchV1,
   type EngineUpdateV1,
   type NormalizedPointerEventV1,
+  type LineElementV1,
   type OrientedSelectionBoundsV1,
   type PointerUpdateV1,
+  type PolylineElementV1,
   type RectElementV1,
   type RenderProfileV1,
   type RendererV1,
@@ -48,6 +53,7 @@ import {
 } from './text-editor-overlay';
 import {
   NODEINK_CLEAN_PROFILE,
+  NODEINK_DEFAULT_LINE_STYLE,
   NODEINK_DEFAULT_RECT_STYLE,
   NODEINK_DEFAULT_TEXT_STYLE,
   NODEINK_SKETCH_PROFILE,
@@ -61,6 +67,31 @@ const PASTE_CASCADE_PX = 24;
 export type EditorActionV1 =
   | {
       type: 'create_rectangle';
+      elementId?: string;
+      position?: { x: number; y: number };
+    }
+  | {
+      type: 'create_ellipse';
+      elementId?: string;
+      position?: { x: number; y: number };
+    }
+  | {
+      type: 'create_diamond';
+      elementId?: string;
+      position?: { x: number; y: number };
+    }
+  | {
+      type: 'create_line';
+      elementId?: string;
+      position?: { x: number; y: number };
+    }
+  | {
+      type: 'create_polyline';
+      elementId?: string;
+      position?: { x: number; y: number };
+    }
+  | {
+      type: 'create_arrow';
       elementId?: string;
       position?: { x: number; y: number };
     }
@@ -894,55 +925,95 @@ export class EditorWebController implements EditorWebControllerV1 {
             type: 'create_rectangle',
             rectangle: createRectangle(action.elementId ?? this.#createId(), action.position),
           }
-        : action.type === 'move_active'
-          ? { type: 'move_elements', elementIds: this.requireSelection(), delta: action.delta }
-          : action.type === 'update_selection_style'
+        : action.type === 'create_ellipse'
+          ? {
+              type: 'create_ellipse',
+              ellipse: createEllipse(action.elementId ?? this.#createId(), action.position),
+            }
+          : action.type === 'create_diamond'
             ? {
-                type: 'update_element_style',
-                elementId: this.requireActiveElement(),
-                patch: action.patch,
+                type: 'create_diamond',
+                diamond: createDiamond(action.elementId ?? this.#createId(), action.position),
               }
-            : action.type === 'set_render_profile'
+            : action.type === 'create_line'
               ? {
-                  type: 'set_render_profile',
-                  renderProfile:
-                    action.profile === 'clean' ? NODEINK_CLEAN_PROFILE : NODEINK_SKETCH_PROFILE,
+                  type: 'create_line',
+                  line: createLine(action.elementId ?? this.#createId(), action.position),
                 }
-              : action.type === 'group'
+              : action.type === 'create_polyline'
                 ? {
-                    type: 'group_elements',
-                    groupId: this.#createId(),
-                    elementIds: this.requireSelection(2),
+                    type: 'create_polyline',
+                    polyline: createPolyline(action.elementId ?? this.#createId(), action.position),
                   }
-                : action.type === 'ungroup'
-                  ? { type: 'ungroup_elements', groupId: this.requireActiveElement() }
-                  : action.type === 'reorder'
+                : action.type === 'create_arrow'
+                  ? {
+                      type: 'create_arrow',
+                      arrow: createArrow(action.elementId ?? this.#createId(), action.position),
+                    }
+                  : action.type === 'move_active'
                     ? {
-                        type: 'reorder_elements',
+                        type: 'move_elements',
                         elementIds: this.requireSelection(),
-                        placement: action.placement,
+                        delta: action.delta,
                       }
-                    : action.type === 'align'
+                    : action.type === 'update_selection_style'
                       ? {
-                          type: 'align_elements',
-                          elementIds: this.requireSelection(2),
-                          alignment: action.alignment,
+                          type: 'update_element_style',
+                          elementId: this.requireActiveElement(),
+                          patch: action.patch,
                         }
-                      : action.type === 'paste'
+                      : action.type === 'set_render_profile'
                         ? {
-                            type: 'paste_clipboard',
-                            payload: clipboardPayloadToString(pastePayload),
-                            idPrefix: `${commandId}-paste`,
-                            offset: {
-                              x: (PASTE_CASCADE_PX * nextPasteCascade) / this.#snapshot.camera.zoom,
-                              y: (PASTE_CASCADE_PX * nextPasteCascade) / this.#snapshot.camera.zoom,
-                            },
+                            type: 'set_render_profile',
+                            renderProfile:
+                              action.profile === 'clean'
+                                ? NODEINK_CLEAN_PROFILE
+                                : NODEINK_SKETCH_PROFILE,
                           }
-                        : action.type === 'delete_selection' || action.type === 'cut'
-                          ? { type: 'delete_elements', elementIds: this.requireSelection() }
-                          : (() => {
-                              throw new Error(`Unsupported editor action: ${action.type}`);
-                            })();
+                        : action.type === 'group'
+                          ? {
+                              type: 'group_elements',
+                              groupId: this.#createId(),
+                              elementIds: this.requireSelection(2),
+                            }
+                          : action.type === 'ungroup'
+                            ? { type: 'ungroup_elements', groupId: this.requireActiveElement() }
+                            : action.type === 'reorder'
+                              ? {
+                                  type: 'reorder_elements',
+                                  elementIds: this.requireSelection(),
+                                  placement: action.placement,
+                                }
+                              : action.type === 'align'
+                                ? {
+                                    type: 'align_elements',
+                                    elementIds: this.requireSelection(2),
+                                    alignment: action.alignment,
+                                  }
+                                : action.type === 'paste'
+                                  ? {
+                                      type: 'paste_clipboard',
+                                      payload: clipboardPayloadToString(pastePayload),
+                                      idPrefix: `${commandId}-paste`,
+                                      offset: {
+                                        x:
+                                          (PASTE_CASCADE_PX * nextPasteCascade) /
+                                          this.#snapshot.camera.zoom,
+                                        y:
+                                          (PASTE_CASCADE_PX * nextPasteCascade) /
+                                          this.#snapshot.camera.zoom,
+                                      },
+                                    }
+                                  : action.type === 'delete_selection' || action.type === 'cut'
+                                    ? {
+                                        type: 'delete_elements',
+                                        elementIds: this.requireSelection(),
+                                      }
+                                    : (() => {
+                                        throw new Error(
+                                          `Unsupported editor action: ${action.type}`,
+                                        );
+                                      })();
     const envelope: CommandEnvelopeV1 = {
       protocolVersion,
       commandId,
@@ -950,7 +1021,7 @@ export class EditorWebController implements EditorWebControllerV1 {
       expectedRevision: this.#snapshot.documentRevision,
       command,
     };
-    if (action.type === 'create_rectangle' && this.#snapshot.activeTool !== 'select') {
+    if (isCreateShapeAction(action) && this.#snapshot.activeTool !== 'select') {
       this.#freehandInput.reset();
       await this.#engine.setActiveTool('select');
     }
@@ -1326,6 +1397,7 @@ export {
 export {
   NODEINK_CLEAN_PROFILE,
   NODEINK_COLOR_PRESETS,
+  NODEINK_DEFAULT_LINE_STYLE,
   NODEINK_DEFAULT_RECT_STYLE,
   NODEINK_DEFAULT_STROKE_STYLE,
   NODEINK_DEFAULT_TEXT_STYLE,
@@ -1360,6 +1432,113 @@ function createRectangle(
     strokeWidth: NODEINK_DEFAULT_RECT_STYLE.strokeWidth,
     transform: identityTransform(),
   };
+}
+
+function createEllipse(
+  id: string,
+  position: { x: number; y: number } | undefined,
+): EllipseElementV1 {
+  return {
+    kind: 'ellipse',
+    id,
+    x: position?.x ?? 80,
+    y: position?.y ?? 72,
+    width: 176,
+    height: 104,
+    fill: NODEINK_DEFAULT_RECT_STYLE.fill,
+    stroke: NODEINK_DEFAULT_RECT_STYLE.stroke,
+    strokeWidth: NODEINK_DEFAULT_RECT_STYLE.strokeWidth,
+    transform: identityTransform(),
+  };
+}
+
+function createDiamond(
+  id: string,
+  position: { x: number; y: number } | undefined,
+): DiamondElementV1 {
+  return {
+    kind: 'diamond',
+    id,
+    x: position?.x ?? 80,
+    y: position?.y ?? 72,
+    width: 176,
+    height: 104,
+    fill: NODEINK_DEFAULT_RECT_STYLE.fill,
+    stroke: NODEINK_DEFAULT_RECT_STYLE.stroke,
+    strokeWidth: NODEINK_DEFAULT_RECT_STYLE.strokeWidth,
+    transform: identityTransform(),
+  };
+}
+
+function createLine(id: string, position: { x: number; y: number } | undefined): LineElementV1 {
+  const origin = position ?? { x: 80, y: 72 };
+  return {
+    kind: 'line',
+    id,
+    points: [
+      { x: origin.x, y: origin.y + 88 },
+      { x: origin.x + 176, y: origin.y + 16 },
+    ],
+    stroke: NODEINK_DEFAULT_LINE_STYLE.stroke,
+    strokeWidth: NODEINK_DEFAULT_LINE_STYLE.strokeWidth,
+    transform: identityTransform(),
+  };
+}
+
+function createPolyline(
+  id: string,
+  position: { x: number; y: number } | undefined,
+): PolylineElementV1 {
+  const origin = position ?? { x: 80, y: 72 };
+  return {
+    kind: 'polyline',
+    id,
+    points: [
+      { x: origin.x, y: origin.y + 88 },
+      { x: origin.x + 80, y: origin.y + 8 },
+      { x: origin.x + 176, y: origin.y + 72 },
+    ],
+    stroke: NODEINK_DEFAULT_LINE_STYLE.stroke,
+    strokeWidth: NODEINK_DEFAULT_LINE_STYLE.strokeWidth,
+    transform: identityTransform(),
+  };
+}
+
+function createArrow(id: string, position: { x: number; y: number } | undefined): ArrowElementV1 {
+  const origin = position ?? { x: 80, y: 72 };
+  return {
+    kind: 'arrow',
+    id,
+    points: [
+      { x: origin.x, y: origin.y + 72 },
+      { x: origin.x + 176, y: origin.y + 16 },
+    ],
+    stroke: NODEINK_DEFAULT_LINE_STYLE.stroke,
+    strokeWidth: NODEINK_DEFAULT_LINE_STYLE.strokeWidth,
+    transform: identityTransform(),
+  };
+}
+
+function isCreateShapeAction(action: EditorActionV1): action is Extract<
+  EditorActionV1,
+  {
+    type:
+      | 'create_rectangle'
+      | 'create_ellipse'
+      | 'create_diamond'
+      | 'create_line'
+      | 'create_polyline'
+      | 'create_arrow';
+  }
+> {
+  return (
+    action.type === 'create_rectangle' ||
+    action.type === 'create_ellipse' ||
+    action.type === 'create_diamond' ||
+    action.type === 'create_line' ||
+    action.type === 'create_polyline' ||
+    action.type === 'create_arrow'
+  );
 }
 
 function identityTransform() {

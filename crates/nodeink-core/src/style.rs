@@ -85,6 +85,28 @@ pub enum ElementStylePatchV1 {
         stroke: Option<String>,
         stroke_width: Option<f64>,
     },
+    Ellipse {
+        fill: Option<FillV1>,
+        stroke: Option<String>,
+        stroke_width: Option<f64>,
+    },
+    Diamond {
+        fill: Option<FillV1>,
+        stroke: Option<String>,
+        stroke_width: Option<f64>,
+    },
+    Line {
+        stroke: Option<String>,
+        stroke_width: Option<f64>,
+    },
+    Polyline {
+        stroke: Option<String>,
+        stroke_width: Option<f64>,
+    },
+    Arrow {
+        stroke: Option<String>,
+        stroke_width: Option<f64>,
+    },
     Stroke {
         stroke: Option<String>,
         stroke_width: Option<f64>,
@@ -114,8 +136,30 @@ impl ElementStylePatchV1 {
                 fill,
                 stroke,
                 stroke_width,
+            }
+            | Self::Ellipse {
+                fill,
+                stroke,
+                stroke_width,
+            }
+            | Self::Diamond {
+                fill,
+                stroke,
+                stroke_width,
             } => fill.is_none() && stroke.is_none() && stroke_width.is_none(),
-            Self::Stroke {
+            Self::Line {
+                stroke,
+                stroke_width,
+            }
+            | Self::Polyline {
+                stroke,
+                stroke_width,
+            }
+            | Self::Arrow {
+                stroke,
+                stroke_width,
+            }
+            | Self::Stroke {
                 stroke,
                 stroke_width,
             } => stroke.is_none() && stroke_width.is_none(),
@@ -143,6 +187,28 @@ impl ElementStylePatchV1 {
 pub enum SelectionStyleV1 {
     Rect {
         fill: FillV1,
+        stroke: String,
+        stroke_width: f64,
+    },
+    Ellipse {
+        fill: FillV1,
+        stroke: String,
+        stroke_width: f64,
+    },
+    Diamond {
+        fill: FillV1,
+        stroke: String,
+        stroke_width: f64,
+    },
+    Line {
+        stroke: String,
+        stroke_width: f64,
+    },
+    Polyline {
+        stroke: String,
+        stroke_width: f64,
+    },
+    Arrow {
         stroke: String,
         stroke_width: f64,
     },
@@ -202,5 +268,80 @@ mod tests {
 
         assert!(patch.is_empty());
         assert!(matches!(patch, ElementStylePatchV1::Rect { .. }));
+    }
+
+    #[test]
+    fn every_basic_shape_style_patch_reports_empty_and_changed_fields() {
+        let empty = [
+            ElementStylePatchV1::Ellipse {
+                fill: None,
+                stroke: None,
+                stroke_width: None,
+            },
+            ElementStylePatchV1::Diamond {
+                fill: None,
+                stroke: None,
+                stroke_width: None,
+            },
+            ElementStylePatchV1::Line {
+                stroke: None,
+                stroke_width: None,
+            },
+            ElementStylePatchV1::Polyline {
+                stroke: None,
+                stroke_width: None,
+            },
+            ElementStylePatchV1::Arrow {
+                stroke: None,
+                stroke_width: None,
+            },
+            ElementStylePatchV1::Stroke {
+                stroke: None,
+                stroke_width: None,
+            },
+            ElementStylePatchV1::Text {
+                color: None,
+                text_align: None,
+                font_size: None,
+                font_weight: None,
+            },
+        ];
+        assert!(empty.iter().all(ElementStylePatchV1::is_empty));
+
+        let changed = [
+            ElementStylePatchV1::Ellipse {
+                fill: Some(FillV1::None),
+                stroke: None,
+                stroke_width: None,
+            },
+            ElementStylePatchV1::Diamond {
+                fill: None,
+                stroke: Some("#2563eb".to_string()),
+                stroke_width: None,
+            },
+            ElementStylePatchV1::Line {
+                stroke: None,
+                stroke_width: Some(4.0),
+            },
+            ElementStylePatchV1::Polyline {
+                stroke: Some("#2563eb".to_string()),
+                stroke_width: None,
+            },
+            ElementStylePatchV1::Arrow {
+                stroke: None,
+                stroke_width: Some(4.0),
+            },
+            ElementStylePatchV1::Stroke {
+                stroke: Some("#2563eb".to_string()),
+                stroke_width: None,
+            },
+            ElementStylePatchV1::Text {
+                color: None,
+                text_align: Some(TextAlignV1::Center),
+                font_size: None,
+                font_weight: None,
+            },
+        ];
+        assert!(changed.iter().all(|patch| !patch.is_empty()));
     }
 }

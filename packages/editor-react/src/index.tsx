@@ -104,6 +104,41 @@ export function NodeInkEditor({ controller, hostLabel = 'React adapter' }: NodeI
         </button>
         <button
           type="button"
+          disabled={!isEditable}
+          onClick={() => void controller.dispatch({ type: 'create_ellipse' })}
+        >
+          Ellipse
+        </button>
+        <button
+          type="button"
+          disabled={!isEditable}
+          onClick={() => void controller.dispatch({ type: 'create_diamond' })}
+        >
+          Diamond
+        </button>
+        <button
+          type="button"
+          disabled={!isEditable}
+          onClick={() => void controller.dispatch({ type: 'create_line' })}
+        >
+          Line
+        </button>
+        <button
+          type="button"
+          disabled={!isEditable}
+          onClick={() => void controller.dispatch({ type: 'create_polyline' })}
+        >
+          Polyline
+        </button>
+        <button
+          type="button"
+          disabled={!isEditable}
+          onClick={() => void controller.dispatch({ type: 'create_arrow' })}
+        >
+          Arrow
+        </button>
+        <button
+          type="button"
           disabled={!isEditable || selectionCount === 0}
           onClick={() =>
             void controller.dispatch({
@@ -366,15 +401,16 @@ function SelectionStylePanel({
   style: SelectionStyleV1;
   dispatch: (patch: ElementStylePatchV1) => void;
 }) {
+  const kindLabel = selectionStyleKindLabel(style.kind);
+  const isClosedShape =
+    style.kind === 'rect' || style.kind === 'ellipse' || style.kind === 'diamond';
+
   return (
     <aside className="nodeink-style-panel" aria-label="Selection style">
       <h2 className="nodeink-style-title">
-        Style{' '}
-        <span>
-          {style.kind === 'rect' ? 'Rectangle' : style.kind === 'stroke' ? 'Stroke' : 'Text'}
-        </span>
+        Style <span>{kindLabel}</span>
       </h2>
-      {style.kind === 'rect' ? (
+      {isClosedShape ? (
         <>
           <StyleGroup label="Fill">
             {NODEINK_FILL_PRESETS.map((preset) => (
@@ -383,30 +419,30 @@ function SelectionStylePanel({
                 label={`Fill ${preset.label}`}
                 color={preset.value.kind === 'solid' ? preset.value.color : null}
                 pressed={fillPresetMatches(style.fill, preset.value)}
-                onClick={() => dispatch({ kind: 'rect', fill: preset.value })}
+                onClick={() => dispatch(closedShapeStylePatch(style.kind, { fill: preset.value }))}
               />
             ))}
           </StyleGroup>
           <ColorGroup
             label="Stroke"
             value={style.stroke}
-            onChange={(stroke) => dispatch({ kind: 'rect', stroke })}
+            onChange={(stroke) => dispatch(closedShapeStylePatch(style.kind, { stroke }))}
           />
           <WidthGroup
             value={style.strokeWidth}
-            onChange={(strokeWidth) => dispatch({ kind: 'rect', strokeWidth })}
+            onChange={(strokeWidth) => dispatch(closedShapeStylePatch(style.kind, { strokeWidth }))}
           />
         </>
-      ) : style.kind === 'stroke' ? (
+      ) : style.kind !== 'text' ? (
         <>
           <ColorGroup
             label="Color"
             value={style.stroke}
-            onChange={(stroke) => dispatch({ kind: 'stroke', stroke })}
+            onChange={(stroke) => dispatch(lineStylePatch(style.kind, { stroke }))}
           />
           <WidthGroup
             value={style.strokeWidth}
-            onChange={(strokeWidth) => dispatch({ kind: 'stroke', strokeWidth })}
+            onChange={(strokeWidth) => dispatch(lineStylePatch(style.kind, { strokeWidth }))}
           />
         </>
       ) : (
@@ -444,6 +480,37 @@ function SelectionStylePanel({
       )}
     </aside>
   );
+}
+
+type ClosedShapeStyleKind = 'rect' | 'ellipse' | 'diamond';
+type LineStyleKind = 'line' | 'polyline' | 'arrow' | 'stroke';
+
+function closedShapeStylePatch(
+  kind: ClosedShapeStyleKind,
+  patch: Omit<Extract<ElementStylePatchV1, { kind: ClosedShapeStyleKind }>, 'kind'>,
+): ElementStylePatchV1 {
+  return { kind, ...patch } as ElementStylePatchV1;
+}
+
+function lineStylePatch(
+  kind: LineStyleKind,
+  patch: Omit<Extract<ElementStylePatchV1, { kind: LineStyleKind }>, 'kind'>,
+): ElementStylePatchV1 {
+  return { kind, ...patch } as ElementStylePatchV1;
+}
+
+function selectionStyleKindLabel(kind: SelectionStyleV1['kind']): string {
+  const labels: Record<SelectionStyleV1['kind'], string> = {
+    rect: 'Rectangle',
+    ellipse: 'Ellipse',
+    diamond: 'Diamond',
+    line: 'Line',
+    polyline: 'Polyline',
+    arrow: 'Arrow',
+    stroke: 'Stroke',
+    text: 'Text',
+  };
+  return labels[kind];
 }
 
 function ColorGroup({

@@ -93,6 +93,11 @@ pub(crate) fn remap_clipboard(
             .ok_or(EngineErrorV1::InvalidClipboard)?;
         match &mut element {
             ElementRecordV1::Rect(rectangle) => rectangle.id = remapped_id.clone(),
+            ElementRecordV1::Ellipse(ellipse) => ellipse.id = remapped_id.clone(),
+            ElementRecordV1::Diamond(diamond) => diamond.id = remapped_id.clone(),
+            ElementRecordV1::Line(line) => line.id = remapped_id.clone(),
+            ElementRecordV1::Polyline(polyline) => polyline.id = remapped_id.clone(),
+            ElementRecordV1::Arrow(arrow) => arrow.id = remapped_id.clone(),
             ElementRecordV1::Stroke(stroke) => stroke.id = remapped_id.clone(),
             ElementRecordV1::Text(text) => text.id = remapped_id.clone(),
             ElementRecordV1::Group(group) => {

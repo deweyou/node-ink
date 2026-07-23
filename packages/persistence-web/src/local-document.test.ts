@@ -138,7 +138,7 @@ describe('openLocalDocumentV1', () => {
       recovery: 'migrated_head',
       persistedRevision: 5,
       document: {
-        schemaVersion: 3,
+        schemaVersion: 4,
         revision: 5,
         renderProfile: { kind: 'clean', version: 1 },
         elements: {
@@ -157,7 +157,7 @@ describe('openLocalDocumentV1', () => {
         documentId: 'doc-1',
         revision: 5,
         expectedPreviousRevision: 4,
-        schemaVersion: 3,
+        schemaVersion: 4,
         engineAlgorithmVersion: 'nodeink-scene-v2',
       }),
     );
@@ -396,32 +396,34 @@ function migrationPort() {
     engineAlgorithmVersion: () => 'nodeink-scene-v2',
     async migrateDocumentPayload(payloadJson: string): Promise<MigrationAttemptV1> {
       const parsed = JSON.parse(payloadJson) as LegacyDocumentFixture | NodeInkDocumentV1;
+      const sourceSchemaVersion = (parsed as { schemaVersion: number }).schemaVersion;
       if (
-        parsed.schemaVersion !== 0 &&
-        parsed.schemaVersion !== 1 &&
-        parsed.schemaVersion !== 2 &&
-        parsed.schemaVersion !== 3
+        sourceSchemaVersion !== 0 &&
+        sourceSchemaVersion !== 1 &&
+        sourceSchemaVersion !== 2 &&
+        sourceSchemaVersion !== 3 &&
+        sourceSchemaVersion !== 4
       ) {
         return {
           result: null,
           report: {
             stage: 'schema',
             code: 'unknown_schema',
-            sourceSchemaVersion: parsed.schemaVersion,
-            targetSchemaVersion: 3,
+            sourceSchemaVersion,
+            targetSchemaVersion: 4,
             message: 'unsupported schema',
             recovery: 'try_next_snapshot_then_readonly_diagnostic',
           },
         };
       }
-      const migrated = parsed.schemaVersion !== 3;
+      const migrated = sourceSchemaVersion !== 4;
       const document: NodeInkDocumentV1 = migrated
         ? migrateLegacyDocument(parsed as LegacyDocumentFixture)
         : (parsed as NodeInkDocumentV1);
       return {
         result: {
-          sourceSchemaVersion: parsed.schemaVersion,
-          targetSchemaVersion: 3,
+          sourceSchemaVersion,
+          targetSchemaVersion: 4,
           migrated,
           document,
           canonicalPayload: JSON.stringify(document),
@@ -488,7 +490,7 @@ type LegacyElementFixture =
 
 function migrateLegacyDocument(legacy: LegacyDocumentFixture): NodeInkDocumentV1 {
   return {
-    schemaVersion: 3,
+    schemaVersion: 4,
     documentId: legacy.documentId,
     revision: legacy.revision + 1,
     renderProfile: { kind: 'clean', version: 1 },

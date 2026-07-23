@@ -129,6 +129,149 @@ describe('EditorWebController', () => {
     });
   });
 
+  it('maps every basic-shape action to an explicit semantic command', async () => {
+    const engine = new StubEngine();
+    const controller = new EditorWebController({
+      engine,
+      renderer: new StubRenderer(),
+      createId: () => 'command-id',
+    });
+    await controller.mount(document.createElement('div'));
+
+    await controller.dispatch({
+      type: 'create_ellipse',
+      elementId: 'ellipse-1',
+      position: { x: 10, y: 20 },
+    });
+    await controller.dispatch({
+      type: 'create_diamond',
+      elementId: 'diamond-1',
+      position: { x: 30, y: 40 },
+    });
+    await controller.dispatch({
+      type: 'create_line',
+      elementId: 'line-1',
+      position: { x: 50, y: 60 },
+    });
+    await controller.dispatch({
+      type: 'create_polyline',
+      elementId: 'polyline-1',
+      position: { x: 70, y: 80 },
+    });
+    await controller.dispatch({
+      type: 'create_arrow',
+      elementId: 'arrow-1',
+      position: { x: 90, y: 100 },
+    });
+
+    expect(engine.commands.map(({ command }) => command)).toEqual([
+      {
+        type: 'create_ellipse',
+        ellipse: expect.objectContaining({
+          kind: 'ellipse',
+          id: 'ellipse-1',
+          x: 10,
+          y: 20,
+          width: 176,
+          height: 104,
+        }),
+      },
+      {
+        type: 'create_diamond',
+        diamond: expect.objectContaining({
+          kind: 'diamond',
+          id: 'diamond-1',
+          x: 30,
+          y: 40,
+          width: 176,
+          height: 104,
+        }),
+      },
+      {
+        type: 'create_line',
+        line: expect.objectContaining({
+          kind: 'line',
+          id: 'line-1',
+          points: [
+            { x: 50, y: 148 },
+            { x: 226, y: 76 },
+          ],
+        }),
+      },
+      {
+        type: 'create_polyline',
+        polyline: expect.objectContaining({
+          kind: 'polyline',
+          id: 'polyline-1',
+          points: [
+            { x: 70, y: 168 },
+            { x: 150, y: 88 },
+            { x: 246, y: 152 },
+          ],
+        }),
+      },
+      {
+        type: 'create_arrow',
+        arrow: expect.objectContaining({
+          kind: 'arrow',
+          id: 'arrow-1',
+          points: [
+            { x: 90, y: 172 },
+            { x: 266, y: 116 },
+          ],
+        }),
+      },
+    ]);
+
+    engine.commands.splice(0);
+    await controller.dispatch({ type: 'create_ellipse' });
+    await controller.dispatch({ type: 'create_diamond' });
+    await controller.dispatch({ type: 'create_line' });
+    await controller.dispatch({ type: 'create_polyline' });
+    await controller.dispatch({ type: 'create_arrow' });
+    expect(engine.commands.map(({ command }) => command)).toEqual([
+      {
+        type: 'create_ellipse',
+        ellipse: expect.objectContaining({ id: 'command-id', x: 80, y: 72 }),
+      },
+      {
+        type: 'create_diamond',
+        diamond: expect.objectContaining({ id: 'command-id', x: 80, y: 72 }),
+      },
+      {
+        type: 'create_line',
+        line: expect.objectContaining({
+          id: 'command-id',
+          points: [
+            { x: 80, y: 160 },
+            { x: 256, y: 88 },
+          ],
+        }),
+      },
+      {
+        type: 'create_polyline',
+        polyline: expect.objectContaining({
+          id: 'command-id',
+          points: [
+            { x: 80, y: 160 },
+            { x: 160, y: 80 },
+            { x: 256, y: 144 },
+          ],
+        }),
+      },
+      {
+        type: 'create_arrow',
+        arrow: expect.objectContaining({
+          id: 'command-id',
+          points: [
+            { x: 80, y: 144 },
+            { x: 256, y: 88 },
+          ],
+        }),
+      },
+    ]);
+  });
+
   it('routes zoom controls through Rust Camera actions around the viewport center', async () => {
     const engine = new StubEngine();
     const controller = new EditorWebController({ engine, renderer: new StubRenderer() });
@@ -1961,10 +2104,10 @@ class StubEngine implements EnginePortV1 {
     return {
       result: {
         sourceSchemaVersion: 1,
-        targetSchemaVersion: 3,
+        targetSchemaVersion: 4,
         migrated: true,
         document: {
-          schemaVersion: 3 as const,
+          schemaVersion: 4 as const,
           documentId: 'doc-1',
           revision: 0,
           renderProfile: { kind: 'clean' as const, version: 1 as const },
@@ -1983,7 +2126,7 @@ class StubEngine implements EnginePortV1 {
 
   serializeDocument() {
     const document = {
-      schemaVersion: 3 as const,
+      schemaVersion: 4 as const,
       documentId: 'doc-1',
       revision: this.#revision,
       renderProfile: this.#renderProfile,

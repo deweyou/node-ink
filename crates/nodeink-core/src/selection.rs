@@ -7,6 +7,7 @@ use crate::{
     TextElementV1, Vec2, aligned_text_x,
     hierarchy::Hierarchy,
     selection_geometry::{OrientedCorners, SelectionGeometry, SelectionHandleKind, VisualAabb},
+    shape_geometry::{BoxShapeKind, hit_test_box_shape, hit_test_path, path_visual_bounds},
     stroke_geometry::{flattened_world_points, stroke_visual_bounds},
     text::TextMetricsCache,
     transform::Point2D,
@@ -571,6 +572,48 @@ fn hit_test_element(
                     && local.y >= rectangle.y
                     && local.y <= rectangle.y + rectangle.height
             }),
+        ElementRecordV1::Ellipse(ellipse) => hit_test_box_shape(
+            BoxShapeKind::Ellipse,
+            ellipse.x,
+            ellipse.y,
+            ellipse.width,
+            ellipse.height,
+            world_transform,
+            point,
+        ),
+        ElementRecordV1::Diamond(diamond) => hit_test_box_shape(
+            BoxShapeKind::Diamond,
+            diamond.x,
+            diamond.y,
+            diamond.width,
+            diamond.height,
+            world_transform,
+            point,
+        ),
+        ElementRecordV1::Line(line) => hit_test_path(
+            &line.points,
+            line.stroke_width,
+            false,
+            world_transform,
+            point,
+            tolerance,
+        ),
+        ElementRecordV1::Polyline(polyline) => hit_test_path(
+            &polyline.points,
+            polyline.stroke_width,
+            false,
+            world_transform,
+            point,
+            tolerance,
+        ),
+        ElementRecordV1::Arrow(arrow) => hit_test_path(
+            &arrow.points,
+            arrow.stroke_width,
+            true,
+            world_transform,
+            point,
+            tolerance,
+        ),
         ElementRecordV1::Stroke(stroke) => {
             let radius = stroke.stroke_width / 2.0 + tolerance;
             flattened_world_points(&stroke.points, world_transform, tolerance).is_some_and(
@@ -733,6 +776,11 @@ fn append_world_transforms(
 fn element_transform(element: &ElementRecordV1) -> Affine2D {
     match element {
         ElementRecordV1::Rect(rectangle) => rectangle.transform,
+        ElementRecordV1::Ellipse(ellipse) => ellipse.transform,
+        ElementRecordV1::Diamond(diamond) => diamond.transform,
+        ElementRecordV1::Line(line) => line.transform,
+        ElementRecordV1::Polyline(polyline) => polyline.transform,
+        ElementRecordV1::Arrow(arrow) => arrow.transform,
         ElementRecordV1::Stroke(stroke) => stroke.transform,
         ElementRecordV1::Text(text) => text.transform,
         ElementRecordV1::Group(group) => group.transform,
@@ -753,6 +801,27 @@ fn element_local_visual_bounds(
                 rectangle.height + rectangle.stroke_width,
             )
             .ok()
+        }
+        ElementRecordV1::Ellipse(ellipse) => boxed_visual_bounds(
+            ellipse.x,
+            ellipse.y,
+            ellipse.width,
+            ellipse.height,
+            ellipse.stroke_width,
+        ),
+        ElementRecordV1::Diamond(diamond) => boxed_visual_bounds(
+            diamond.x,
+            diamond.y,
+            diamond.width,
+            diamond.height,
+            diamond.stroke_width,
+        ),
+        ElementRecordV1::Line(line) => path_visual_bounds(&line.points, line.stroke_width, false),
+        ElementRecordV1::Polyline(polyline) => {
+            path_visual_bounds(&polyline.points, polyline.stroke_width, false)
+        }
+        ElementRecordV1::Arrow(arrow) => {
+            path_visual_bounds(&arrow.points, arrow.stroke_width, true)
         }
         ElementRecordV1::Stroke(stroke) => {
             stroke_visual_bounds(&stroke.points, stroke.stroke_width)
@@ -950,6 +1019,28 @@ fn selection_style(element: &ElementRecordV1) -> Option<SelectionStyleV1> {
             stroke: rectangle.stroke.clone(),
             stroke_width: rectangle.stroke_width,
         }),
+        ElementRecordV1::Ellipse(ellipse) => Some(SelectionStyleV1::Ellipse {
+            fill: ellipse.fill.clone(),
+            stroke: ellipse.stroke.clone(),
+            stroke_width: ellipse.stroke_width,
+        }),
+        ElementRecordV1::Diamond(diamond) => Some(SelectionStyleV1::Diamond {
+            fill: diamond.fill.clone(),
+            stroke: diamond.stroke.clone(),
+            stroke_width: diamond.stroke_width,
+        }),
+        ElementRecordV1::Line(line) => Some(SelectionStyleV1::Line {
+            stroke: line.stroke.clone(),
+            stroke_width: line.stroke_width,
+        }),
+        ElementRecordV1::Polyline(polyline) => Some(SelectionStyleV1::Polyline {
+            stroke: polyline.stroke.clone(),
+            stroke_width: polyline.stroke_width,
+        }),
+        ElementRecordV1::Arrow(arrow) => Some(SelectionStyleV1::Arrow {
+            stroke: arrow.stroke.clone(),
+            stroke_width: arrow.stroke_width,
+        }),
         ElementRecordV1::Stroke(stroke) => Some(SelectionStyleV1::Stroke {
             stroke: stroke.stroke.clone(),
             stroke_width: stroke.stroke_width,
@@ -962,6 +1053,23 @@ fn selection_style(element: &ElementRecordV1) -> Option<SelectionStyleV1> {
         }),
         ElementRecordV1::Group(_) => None,
     }
+}
+
+fn boxed_visual_bounds(
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+    stroke_width: f64,
+) -> Option<VisualAabb> {
+    let half_width = stroke_width / 2.0;
+    VisualAabb::new(
+        x - half_width,
+        y - half_width,
+        width + stroke_width,
+        height + stroke_width,
+    )
+    .ok()
 }
 
 fn midpoint(first: Point2D, second: Point2D) -> Point2D {

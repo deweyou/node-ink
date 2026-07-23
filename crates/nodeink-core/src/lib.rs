@@ -12,6 +12,7 @@ mod pointer;
 mod scene_patch;
 mod selection;
 mod selection_geometry;
+mod shape_geometry;
 mod sketch;
 mod snapping;
 mod stroke;
@@ -47,6 +48,9 @@ pub use selection::{
 };
 use selection::{HitTestMode, SelectionModel, hit_test_document, hit_test_document_with_mode};
 use selection_geometry::VisualAabb;
+use shape_geometry::{
+    BoxShapeKind, arrow_path_data, boxed_shape_path_data, line_path_data, path_visual_bounds,
+};
 pub use sketch::{ENGINE_ALGORITHM_VERSION, RenderProfileV1, SketchFillStyleV1};
 use sketch::{sketch_rectangle, sketch_stroke};
 pub use stroke::{StrokeInputBatchV1, StrokePhaseV1};
@@ -70,7 +74,7 @@ pub use transform::Affine2D;
 use transform::Point2D;
 
 pub const PROTOCOL_VERSION: u32 = 1;
-pub const SCHEMA_VERSION: u32 = 3;
+pub const SCHEMA_VERSION: u32 = 4;
 
 pub type DocumentId = String;
 pub type ElementId = String;
@@ -104,6 +108,11 @@ impl NodeInkDocumentV1 {
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ElementRecordV1 {
     Rect(RectElementV1),
+    Ellipse(EllipseElementV1),
+    Diamond(DiamondElementV1),
+    Line(LineElementV1),
+    Polyline(PolylineElementV1),
+    Arrow(ArrowElementV1),
     Stroke(StrokeElementV1),
     Text(TextElementV1),
     Group(GroupElementV1),
@@ -113,6 +122,11 @@ impl ElementRecordV1 {
     pub fn id(&self) -> &str {
         match self {
             Self::Rect(rectangle) => &rectangle.id,
+            Self::Ellipse(ellipse) => &ellipse.id,
+            Self::Diamond(diamond) => &diamond.id,
+            Self::Line(line) => &line.id,
+            Self::Polyline(polyline) => &polyline.id,
+            Self::Arrow(arrow) => &arrow.id,
             Self::Stroke(stroke) => &stroke.id,
             Self::Text(text) => &text.id,
             Self::Group(group) => &group.id,
@@ -122,13 +136,25 @@ impl ElementRecordV1 {
     pub(crate) fn as_text(&self) -> Option<&TextElementV1> {
         match self {
             Self::Text(text) => Some(text),
-            Self::Rect(_) | Self::Stroke(_) | Self::Group(_) => None,
+            Self::Rect(_)
+            | Self::Ellipse(_)
+            | Self::Diamond(_)
+            | Self::Line(_)
+            | Self::Polyline(_)
+            | Self::Arrow(_)
+            | Self::Stroke(_)
+            | Self::Group(_) => None,
         }
     }
 
     fn transform(&self) -> Affine2D {
         match self {
             Self::Rect(rectangle) => rectangle.transform,
+            Self::Ellipse(ellipse) => ellipse.transform,
+            Self::Diamond(diamond) => diamond.transform,
+            Self::Line(line) => line.transform,
+            Self::Polyline(polyline) => polyline.transform,
+            Self::Arrow(arrow) => arrow.transform,
             Self::Stroke(stroke) => stroke.transform,
             Self::Text(text) => text.transform,
             Self::Group(group) => group.transform,
@@ -138,6 +164,11 @@ impl ElementRecordV1 {
     fn set_transform(&mut self, transform: Affine2D) {
         match self {
             Self::Rect(rectangle) => rectangle.transform = transform,
+            Self::Ellipse(ellipse) => ellipse.transform = transform,
+            Self::Diamond(diamond) => diamond.transform = transform,
+            Self::Line(line) => line.transform = transform,
+            Self::Polyline(polyline) => polyline.transform = transform,
+            Self::Arrow(arrow) => arrow.transform = transform,
             Self::Stroke(stroke) => stroke.transform = transform,
             Self::Text(text) => text.transform = transform,
             Self::Group(group) => group.transform = transform,
@@ -155,6 +186,64 @@ pub struct RectElementV1 {
     pub width: f64,
     pub height: f64,
     pub fill: FillV1,
+    pub stroke: String,
+    pub stroke_width: f64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EllipseElementV1 {
+    pub id: ElementId,
+    pub transform: Affine2D,
+    pub x: f64,
+    pub y: f64,
+    pub width: f64,
+    pub height: f64,
+    pub fill: FillV1,
+    pub stroke: String,
+    pub stroke_width: f64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DiamondElementV1 {
+    pub id: ElementId,
+    pub transform: Affine2D,
+    pub x: f64,
+    pub y: f64,
+    pub width: f64,
+    pub height: f64,
+    pub fill: FillV1,
+    pub stroke: String,
+    pub stroke_width: f64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LineElementV1 {
+    pub id: ElementId,
+    pub transform: Affine2D,
+    pub points: Vec<Vec2>,
+    pub stroke: String,
+    pub stroke_width: f64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PolylineElementV1 {
+    pub id: ElementId,
+    pub transform: Affine2D,
+    pub points: Vec<Vec2>,
+    pub stroke: String,
+    pub stroke_width: f64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ArrowElementV1 {
+    pub id: ElementId,
+    pub transform: Affine2D,
+    pub points: Vec<Vec2>,
     pub stroke: String,
     pub stroke_width: f64,
 }
@@ -257,6 +346,21 @@ pub struct CommandEnvelopeV1 {
 pub enum CommandV1 {
     CreateRectangle {
         rectangle: RectElementV1,
+    },
+    CreateEllipse {
+        ellipse: EllipseElementV1,
+    },
+    CreateDiamond {
+        diamond: DiamondElementV1,
+    },
+    CreateLine {
+        line: LineElementV1,
+    },
+    CreatePolyline {
+        polyline: PolylineElementV1,
+    },
+    CreateArrow {
+        arrow: ArrowElementV1,
     },
     MoveElements {
         element_ids: Vec<ElementId>,
@@ -502,6 +606,10 @@ pub enum EngineErrorV1 {
     ElementNotFound { element_id: ElementId },
     #[error("invalid rectangle geometry for {element_id}")]
     InvalidRectangle { element_id: ElementId },
+    #[error("invalid closed shape geometry for {element_id}")]
+    InvalidShape { element_id: ElementId },
+    #[error("invalid line geometry for {element_id}")]
+    InvalidLine { element_id: ElementId },
     #[error("invalid movement delta")]
     InvalidDelta,
     #[error("invalid camera state")]
@@ -1321,6 +1429,21 @@ fn selection_after_command(
         CommandV1::CreateRectangle { rectangle } => {
             SelectionAfterCommand::Set(vec![rectangle.id.clone()], Some(rectangle.id.clone()))
         }
+        CommandV1::CreateEllipse { ellipse } => {
+            SelectionAfterCommand::Set(vec![ellipse.id.clone()], Some(ellipse.id.clone()))
+        }
+        CommandV1::CreateDiamond { diamond } => {
+            SelectionAfterCommand::Set(vec![diamond.id.clone()], Some(diamond.id.clone()))
+        }
+        CommandV1::CreateLine { line } => {
+            SelectionAfterCommand::Set(vec![line.id.clone()], Some(line.id.clone()))
+        }
+        CommandV1::CreatePolyline { polyline } => {
+            SelectionAfterCommand::Set(vec![polyline.id.clone()], Some(polyline.id.clone()))
+        }
+        CommandV1::CreateArrow { arrow } => {
+            SelectionAfterCommand::Set(vec![arrow.id.clone()], Some(arrow.id.clone()))
+        }
         CommandV1::CreateStroke { stroke } => {
             SelectionAfterCommand::Set(vec![stroke.id.clone()], Some(stroke.id.clone()))
         }
@@ -1435,6 +1558,47 @@ fn apply_command(
                 .elements
                 .insert(element_id.clone(), ElementRecordV1::Rect(rectangle));
             Ok(CommandEffect::changed(vec![element_id]))
+        }
+        CommandV1::CreateEllipse { ellipse } => {
+            validate_closed_shape(ClosedShapeValidation::ellipse(&ellipse))?;
+            insert_element(document, ElementRecordV1::Ellipse(ellipse))
+        }
+        CommandV1::CreateDiamond { diamond } => {
+            validate_closed_shape(ClosedShapeValidation::diamond(&diamond))?;
+            insert_element(document, ElementRecordV1::Diamond(diamond))
+        }
+        CommandV1::CreateLine { line } => {
+            validate_line_shape(
+                &line.id,
+                &line.points,
+                &line.stroke,
+                line.stroke_width,
+                2,
+                2,
+            )?;
+            insert_element(document, ElementRecordV1::Line(line))
+        }
+        CommandV1::CreatePolyline { polyline } => {
+            validate_line_shape(
+                &polyline.id,
+                &polyline.points,
+                &polyline.stroke,
+                polyline.stroke_width,
+                3,
+                usize::MAX,
+            )?;
+            insert_element(document, ElementRecordV1::Polyline(polyline))
+        }
+        CommandV1::CreateArrow { arrow } => {
+            validate_line_shape(
+                &arrow.id,
+                &arrow.points,
+                &arrow.stroke,
+                arrow.stroke_width,
+                2,
+                usize::MAX,
+            )?;
+            insert_element(document, ElementRecordV1::Arrow(arrow))
         }
         CommandV1::MoveElements { element_ids, delta } => {
             if !delta.x.is_finite() || !delta.y.is_finite() {
@@ -2103,6 +2267,99 @@ fn apply_element_style_patch(
                 rectangle.stroke_width = value;
             }
         }
+        ElementStylePatchV1::Ellipse {
+            fill,
+            stroke,
+            stroke_width,
+        } => {
+            let ElementRecordV1::Ellipse(ellipse) = element else {
+                return Err(EngineErrorV1::ElementStyleKindMismatch { element_id });
+            };
+            validate_shape_style_patch(
+                &element_id,
+                fill.as_ref(),
+                stroke.as_deref(),
+                stroke_width,
+            )?;
+            if let Some(value) = fill {
+                ellipse.fill = value;
+            }
+            if let Some(value) = stroke {
+                ellipse.stroke = value;
+            }
+            if let Some(value) = stroke_width {
+                ellipse.stroke_width = value;
+            }
+        }
+        ElementStylePatchV1::Diamond {
+            fill,
+            stroke,
+            stroke_width,
+        } => {
+            let ElementRecordV1::Diamond(diamond) = element else {
+                return Err(EngineErrorV1::ElementStyleKindMismatch { element_id });
+            };
+            validate_shape_style_patch(
+                &element_id,
+                fill.as_ref(),
+                stroke.as_deref(),
+                stroke_width,
+            )?;
+            if let Some(value) = fill {
+                diamond.fill = value;
+            }
+            if let Some(value) = stroke {
+                diamond.stroke = value;
+            }
+            if let Some(value) = stroke_width {
+                diamond.stroke_width = value;
+            }
+        }
+        ElementStylePatchV1::Line {
+            stroke,
+            stroke_width,
+        } => {
+            let ElementRecordV1::Line(line) = element else {
+                return Err(EngineErrorV1::ElementStyleKindMismatch { element_id });
+            };
+            validate_line_style_patch(&element_id, stroke.as_deref(), stroke_width)?;
+            if let Some(value) = stroke {
+                line.stroke = value;
+            }
+            if let Some(value) = stroke_width {
+                line.stroke_width = value;
+            }
+        }
+        ElementStylePatchV1::Polyline {
+            stroke,
+            stroke_width,
+        } => {
+            let ElementRecordV1::Polyline(polyline) = element else {
+                return Err(EngineErrorV1::ElementStyleKindMismatch { element_id });
+            };
+            validate_line_style_patch(&element_id, stroke.as_deref(), stroke_width)?;
+            if let Some(value) = stroke {
+                polyline.stroke = value;
+            }
+            if let Some(value) = stroke_width {
+                polyline.stroke_width = value;
+            }
+        }
+        ElementStylePatchV1::Arrow {
+            stroke,
+            stroke_width,
+        } => {
+            let ElementRecordV1::Arrow(arrow) = element else {
+                return Err(EngineErrorV1::ElementStyleKindMismatch { element_id });
+            };
+            validate_line_style_patch(&element_id, stroke.as_deref(), stroke_width)?;
+            if let Some(value) = stroke {
+                arrow.stroke = value;
+            }
+            if let Some(value) = stroke_width {
+                arrow.stroke_width = value;
+            }
+        }
         ElementStylePatchV1::Stroke {
             stroke,
             stroke_width,
@@ -2162,6 +2419,38 @@ fn apply_element_style_patch(
     }
 }
 
+fn validate_shape_style_patch(
+    element_id: &str,
+    fill: Option<&FillV1>,
+    stroke: Option<&str>,
+    stroke_width: Option<f64>,
+) -> Result<(), EngineErrorV1> {
+    if fill.is_some_and(|value| !value.validate())
+        || stroke.is_some_and(|value| !is_canonical_color(value))
+        || stroke_width.is_some_and(|value| !is_valid_stroke_width(value))
+    {
+        return Err(EngineErrorV1::InvalidElementStyle {
+            element_id: element_id.to_string(),
+        });
+    }
+    Ok(())
+}
+
+fn validate_line_style_patch(
+    element_id: &str,
+    stroke: Option<&str>,
+    stroke_width: Option<f64>,
+) -> Result<(), EngineErrorV1> {
+    if stroke.is_some_and(|value| !is_canonical_color(value))
+        || stroke_width.is_some_and(|value| !is_valid_stroke_width(value))
+    {
+        return Err(EngineErrorV1::InvalidElementStyle {
+            element_id: element_id.to_string(),
+        });
+    }
+    Ok(())
+}
+
 fn unique_element_ids(changed_by_command: &[Vec<ElementId>]) -> Vec<ElementId> {
     let mut seen = BTreeMap::new();
     let mut unique = Vec::new();
@@ -2201,6 +2490,36 @@ fn validate_document(document: &NodeInkDocumentV1) -> Result<(), EngineErrorV1> 
         }
         match element {
             ElementRecordV1::Rect(rectangle) => validate_rectangle(rectangle)?,
+            ElementRecordV1::Ellipse(ellipse) => {
+                validate_closed_shape(ClosedShapeValidation::ellipse(ellipse))?
+            }
+            ElementRecordV1::Diamond(diamond) => {
+                validate_closed_shape(ClosedShapeValidation::diamond(diamond))?
+            }
+            ElementRecordV1::Line(line) => validate_line_shape(
+                &line.id,
+                &line.points,
+                &line.stroke,
+                line.stroke_width,
+                2,
+                2,
+            )?,
+            ElementRecordV1::Polyline(polyline) => validate_line_shape(
+                &polyline.id,
+                &polyline.points,
+                &polyline.stroke,
+                polyline.stroke_width,
+                3,
+                usize::MAX,
+            )?,
+            ElementRecordV1::Arrow(arrow) => validate_line_shape(
+                &arrow.id,
+                &arrow.points,
+                &arrow.stroke,
+                arrow.stroke_width,
+                2,
+                usize::MAX,
+            )?,
             ElementRecordV1::Stroke(stroke) => validate_stroke(stroke)?,
             ElementRecordV1::Text(text) => validate_text(text)?,
             ElementRecordV1::Group(group) => {
@@ -2266,6 +2585,27 @@ fn element_local_visual_bounds(
                 rectangle.height + rectangle.stroke_width,
             )
             .ok()
+        }
+        ElementRecordV1::Ellipse(ellipse) => boxed_visual_bounds(
+            ellipse.x,
+            ellipse.y,
+            ellipse.width,
+            ellipse.height,
+            ellipse.stroke_width,
+        ),
+        ElementRecordV1::Diamond(diamond) => boxed_visual_bounds(
+            diamond.x,
+            diamond.y,
+            diamond.width,
+            diamond.height,
+            diamond.stroke_width,
+        ),
+        ElementRecordV1::Line(line) => path_visual_bounds(&line.points, line.stroke_width, false),
+        ElementRecordV1::Polyline(polyline) => {
+            path_visual_bounds(&polyline.points, polyline.stroke_width, false)
+        }
+        ElementRecordV1::Arrow(arrow) => {
+            path_visual_bounds(&arrow.points, arrow.stroke_width, true)
         }
         ElementRecordV1::Stroke(stroke) => {
             stroke_visual_bounds(&stroke.points, stroke.stroke_width)
@@ -2392,6 +2732,118 @@ fn validate_rectangle(rectangle: &RectElementV1) -> Result<(), EngineErrorV1> {
         });
     }
     Ok(())
+}
+
+struct ClosedShapeValidation<'a> {
+    id: &'a str,
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+    fill: &'a FillV1,
+    stroke: &'a str,
+    stroke_width: f64,
+}
+
+impl<'a> ClosedShapeValidation<'a> {
+    fn ellipse(ellipse: &'a EllipseElementV1) -> Self {
+        Self {
+            id: &ellipse.id,
+            x: ellipse.x,
+            y: ellipse.y,
+            width: ellipse.width,
+            height: ellipse.height,
+            fill: &ellipse.fill,
+            stroke: &ellipse.stroke,
+            stroke_width: ellipse.stroke_width,
+        }
+    }
+
+    fn diamond(diamond: &'a DiamondElementV1) -> Self {
+        Self {
+            id: &diamond.id,
+            x: diamond.x,
+            y: diamond.y,
+            width: diamond.width,
+            height: diamond.height,
+            fill: &diamond.fill,
+            stroke: &diamond.stroke,
+            stroke_width: diamond.stroke_width,
+        }
+    }
+}
+
+fn validate_closed_shape(shape: ClosedShapeValidation<'_>) -> Result<(), EngineErrorV1> {
+    let is_valid = !shape.id.trim().is_empty()
+        && shape.x.is_finite()
+        && shape.y.is_finite()
+        && shape.width.is_finite()
+        && shape.height.is_finite()
+        && shape.width > 0.0
+        && shape.height > 0.0
+        && shape.fill.validate()
+        && is_canonical_color(shape.stroke)
+        && is_valid_stroke_width(shape.stroke_width);
+    if !is_valid {
+        return Err(EngineErrorV1::InvalidShape {
+            element_id: shape.id.to_string(),
+        });
+    }
+    Ok(())
+}
+
+fn validate_line_shape(
+    id: &str,
+    points: &[Vec2],
+    stroke: &str,
+    stroke_width: f64,
+    minimum_points: usize,
+    maximum_points: usize,
+) -> Result<(), EngineErrorV1> {
+    let is_valid = !id.trim().is_empty()
+        && (minimum_points..=maximum_points).contains(&points.len())
+        && points
+            .iter()
+            .all(|point| point.x.is_finite() && point.y.is_finite())
+        && points.windows(2).all(|segment| segment[0] != segment[1])
+        && is_canonical_color(stroke)
+        && is_valid_stroke_width(stroke_width);
+    if !is_valid {
+        return Err(EngineErrorV1::InvalidLine {
+            element_id: id.to_string(),
+        });
+    }
+    Ok(())
+}
+
+fn insert_element(
+    document: &mut NodeInkDocumentV1,
+    element: ElementRecordV1,
+) -> Result<CommandEffect, EngineErrorV1> {
+    let element_id = element.id().to_string();
+    if document.elements.contains_key(&element_id) {
+        return Err(EngineErrorV1::ElementAlreadyExists { element_id });
+    }
+    document.root_order.push(element_id.clone());
+    document.elements.insert(element_id.clone(), element);
+    Ok(CommandEffect::changed(vec![element_id]))
+}
+
+fn boxed_visual_bounds(
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+    stroke_width: f64,
+) -> Option<VisualAabb> {
+    let half_width = stroke_width / 2.0;
+    VisualAabb::new(
+        x - half_width,
+        y - half_width,
+        width + stroke_width,
+        height + stroke_width,
+    )
+    .ok()
 }
 
 fn validate_stroke(stroke: &StrokeElementV1) -> Result<(), EngineErrorV1> {
@@ -2635,6 +3087,71 @@ fn resolve_scene(
                     }
                 }
             }
+            ElementRecordV1::Ellipse(ellipse) => {
+                insert_boxed_shape_scene_node(
+                    &mut root_node_ids,
+                    &mut nodes,
+                    &ellipse.id,
+                    world_transform,
+                    BoxShapeKind::Ellipse,
+                    ellipse.x,
+                    ellipse.y,
+                    ellipse.width,
+                    ellipse.height,
+                    &ellipse.fill,
+                    &ellipse.stroke,
+                    ellipse.stroke_width,
+                );
+            }
+            ElementRecordV1::Diamond(diamond) => {
+                insert_boxed_shape_scene_node(
+                    &mut root_node_ids,
+                    &mut nodes,
+                    &diamond.id,
+                    world_transform,
+                    BoxShapeKind::Diamond,
+                    diamond.x,
+                    diamond.y,
+                    diamond.width,
+                    diamond.height,
+                    &diamond.fill,
+                    &diamond.stroke,
+                    diamond.stroke_width,
+                );
+            }
+            ElementRecordV1::Line(line) => {
+                insert_line_scene_node(
+                    &mut root_node_ids,
+                    &mut nodes,
+                    &line.id,
+                    world_transform,
+                    line_path_data(&line.points),
+                    &line.stroke,
+                    line.stroke_width,
+                );
+            }
+            ElementRecordV1::Polyline(polyline) => {
+                insert_line_scene_node(
+                    &mut root_node_ids,
+                    &mut nodes,
+                    &polyline.id,
+                    world_transform,
+                    line_path_data(&polyline.points),
+                    &polyline.stroke,
+                    polyline.stroke_width,
+                );
+            }
+            ElementRecordV1::Arrow(arrow) => {
+                insert_line_scene_node(
+                    &mut root_node_ids,
+                    &mut nodes,
+                    &arrow.id,
+                    world_transform,
+                    arrow_path_data(&arrow.points, arrow.stroke_width),
+                    &arrow.stroke,
+                    arrow.stroke_width,
+                );
+            }
             ElementRecordV1::Stroke(stroke) => {
                 insert_stroke_scene_node(
                     &mut root_node_ids,
@@ -2682,6 +3199,58 @@ fn resolve_scene(
         root_node_ids,
         nodes,
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn insert_boxed_shape_scene_node(
+    root_node_ids: &mut Vec<SceneNodeId>,
+    nodes: &mut BTreeMap<SceneNodeId, SceneNodeV1>,
+    element_id: &str,
+    world_transform: Affine2D,
+    kind: BoxShapeKind,
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+    fill: &FillV1,
+    stroke: &str,
+    stroke_width: f64,
+) {
+    let scene_node_id = format!("{element_id}:shape");
+    let path = ScenePathV1 {
+        id: scene_node_id.clone(),
+        source_element_id: element_id.to_string(),
+        transform: world_transform,
+        path_data: boxed_shape_path_data(kind, x, y, width, height),
+        fill: fill.scene_paint().to_string(),
+        stroke: stroke.to_string(),
+        stroke_width,
+    };
+    root_node_ids.push(scene_node_id.clone());
+    nodes.insert(scene_node_id, SceneNodeV1::Path(path));
+}
+
+fn insert_line_scene_node(
+    root_node_ids: &mut Vec<SceneNodeId>,
+    nodes: &mut BTreeMap<SceneNodeId, SceneNodeV1>,
+    element_id: &str,
+    world_transform: Affine2D,
+    path_data: String,
+    stroke: &str,
+    stroke_width: f64,
+) {
+    let scene_node_id = format!("{element_id}:path");
+    let path = ScenePathV1 {
+        id: scene_node_id.clone(),
+        source_element_id: element_id.to_string(),
+        transform: world_transform,
+        path_data,
+        fill: "none".to_string(),
+        stroke: stroke.to_string(),
+        stroke_width,
+    };
+    root_node_ids.push(scene_node_id.clone());
+    nodes.insert(scene_node_id, SceneNodeV1::Path(path));
 }
 
 fn insert_stroke_scene_node(
@@ -2954,6 +3523,86 @@ mod tests {
             height: 96.0,
             fill: FillV1::default_rectangle(),
             stroke: DEFAULT_RECTANGLE_STROKE_COLOR.to_string(),
+            stroke_width: DEFAULT_RECTANGLE_STROKE_WIDTH,
+        }
+    }
+
+    fn ellipse(id: &str, x: f64) -> EllipseElementV1 {
+        EllipseElementV1 {
+            id: id.to_string(),
+            transform: Affine2D::identity(),
+            x,
+            y: 40.0,
+            width: 160.0,
+            height: 96.0,
+            fill: FillV1::default_rectangle(),
+            stroke: DEFAULT_RECTANGLE_STROKE_COLOR.to_string(),
+            stroke_width: DEFAULT_RECTANGLE_STROKE_WIDTH,
+        }
+    }
+
+    fn diamond(id: &str, x: f64) -> DiamondElementV1 {
+        DiamondElementV1 {
+            id: id.to_string(),
+            transform: Affine2D::identity(),
+            x,
+            y: 40.0,
+            width: 160.0,
+            height: 96.0,
+            fill: FillV1::default_rectangle(),
+            stroke: DEFAULT_RECTANGLE_STROKE_COLOR.to_string(),
+            stroke_width: DEFAULT_RECTANGLE_STROKE_WIDTH,
+        }
+    }
+
+    fn line(id: &str, x: f64) -> LineElementV1 {
+        LineElementV1 {
+            id: id.to_string(),
+            transform: Affine2D::identity(),
+            points: vec![
+                Vec2 { x, y: 40.0 },
+                Vec2 {
+                    x: x + 160.0,
+                    y: 136.0,
+                },
+            ],
+            stroke: DEFAULT_INK_COLOR.to_string(),
+            stroke_width: DEFAULT_RECTANGLE_STROKE_WIDTH,
+        }
+    }
+
+    fn polyline(id: &str, x: f64) -> PolylineElementV1 {
+        PolylineElementV1 {
+            id: id.to_string(),
+            transform: Affine2D::identity(),
+            points: vec![
+                Vec2 { x, y: 136.0 },
+                Vec2 {
+                    x: x + 80.0,
+                    y: 40.0,
+                },
+                Vec2 {
+                    x: x + 160.0,
+                    y: 120.0,
+                },
+            ],
+            stroke: DEFAULT_INK_COLOR.to_string(),
+            stroke_width: DEFAULT_RECTANGLE_STROKE_WIDTH,
+        }
+    }
+
+    fn arrow(id: &str, x: f64) -> ArrowElementV1 {
+        ArrowElementV1 {
+            id: id.to_string(),
+            transform: Affine2D::identity(),
+            points: vec![
+                Vec2 { x, y: 136.0 },
+                Vec2 {
+                    x: x + 160.0,
+                    y: 40.0,
+                },
+            ],
+            stroke: DEFAULT_INK_COLOR.to_string(),
             stroke_width: DEFAULT_RECTANGLE_STROKE_WIDTH,
         }
     }
@@ -3247,6 +3896,178 @@ mod tests {
     }
 
     #[test]
+    fn basic_shapes_share_creation_style_transform_clipboard_and_history_semantics() {
+        let mut engine = Engine::open(NodeInkDocumentV1::blank("doc-1")).unwrap();
+        let creations = [
+            (
+                "ellipse-1",
+                CommandV1::CreateEllipse {
+                    ellipse: ellipse("ellipse-1", 20.0),
+                },
+            ),
+            (
+                "diamond-1",
+                CommandV1::CreateDiamond {
+                    diamond: diamond("diamond-1", 220.0),
+                },
+            ),
+            (
+                "line-1",
+                CommandV1::CreateLine {
+                    line: line("line-1", 420.0),
+                },
+            ),
+            (
+                "polyline-1",
+                CommandV1::CreatePolyline {
+                    polyline: polyline("polyline-1", 620.0),
+                },
+            ),
+            (
+                "arrow-1",
+                CommandV1::CreateArrow {
+                    arrow: arrow("arrow-1", 820.0),
+                },
+            ),
+        ];
+
+        for (index, (element_id, command)) in creations.into_iter().enumerate() {
+            let update = engine
+                .execute_command(envelope(
+                    engine.document(),
+                    &format!("create-{element_id}"),
+                    command,
+                ))
+                .unwrap();
+            assert_eq!(update.scene.document_revision, index as u64 + 1);
+            assert_eq!(update.selection.selected_element_ids, [element_id]);
+            assert_eq!(
+                update.selection.primary_element_id.as_deref(),
+                Some(element_id)
+            );
+        }
+
+        assert_eq!(
+            engine.document().root_order,
+            ["ellipse-1", "diamond-1", "line-1", "polyline-1", "arrow-1"]
+        );
+        for node_id in [
+            "ellipse-1:shape",
+            "diamond-1:shape",
+            "line-1:path",
+            "polyline-1:path",
+            "arrow-1:path",
+        ] {
+            let SceneNodeV1::Path(path) = &engine.current_update().scene.nodes[node_id] else {
+                panic!("{node_id} must resolve to a framework-neutral path");
+            };
+            assert!(!path.path_data.is_empty());
+        }
+
+        let ellipse_styled = engine
+            .execute_command(envelope(
+                engine.document(),
+                "style-ellipse",
+                CommandV1::UpdateElementStyle {
+                    element_id: "ellipse-1".to_string(),
+                    patch: ElementStylePatchV1::Ellipse {
+                        fill: Some(FillV1::None),
+                        stroke: Some("#2563eb".to_string()),
+                        stroke_width: Some(4.0),
+                    },
+                },
+            ))
+            .unwrap();
+        assert_eq!(
+            ellipse_styled.selection.style,
+            Some(SelectionStyleV1::Ellipse {
+                fill: FillV1::None,
+                stroke: "#2563eb".to_string(),
+                stroke_width: 4.0,
+            })
+        );
+        let SceneNodeV1::Path(styled_ellipse) = &ellipse_styled.scene.nodes["ellipse-1:shape"]
+        else {
+            panic!("ellipse must remain a path after styling");
+        };
+        assert_eq!(styled_ellipse.fill, "none");
+        assert_eq!(styled_ellipse.stroke, "#2563eb");
+
+        let arrow_styled = engine
+            .execute_command(envelope(
+                engine.document(),
+                "style-arrow",
+                CommandV1::UpdateElementStyle {
+                    element_id: "arrow-1".to_string(),
+                    patch: ElementStylePatchV1::Arrow {
+                        stroke: Some("#dc2626".to_string()),
+                        stroke_width: Some(6.0),
+                    },
+                },
+            ))
+            .unwrap();
+        assert_eq!(
+            arrow_styled.selection.style,
+            Some(SelectionStyleV1::Arrow {
+                stroke: "#dc2626".to_string(),
+                stroke_width: 6.0,
+            })
+        );
+
+        let element_ids = engine.document().root_order.clone();
+        engine
+            .set_selection(element_ids.clone(), Some("arrow-1".to_string()))
+            .unwrap();
+        let transformed = engine
+            .execute_command(envelope(
+                engine.document(),
+                "move-shapes",
+                CommandV1::TransformElements {
+                    element_ids: element_ids.clone(),
+                    transform: Affine2D::translation(Point2D::new(12.0, 8.0)).unwrap(),
+                },
+            ))
+            .unwrap();
+        assert_eq!(transformed.selection.selected_element_ids, element_ids);
+        for element in engine.document().elements.values() {
+            assert_eq!((element.transform().e, element.transform().f), (12.0, 8.0));
+        }
+
+        let grouped = engine
+            .execute_command(envelope(
+                engine.document(),
+                "group-shapes",
+                CommandV1::GroupElements {
+                    group_id: "group-shapes".to_string(),
+                    element_ids,
+                },
+            ))
+            .unwrap();
+        assert_eq!(grouped.selection.selected_element_ids, ["group-shapes"]);
+        let clipboard = engine.copy_selection().unwrap();
+        let pasted = engine
+            .execute_command(envelope(
+                engine.document(),
+                "paste-shapes",
+                CommandV1::PasteClipboard {
+                    payload: clipboard.data,
+                    id_prefix: "paste-shapes".to_string(),
+                    offset: Vec2 { x: 24.0, y: 24.0 },
+                },
+            ))
+            .unwrap();
+        assert_eq!(pasted.selection.selected_element_ids, ["paste-shapes-0"]);
+        assert!(engine.document().elements.contains_key("paste-shapes-5"));
+
+        let undone = engine.undo().unwrap();
+        assert!(!engine.document().elements.contains_key("paste-shapes-0"));
+        assert!(undone.history.can_redo);
+        let redone = engine.redo().unwrap();
+        assert!(engine.document().elements.contains_key("paste-shapes-0"));
+        assert!(redone.history.can_undo);
+    }
+
+    #[test]
     fn revision_conflict_does_not_modify_the_document() {
         let mut engine = Engine::open(NodeInkDocumentV1::blank("doc-1")).unwrap();
         let before = engine.document().clone();
@@ -3510,10 +4331,10 @@ mod tests {
     #[test]
     fn opening_invalid_documents_reports_the_broken_invariant() {
         let mut unsupported_schema = NodeInkDocumentV1::blank("doc-1");
-        unsupported_schema.schema_version = 4;
+        unsupported_schema.schema_version = 5;
         assert_eq!(
             Engine::open(unsupported_schema).unwrap_err(),
-            EngineErrorV1::UnsupportedSchema { actual: 4 }
+            EngineErrorV1::UnsupportedSchema { actual: 5 }
         );
 
         assert_eq!(
@@ -3585,7 +4406,7 @@ mod tests {
         assert_eq!(engine.current_update().active_tool, EditorToolV1::Select);
         assert_eq!(
             engine.serialize_document().unwrap(),
-            r#"{"schemaVersion":3,"documentId":"doc-1","revision":0,"renderProfile":{"kind":"clean","version":1},"rootOrder":[],"elements":{}}"#
+            r#"{"schemaVersion":4,"documentId":"doc-1","revision":0,"renderProfile":{"kind":"clean","version":1},"rootOrder":[],"elements":{}}"#
         );
     }
 

@@ -30,6 +30,26 @@ describe('Vanilla playground selection actions', () => {
     expect(actionButton(root, 'group').disabled).toBe(true);
     expect(optionButton(root, 'reorder', 'placement', 'front').disabled).toBe(true);
     expect(optionButton(root, 'align', 'alignment', 'left').disabled).toBe(true);
+    for (const action of [
+      'create_rectangle',
+      'create_ellipse',
+      'create_diamond',
+      'create_line',
+      'create_polyline',
+      'create_arrow',
+    ]) {
+      expect(actionButton(root, action).disabled).toBe(false);
+      actionButton(root, action).click();
+    }
+    expect(controller.actions).toEqual([
+      { type: 'create_rectangle' },
+      { type: 'create_ellipse' },
+      { type: 'create_diamond' },
+      { type: 'create_line' },
+      { type: 'create_polyline' },
+      { type: 'create_arrow' },
+    ]);
+    controller.actions.splice(0);
 
     controller.setSnapshot({
       ...controller.getSnapshot(),

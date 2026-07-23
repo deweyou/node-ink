@@ -1,10 +1,10 @@
 export const protocolVersion = 1 as const;
-export const schemaVersion = 3 as const;
+export const schemaVersion = 4 as const;
 export const canvasFontFamily = 'Noto Sans SC Variable' as const;
 export const nodeInkClipboardMime = 'application/x-nodeink-elements+json' as const;
 
 export interface NodeInkDocumentV1 {
-  schemaVersion: 3;
+  schemaVersion: 4;
   documentId: string;
   revision: number;
   renderProfile: RenderProfileV1;
@@ -12,7 +12,16 @@ export interface NodeInkDocumentV1 {
   elements: Record<string, ElementRecordV1>;
 }
 
-export type ElementRecordV1 = RectElementV1 | StrokeElementV1 | TextElementV1 | GroupElementV1;
+export type ElementRecordV1 =
+  | RectElementV1
+  | EllipseElementV1
+  | DiamondElementV1
+  | LineElementV1
+  | PolylineElementV1
+  | ArrowElementV1
+  | StrokeElementV1
+  | TextElementV1
+  | GroupElementV1;
 
 export type FillV1 = { kind: 'none' } | { kind: 'solid'; color: string };
 
@@ -36,6 +45,59 @@ export interface RectElementV1 {
   width: number;
   height: number;
   fill: FillV1;
+  stroke: string;
+  strokeWidth: number;
+}
+
+export interface EllipseElementV1 {
+  kind: 'ellipse';
+  id: string;
+  transform: Affine2D;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  fill: FillV1;
+  stroke: string;
+  strokeWidth: number;
+}
+
+export interface DiamondElementV1 {
+  kind: 'diamond';
+  id: string;
+  transform: Affine2D;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  fill: FillV1;
+  stroke: string;
+  strokeWidth: number;
+}
+
+export interface LineElementV1 {
+  kind: 'line';
+  id: string;
+  transform: Affine2D;
+  points: Vec2[];
+  stroke: string;
+  strokeWidth: number;
+}
+
+export interface PolylineElementV1 {
+  kind: 'polyline';
+  id: string;
+  transform: Affine2D;
+  points: Vec2[];
+  stroke: string;
+  strokeWidth: number;
+}
+
+export interface ArrowElementV1 {
+  kind: 'arrow';
+  id: string;
+  transform: Affine2D;
+  points: Vec2[];
   stroke: string;
   strokeWidth: number;
 }
@@ -106,6 +168,11 @@ export interface CommandEnvelopeV1 {
 
 export type CommandV1 =
   | { type: 'create_rectangle'; rectangle: RectElementV1 }
+  | { type: 'create_ellipse'; ellipse: EllipseElementV1 }
+  | { type: 'create_diamond'; diamond: DiamondElementV1 }
+  | { type: 'create_line'; line: LineElementV1 }
+  | { type: 'create_polyline'; polyline: PolylineElementV1 }
+  | { type: 'create_arrow'; arrow: ArrowElementV1 }
   | { type: 'move_elements'; elementIds: string[]; delta: Vec2 }
   | { type: 'create_stroke'; stroke: StrokeElementV1 }
   | { type: 'create_text'; text: TextElementV1 }
@@ -145,6 +212,33 @@ export type ElementStylePatchV1 =
   | {
       kind: 'rect';
       fill?: FillV1;
+      stroke?: string;
+      strokeWidth?: number;
+    }
+  | {
+      kind: 'ellipse';
+      fill?: FillV1;
+      stroke?: string;
+      strokeWidth?: number;
+    }
+  | {
+      kind: 'diamond';
+      fill?: FillV1;
+      stroke?: string;
+      strokeWidth?: number;
+    }
+  | {
+      kind: 'line';
+      stroke?: string;
+      strokeWidth?: number;
+    }
+  | {
+      kind: 'polyline';
+      stroke?: string;
+      strokeWidth?: number;
+    }
+  | {
+      kind: 'arrow';
       stroke?: string;
       strokeWidth?: number;
     }
@@ -297,6 +391,33 @@ export type SelectionStyleV1 =
   | {
       kind: 'rect';
       fill: FillV1;
+      stroke: string;
+      strokeWidth: number;
+    }
+  | {
+      kind: 'ellipse';
+      fill: FillV1;
+      stroke: string;
+      strokeWidth: number;
+    }
+  | {
+      kind: 'diamond';
+      fill: FillV1;
+      stroke: string;
+      strokeWidth: number;
+    }
+  | {
+      kind: 'line';
+      stroke: string;
+      strokeWidth: number;
+    }
+  | {
+      kind: 'polyline';
+      stroke: string;
+      strokeWidth: number;
+    }
+  | {
+      kind: 'arrow';
       stroke: string;
       strokeWidth: number;
     }
@@ -921,6 +1042,16 @@ function isCommand(value: unknown): value is CommandV1 {
   switch (value.type) {
     case 'create_rectangle':
       return hasOnlyKeys(value, ['type', 'rectangle']) && isRectElement(value.rectangle);
+    case 'create_ellipse':
+      return hasOnlyKeys(value, ['type', 'ellipse']) && isEllipseElement(value.ellipse);
+    case 'create_diamond':
+      return hasOnlyKeys(value, ['type', 'diamond']) && isDiamondElement(value.diamond);
+    case 'create_line':
+      return hasOnlyKeys(value, ['type', 'line']) && isLineElement(value.line);
+    case 'create_polyline':
+      return hasOnlyKeys(value, ['type', 'polyline']) && isPolylineElement(value.polyline);
+    case 'create_arrow':
+      return hasOnlyKeys(value, ['type', 'arrow']) && isArrowElement(value.arrow);
     case 'create_stroke':
       return hasOnlyKeys(value, ['type', 'stroke']) && isStrokeElement(value.stroke);
     case 'create_text':
@@ -1037,7 +1168,22 @@ function isElementStylePatch(value: unknown): value is ElementStylePatchV1 {
       (value.strokeWidth === undefined || isValidStrokeWidth(value.strokeWidth))
     );
   }
-  if (value.kind === 'stroke') {
+  if (value.kind === 'ellipse' || value.kind === 'diamond') {
+    return (
+      keys.every(
+        (key) => key === 'kind' || key === 'fill' || key === 'stroke' || key === 'strokeWidth',
+      ) &&
+      (value.fill === undefined || isFill(value.fill)) &&
+      (value.stroke === undefined || isCanonicalColor(value.stroke)) &&
+      (value.strokeWidth === undefined || isValidStrokeWidth(value.strokeWidth))
+    );
+  }
+  if (
+    value.kind === 'line' ||
+    value.kind === 'polyline' ||
+    value.kind === 'arrow' ||
+    value.kind === 'stroke'
+  ) {
     return (
       keys.every((key) => key === 'kind' || key === 'stroke' || key === 'strokeWidth') &&
       (value.stroke === undefined || isCanonicalColor(value.stroke)) &&
@@ -1142,6 +1288,21 @@ function isElementRecord(value: unknown): value is ElementRecordV1 {
   if (value.kind === 'rect') {
     return isRectElement(value);
   }
+  if (value.kind === 'ellipse') {
+    return isEllipseElement(value);
+  }
+  if (value.kind === 'diamond') {
+    return isDiamondElement(value);
+  }
+  if (value.kind === 'line') {
+    return isLineElement(value);
+  }
+  if (value.kind === 'polyline') {
+    return isPolylineElement(value);
+  }
+  if (value.kind === 'arrow') {
+    return isArrowElement(value);
+  }
   if (value.kind === 'stroke') {
     return isStrokeElement(value);
   }
@@ -1183,6 +1344,86 @@ function isRectElement(value: unknown): value is RectElementV1 {
     isFill(value.fill) &&
     isCanonicalColor(value.stroke) &&
     isValidStrokeWidth(value.strokeWidth)
+  );
+}
+
+function isEllipseElement(value: unknown): value is EllipseElementV1 {
+  return isClosedShapeElement(value, 'ellipse');
+}
+
+function isDiamondElement(value: unknown): value is DiamondElementV1 {
+  return isClosedShapeElement(value, 'diamond');
+}
+
+function isClosedShapeElement(
+  value: unknown,
+  kind: 'ellipse' | 'diamond',
+): value is EllipseElementV1 | DiamondElementV1 {
+  return (
+    isRecord(value) &&
+    hasOnlyKeys(value, [
+      'kind',
+      'id',
+      'transform',
+      'x',
+      'y',
+      'width',
+      'height',
+      'fill',
+      'stroke',
+      'strokeWidth',
+    ]) &&
+    value.kind === kind &&
+    isNonEmptyString(value.id) &&
+    isAffine2D(value.transform) &&
+    isFiniteNumber(value.x) &&
+    isFiniteNumber(value.y) &&
+    isPositiveFiniteNumber(value.width) &&
+    isPositiveFiniteNumber(value.height) &&
+    isFill(value.fill) &&
+    isCanonicalColor(value.stroke) &&
+    isValidStrokeWidth(value.strokeWidth)
+  );
+}
+
+function isLineElement(value: unknown): value is LineElementV1 {
+  return isLineShapeElement(value, 'line', 2, 2);
+}
+
+function isPolylineElement(value: unknown): value is PolylineElementV1 {
+  return isLineShapeElement(value, 'polyline', 3);
+}
+
+function isArrowElement(value: unknown): value is ArrowElementV1 {
+  return isLineShapeElement(value, 'arrow', 2);
+}
+
+function isLineShapeElement(
+  value: unknown,
+  kind: 'line' | 'polyline' | 'arrow',
+  minimumPoints: number,
+  maximumPoints = Number.POSITIVE_INFINITY,
+): value is LineElementV1 | PolylineElementV1 | ArrowElementV1 {
+  if (!isRecord(value) || !Array.isArray(value.points)) {
+    return false;
+  }
+  const points = value.points;
+  return (
+    hasOnlyKeys(value, ['kind', 'id', 'transform', 'points', 'strokeWidth', 'stroke']) &&
+    value.kind === kind &&
+    isNonEmptyString(value.id) &&
+    isAffine2D(value.transform) &&
+    points.length >= minimumPoints &&
+    points.length <= maximumPoints &&
+    points.every(isVec2) &&
+    points.every(
+      (point, index) =>
+        index === 0 ||
+        point.x !== (points[index - 1] as Vec2).x ||
+        point.y !== (points[index - 1] as Vec2).y,
+    ) &&
+    isValidStrokeWidth(value.strokeWidth) &&
+    isCanonicalColor(value.stroke)
   );
 }
 
@@ -1576,7 +1817,20 @@ function isSelectionStyle(value: unknown): value is SelectionStyleV1 {
       isValidStrokeWidth(value.strokeWidth)
     );
   }
-  if (value.kind === 'stroke') {
+  if (value.kind === 'ellipse' || value.kind === 'diamond') {
+    return (
+      hasOnlyKeys(value, ['kind', 'fill', 'stroke', 'strokeWidth']) &&
+      isFill(value.fill) &&
+      isCanonicalColor(value.stroke) &&
+      isValidStrokeWidth(value.strokeWidth)
+    );
+  }
+  if (
+    value.kind === 'line' ||
+    value.kind === 'polyline' ||
+    value.kind === 'arrow' ||
+    value.kind === 'stroke'
+  ) {
     return (
       hasOnlyKeys(value, ['kind', 'stroke', 'strokeWidth']) &&
       isCanonicalColor(value.stroke) &&
