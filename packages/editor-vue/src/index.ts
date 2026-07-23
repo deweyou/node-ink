@@ -154,16 +154,18 @@ export const NodeInkEditor = defineComponent({
             'button',
             {
               type: 'button',
+              'data-tool': 'rectangle',
+              'aria-pressed': currentSnapshot.activeTool === 'rectangle',
               disabled: !isEditable,
-              onClick: () => dispatch({ type: 'create_rectangle' }),
+              onClick: () => dispatch({ type: 'set_tool', tool: 'rectangle' }),
             },
             'Rectangle',
           ),
-          shapeButton('Ellipse', 'create_ellipse', isEditable, dispatch),
-          shapeButton('Diamond', 'create_diamond', isEditable, dispatch),
-          shapeButton('Line', 'create_line', isEditable, dispatch),
-          shapeButton('Polyline', 'create_polyline', isEditable, dispatch),
-          shapeButton('Arrow', 'create_arrow', isEditable, dispatch),
+          shapeButton('Ellipse', 'ellipse', currentSnapshot.activeTool, isEditable, dispatch),
+          shapeButton('Diamond', 'diamond', currentSnapshot.activeTool, isEditable, dispatch),
+          shapeButton('Line', 'line', currentSnapshot.activeTool, isEditable, dispatch),
+          shapeButton('Polyline', 'polyline', currentSnapshot.activeTool, isEditable, dispatch),
+          shapeButton('Arrow', 'arrow', currentSnapshot.activeTool, isEditable, dispatch),
           h(
             'button',
             {
@@ -478,17 +480,8 @@ function selectionStyleKindLabel(kind: SelectionStyleV1['kind']): string {
 
 function shapeButton(
   label: string,
-  action: Extract<
-    EditorActionV1,
-    {
-      type:
-        | 'create_ellipse'
-        | 'create_diamond'
-        | 'create_line'
-        | 'create_polyline'
-        | 'create_arrow';
-    }
-  >['type'],
+  tool: Extract<EditorActionV1, { type: 'set_tool' }>['tool'],
+  activeTool: Extract<EditorActionV1, { type: 'set_tool' }>['tool'],
   isEditable: boolean,
   dispatch: (action: EditorActionV1) => void,
 ) {
@@ -496,8 +489,10 @@ function shapeButton(
     'button',
     {
       type: 'button',
+      'data-tool': tool,
+      'aria-pressed': activeTool === tool,
       disabled: !isEditable,
-      onClick: () => dispatch({ type: action }),
+      onClick: () => dispatch({ type: 'set_tool', tool }),
     },
     label,
   );

@@ -196,11 +196,23 @@ button[data-tool][aria-pressed='true'] {
   transform-origin: top left;
 }
 
-.nodeink-canvas[data-active-tool='freehand'] {
+.nodeink-canvas[data-active-tool='freehand'],
+.nodeink-canvas[data-active-tool='rectangle'],
+.nodeink-canvas[data-active-tool='ellipse'],
+.nodeink-canvas[data-active-tool='diamond'],
+.nodeink-canvas[data-active-tool='line'],
+.nodeink-canvas[data-active-tool='polyline'],
+.nodeink-canvas[data-active-tool='arrow'] {
   cursor: crosshair;
 }
 
-.nodeink-canvas[data-active-tool='freehand'] [data-source-element-id] {
+.nodeink-canvas[data-active-tool='freehand'] [data-source-element-id],
+.nodeink-canvas[data-active-tool='rectangle'] [data-source-element-id],
+.nodeink-canvas[data-active-tool='ellipse'] [data-source-element-id],
+.nodeink-canvas[data-active-tool='diamond'] [data-source-element-id],
+.nodeink-canvas[data-active-tool='line'] [data-source-element-id],
+.nodeink-canvas[data-active-tool='polyline'] [data-source-element-id],
+.nodeink-canvas[data-active-tool='arrow'] [data-source-element-id] {
   cursor: crosshair;
 }
 

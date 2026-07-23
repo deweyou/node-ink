@@ -80,12 +80,12 @@ describe('NodeInkEditor', () => {
       'set_tool',
       'set_tool',
       'set_tool',
-      'create_rectangle',
-      'create_ellipse',
-      'create_diamond',
-      'create_line',
-      'create_polyline',
-      'create_arrow',
+      'set_tool',
+      'set_tool',
+      'set_tool',
+      'set_tool',
+      'set_tool',
+      'set_tool',
       'move_active',
       'delete_selection',
       'undo',
@@ -93,6 +93,14 @@ describe('NodeInkEditor', () => {
       'zoom_out',
       'reset_camera',
       'zoom_in',
+    ]);
+    expect(controller.actions.slice(3, 9)).toEqual([
+      { type: 'set_tool', tool: 'rectangle' },
+      { type: 'set_tool', tool: 'ellipse' },
+      { type: 'set_tool', tool: 'diamond' },
+      { type: 'set_tool', tool: 'line' },
+      { type: 'set_tool', tool: 'polyline' },
+      { type: 'set_tool', tool: 'arrow' },
     ]);
     expect(target.querySelector('[role="alert"]')?.textContent).toContain(
       'recoverable engine error',

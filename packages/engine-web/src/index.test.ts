@@ -30,6 +30,8 @@ const wasm = vi.hoisted(() => {
     provideTextMetrics: vi.fn(),
     executeDiagramOperation: vi.fn(),
     handlePointerEvents: vi.fn(),
+    finishShapeCreation: vi.fn(),
+    removeShapeCreationPoint: vi.fn(),
     handleStrokeBatchJson: vi.fn(),
     handleStrokePoints: vi.fn(),
     resolveSceneProfile: vi.fn(),
@@ -74,6 +76,8 @@ describe('createWasmEngine', () => {
     wasm.handle.provideTextMetrics.mockReturnValue(validUpdate('text'));
     wasm.handle.executeDiagramOperation.mockReturnValue(diagramOperationResult());
     wasm.handle.handlePointerEvents.mockReturnValue(pointerUpdate());
+    wasm.handle.finishShapeCreation.mockReturnValue(pointerUpdate());
+    wasm.handle.removeShapeCreationPoint.mockReturnValue(update);
     wasm.handle.handleStrokeBatchJson.mockReturnValue(strokeUpdate());
     wasm.handle.handleStrokePoints.mockReturnValue(strokeUpdate());
     wasm.handle.resolveSceneProfile.mockReturnValue(sceneResolution());
@@ -234,6 +238,13 @@ describe('createWasmEngine', () => {
       processedEventCount: 1,
       didCommit: false,
     });
+    await expect(engine.finishShapeCreation()).resolves.toMatchObject({
+      processedEventCount: 1,
+      didCommit: false,
+    });
+    await expect(engine.removeShapeCreationPoint()).resolves.toMatchObject({
+      scene: { documentRevision: 0 },
+    });
     const strokeBatch = {
       pointerId: 7,
       sequenceStart: 11,
@@ -316,6 +327,8 @@ describe('createWasmEngine', () => {
       JSON.stringify(pointerEvents),
       'drag-1',
     );
+    expect(wasm.handle.finishShapeCreation).toHaveBeenCalledOnce();
+    expect(wasm.handle.removeShapeCreationPoint).toHaveBeenCalledOnce();
     expect(wasm.handle.handleStrokeBatchJson).toHaveBeenCalledWith(
       JSON.stringify(strokeBatch),
       'stroke-json',

@@ -1,8 +1,8 @@
 # NodeInk 产品与技术设计
 
-> 状态：Proposal v0.1 + Phase 1B basic-shape implementation
+> 状态：Proposal v0.1 + Phase 1B direct shape-creation implementation
 > 日期：2026-07-23
-> 阶段：Phase 0 与 Phase 1A 完成；Phase 1B 的编辑器基础与五种基础图形已形成共享闭环
+> 阶段：Phase 0 与 Phase 1A 完成；Phase 1B 的编辑器基础、五种基础图形与直接创建已形成共享闭环
 
 本目录是 NodeInk 第一阶段的设计基线。它将原始需求中的 22 项交付物按产品、架构、计划和决策四个关注点拆开，但保持同一套术语、边界和依赖方向。
 
@@ -55,6 +55,7 @@
 - [Phase 1A 样式与 Render Profile](planning/phase1a-style-profile.md)：记录有限样式预设、Schema V2 迁移、历史双 Profile 验证，以及当前 Clean-only 产品与内部兼容边界。
 - [Phase 1B 编辑器基础](planning/phase1b-editor-foundation.md)：记录多选、Affine 变换、层级、内部剪贴板、对齐、吸附与 Guide 契约。
 - [Phase 1B 基础图形](planning/phase1b-basic-shapes.md)：记录五种持久语义图形、Schema V4、Scene Path、共享样式与三宿主创建入口。
+- [Phase 1B 形状直接创建](planning/phase1b-shape-creation.md)：记录 Rust-owned 瞬态 preview、拖拽/点选完成规则、修饰键约束与零提交边界。
 - [S1 Pointer benchmark](benchmarks/phase0-s1-pointer.json)：记录 release WASM 环境、P50/P95/P99、字节、错序、commit 与 long task 基线。
 - [S2 Stroke benchmark](benchmarks/phase0-s2-stroke.json)：比较 JSON point 与 Float64Array batch-2/8/32 的延迟、吞吐、复制字节、Scene payload 与 DOM 更新。
 - [S3 Sketch determinism](benchmarks/phase0-s3-sketch.json)：记录 1,000 次稳定性、seed/profile 差异及 Native/WASM canonical hash 对照。
@@ -89,4 +90,4 @@
 - [Vite+ Run](https://viteplus.dev/guide/run)：自定义任务、依赖顺序和缓存边界。
 
 ---
-*Last updated: 2026-07-23 | Reason: record the Phase 1B basic-shape semantic slice*
+*Last updated: 2026-07-23 | Reason: record the Phase 1B direct shape-creation slice*

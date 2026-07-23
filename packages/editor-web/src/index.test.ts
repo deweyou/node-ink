@@ -832,6 +832,22 @@ describe('EditorWebController', () => {
     expect(controller.getSnapshot().activeTool).toBe('select');
   });
 
+  it('routes shape pointers and polyline completion through the shared engine port', async () => {
+    const engine = new StubEngine();
+    const controller = new EditorWebController({ engine, renderer: new StubRenderer() });
+    await controller.mount(document.createElement('div'));
+
+    await controller.dispatch({ type: 'set_tool', tool: 'rectangle' });
+    await controller.dispatch({ type: 'pointer_events', events: [pointerEvent('down', 1)] });
+    expect(engine.pointerBatches).toHaveLength(1);
+
+    await controller.dispatch({ type: 'set_tool', tool: 'polyline' });
+    await controller.dispatch({ type: 'finish_shape_creation' });
+    await controller.dispatch({ type: 'remove_shape_creation_point' });
+    expect(engine.finishShapeCalls).toBe(1);
+    expect(engine.removeShapePointCalls).toBe(1);
+  });
+
   it('creates fixed-font multiline text after IME composition and measures it without another document commit', async () => {
     const engine = new StubEngine();
     const persistence = new StubPersistence();
@@ -1770,6 +1786,8 @@ class StubEngine implements EnginePortV1 {
   executeError: unknown = null;
   undoCalls = 0;
   redoCalls = 0;
+  finishShapeCalls = 0;
+  removeShapePointCalls = 0;
   disposeCalls = 0;
   readonly cameraActions: CameraActionV1[] = [];
   readonly setCameras: CameraV1[] = [];
@@ -1793,7 +1811,7 @@ class StubEngine implements EnginePortV1 {
   #textMeasured = false;
   #selectedElementIds: string[] = [];
   #selectedElementId: string | null = null;
-  #activeTool: 'select' | 'freehand' | 'text' = 'select';
+  #activeTool: EngineUpdateV1['activeTool'] = 'select';
   #canRedo = false;
 
   constructor(rectangleId: string | null = null) {
@@ -1969,7 +1987,7 @@ class StubEngine implements EnginePortV1 {
     return this.update(changedElementIds);
   }
 
-  async setActiveTool(tool: 'select' | 'freehand' | 'text'): Promise<EngineUpdateV1> {
+  async setActiveTool(tool: EngineUpdateV1['activeTool']): Promise<EngineUpdateV1> {
     this.#activeTool = tool;
     this.#selectedElementId = null;
     this.#selectedElementIds = [];
@@ -2035,6 +2053,21 @@ class StubEngine implements EnginePortV1 {
       ignoredEventCount: 0,
       didCommit: false,
     };
+  }
+
+  async finishShapeCreation(): Promise<PointerUpdateV1> {
+    this.finishShapeCalls += 1;
+    return {
+      update: this.update(),
+      processedEventCount: 0,
+      ignoredEventCount: 0,
+      didCommit: false,
+    };
+  }
+
+  async removeShapeCreationPoint(): Promise<EngineUpdateV1> {
+    this.removeShapePointCalls += 1;
+    return this.update();
   }
 
   async handleStrokeBatch(
@@ -2125,13 +2158,36 @@ class StubEngine implements EnginePortV1 {
   }
 
   serializeDocument() {
+    const rectangle = this.#rectangleId
+      ? {
+          kind: 'rect' as const,
+          id: this.#rectangleId,
+          x: 80,
+          y: 72,
+          width: 176,
+          height: 104,
+          fill: this.#rectangleStyle.fill,
+          stroke: this.#rectangleStyle.stroke,
+          strokeWidth: this.#rectangleStyle.strokeWidth,
+          transform: identityTransform(),
+        }
+      : null;
+    const text = this.#textElement;
+    const elements = {
+      ...(rectangle ? { [rectangle.id]: rectangle } : {}),
+      ...(text ? { [text.id]: text } : {}),
+    };
     const document = {
       schemaVersion: 4 as const,
       documentId: 'doc-1',
       revision: this.#revision,
       renderProfile: this.#renderProfile,
-      rootOrder: this.#rectangleId ? [this.#rectangleId] : [],
-      elements: {},
+      rootOrder: [
+        ...[this.#rectangleId, text?.id].filter(
+          (elementId): elementId is string => elementId !== null && elementId !== undefined,
+        ),
+      ],
+      elements,
     };
     return {
       canonicalPayload: JSON.stringify(document),

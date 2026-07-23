@@ -7,6 +7,26 @@ pub enum EditorToolV1 {
     Select,
     Freehand,
     Text,
+    Rectangle,
+    Ellipse,
+    Diamond,
+    Line,
+    Polyline,
+    Arrow,
+}
+
+impl EditorToolV1 {
+    pub(crate) fn is_shape_creation_tool(self) -> bool {
+        matches!(
+            self,
+            Self::Rectangle
+                | Self::Ellipse
+                | Self::Diamond
+                | Self::Line
+                | Self::Polyline
+                | Self::Arrow
+        )
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default)]

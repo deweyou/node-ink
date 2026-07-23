@@ -56,6 +56,8 @@ interface WasmEngineHandle {
   provideTextMetrics(snapshotJson: string): string;
   executeDiagramOperation(batchJson: string): string;
   handlePointerEvents(eventsJson: string, commandId: string): string;
+  finishShapeCreation(): string;
+  removeShapeCreationPoint(): string;
   handleStrokeBatchJson(batchJson: string, commandId: string): string;
   handleStrokePoints(
     pointerId: number,
@@ -215,6 +217,22 @@ class WasmEnginePort implements EnginePortV1 {
       return parsePointerUpdate(
         this.requireHandle().handlePointerEvents(JSON.stringify(events), commandId),
       );
+    } catch (error) {
+      throw normalizeEngineError(error);
+    }
+  }
+
+  async finishShapeCreation(): Promise<PointerUpdateV1> {
+    try {
+      return parsePointerUpdate(this.requireHandle().finishShapeCreation());
+    } catch (error) {
+      throw normalizeEngineError(error);
+    }
+  }
+
+  async removeShapeCreationPoint(): Promise<EngineUpdateV1> {
+    try {
+      return parseEngineUpdate(this.requireHandle().removeShapeCreationPoint());
     } catch (error) {
       throw normalizeEngineError(error);
     }

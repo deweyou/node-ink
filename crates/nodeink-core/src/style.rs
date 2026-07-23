@@ -4,6 +4,7 @@ pub const DEFAULT_RECTANGLE_FILL_COLOR: &str = "#d1fae5";
 pub const DEFAULT_RECTANGLE_STROKE_COLOR: &str = "#047857";
 pub const DEFAULT_INK_COLOR: &str = "#0f172a";
 pub const DEFAULT_RECTANGLE_STROKE_WIDTH: f64 = 2.0;
+pub const DEFAULT_LINE_STROKE_WIDTH: f64 = 2.0;
 pub const DEFAULT_STROKE_WIDTH: f64 = 3.0;
 
 const MIN_STROKE_WIDTH: f64 = 0.1;

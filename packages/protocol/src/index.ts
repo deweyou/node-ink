@@ -318,7 +318,16 @@ export interface HistoryStateV1 {
   canRedo: boolean;
 }
 
-export type EditorToolV1 = 'select' | 'freehand' | 'text';
+export type EditorToolV1 =
+  | 'select'
+  | 'freehand'
+  | 'text'
+  | 'rectangle'
+  | 'ellipse'
+  | 'diamond'
+  | 'line'
+  | 'polyline'
+  | 'arrow';
 
 export interface ToolStateV1 {
   activeTool: EditorToolV1;
@@ -625,6 +634,8 @@ export interface EnginePortV1 {
     events: NormalizedPointerEventV1[],
     commandId: string,
   ): Promise<PointerUpdateV1>;
+  finishShapeCreation(): Promise<PointerUpdateV1>;
+  removeShapeCreationPoint(): Promise<EngineUpdateV1>;
   handleStrokeBatch(
     batch: StrokeInputBatchV1,
     commandId: string,
@@ -1234,7 +1245,17 @@ function isPointerModifiers(value: unknown): value is PointerModifiersV1 {
 }
 
 function isEditorTool(value: unknown): value is EditorToolV1 {
-  return value === 'select' || value === 'freehand' || value === 'text';
+  return (
+    value === 'select' ||
+    value === 'freehand' ||
+    value === 'text' ||
+    value === 'rectangle' ||
+    value === 'ellipse' ||
+    value === 'diamond' ||
+    value === 'line' ||
+    value === 'polyline' ||
+    value === 'arrow'
+  );
 }
 
 function isNodeInkDocument(value: unknown): value is NodeInkDocumentV1 {
