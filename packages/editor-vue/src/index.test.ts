@@ -301,6 +301,16 @@ describe('NodeInkEditor', () => {
     expect(button(target, 'Draw').disabled).toBe(true);
     expect(button(target, 'Text').disabled).toBe(true);
     expect(button(target, '100%').disabled).toBe(false);
+
+    controller.setSnapshot({
+      ...controller.getSnapshot(),
+      readonlyReason: 'held_elsewhere',
+      recovery: 'head',
+      takeoverAvailable: true,
+    });
+    await nextTick();
+    button(target, '接管编辑权').click();
+    expect(controller.actions.at(-1)).toEqual({ type: 'request_takeover' });
   });
 
   it('unsubscribes and disposes the controller once on unmount', async () => {
@@ -373,6 +383,9 @@ class StubController implements EditorWebControllerV1 {
     saveErrorMessage: null,
     documentAccess: 'writer',
     readonlyReason: null,
+    takeoverAvailable: false,
+    takeoverStatus: 'idle',
+    takeoverErrorMessage: null,
     recovery: 'blank',
     camera: { x: 0, y: 0, zoom: 1 },
     cameraZoomPercent: 100,
@@ -405,6 +418,8 @@ class StubController implements EditorWebControllerV1 {
     this.actions.push(action);
     return { ok: true, snapshot: this.#snapshot };
   }
+
+  async relinquishDocument(): Promise<void> {}
 
   dispose(): void {
     this.disposeCalls += 1;

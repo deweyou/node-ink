@@ -430,7 +430,8 @@ button[data-tool][aria-pressed='true'] {
 
 .nodeink-notice {
   position: absolute;
-  top: 16px;
+  z-index: 5;
+  top: 64px;
   left: 16px;
   max-width: 420px;
   margin: 0;
@@ -440,6 +441,16 @@ button[data-tool][aria-pressed='true'] {
   color: var(--ui-color-text-muted);
   background: color-mix(in srgb, var(--ui-color-surface) 96%, transparent);
   font-size: 13px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.nodeink-notice button {
+  min-height: 30px;
+  padding-inline: 10px;
+  color: var(--ui-color-brand-text);
+  white-space: nowrap;
 }
 
 .nodeink-benchmark {

@@ -14,6 +14,7 @@ NodeInk is a local-first, desktop Web canvas whose persistent semantics live in 
 | [docs/planning/phase0-vertical-slice.md](docs/planning/phase0-vertical-slice.md)               | Implemented Phase 0 boundary and its verification evidence       |
 | [docs/planning/phase1a-persistence-recovery.md](docs/planning/phase1a-persistence-recovery.md) | Integrated local document startup, autosave, recovery, and lease |
 | [docs/planning/phase1a-selection-tool.md](docs/planning/phase1a-selection-tool.md)             | Rust-owned single selection, hit testing, move, and delete       |
+| [docs/planning/phase1b-lease-takeover.md](docs/planning/phase1b-lease-takeover.md)             | Explicit same-origin writer hand-off and verified reload         |
 | [docs/.state.md](docs/.state.md)                                                               | Last memory review and active risks                              |
 | [docs/.todo.md](docs/.todo.md)                                                                 | Prioritized repository-memory follow-ups                         |
 

@@ -5,6 +5,7 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
+    "./document-takeover": "./src/document-takeover.ts",
     "./local-document": "./src/local-document.ts"
   },
   "dependencies": {

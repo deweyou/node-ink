@@ -28,7 +28,11 @@ import type {
   TextRunV1,
 } from '@nodeink-internal/protocol';
 
-import { EditorWebController, getEditorCameraPresentation } from './index';
+import {
+  EditorWebController,
+  getEditorCameraPresentation,
+  getEditorPersistencePresentation,
+} from './index';
 import type {
   ClipboardPortV1,
   EditorCameraPersistencePortV1,
@@ -1270,6 +1274,254 @@ describe('EditorWebController', () => {
     expect(onDispose).toHaveBeenCalledOnce();
   });
 
+  it('flushes the latest revision before relinquishing the writer lease', async () => {
+    const persistence = new StubPersistence();
+    persistence.setSnapshot({
+      status: 'dirty',
+      persistedRevision: 0,
+      pendingRevision: 1,
+      errorMessage: null,
+    });
+    persistence.flushSnapshot = {
+      status: 'saved',
+      persistedRevision: 1,
+      pendingRevision: 1,
+      errorMessage: null,
+    };
+    const release = vi.fn(async () => {
+      expect(persistence.getSnapshot().status).toBe('saved');
+    });
+    const controller = new EditorWebController({
+      engine: new StubEngine(),
+      renderer: new StubRenderer(),
+      persistence,
+      onRelinquishDocument: release,
+    });
+    await controller.mount(document.createElement('div'));
+
+    await controller.relinquishDocument();
+
+    expect(persistence.flushCalls).toBe(1);
+    expect(release).toHaveBeenCalledOnce();
+    expect(controller.getSnapshot()).toMatchObject({
+      documentAccess: 'readonly',
+      readonlyReason: 'taken_over',
+      saveStatus: 'readonly',
+    });
+    await expect(controller.relinquishDocument()).resolves.toBeUndefined();
+    expect(release).toHaveBeenCalledOnce();
+    await expect(controller.dispatch({ type: 'create_rectangle' })).resolves.toMatchObject({
+      ok: false,
+    });
+    await expect(
+      controller.dispatch({
+        type: 'camera_action',
+        action: { type: 'pan_by', delta: { x: 4, y: 2 } },
+      }),
+    ).resolves.toMatchObject({ ok: true });
+  });
+
+  it('keeps the writer lease when saving or an active edit blocks takeover', async () => {
+    const persistence = new StubPersistence();
+    persistence.setSnapshot({
+      status: 'save_failed',
+      persistedRevision: 0,
+      pendingRevision: 1,
+      errorMessage: 'quota exceeded',
+    });
+    const release = vi.fn(async () => undefined);
+    const controller = new EditorWebController({
+      engine: new StubEngine(),
+      renderer: new StubRenderer(),
+      persistence,
+      onRelinquishDocument: release,
+    });
+    await controller.mount(document.createElement('div'));
+
+    await expect(controller.relinquishDocument()).rejects.toThrow('保存失败：quota exceeded');
+    expect(release).not.toHaveBeenCalled();
+    expect(controller.getSnapshot().documentAccess).toBe('writer');
+
+    persistence.setSnapshot({
+      status: 'saved',
+      persistedRevision: 1,
+      pendingRevision: 1,
+      errorMessage: null,
+    });
+    await controller.dispatch({ type: 'pointer_events', events: [pointerEvent('down', 1)] });
+    await expect(controller.relinquishDocument()).rejects.toThrow('当前页面正在编辑');
+    expect(release).not.toHaveBeenCalled();
+  });
+
+  it('requests cooperative takeover and reloads only after acknowledgement', async () => {
+    const order: string[] = [];
+    const controller = new EditorWebController({
+      engine: new StubEngine(),
+      renderer: new StubRenderer(),
+      documentAccess: 'readonly',
+      readonlyReason: 'held_elsewhere',
+      requestDocumentTakeover: async () => {
+        order.push('acknowledged');
+      },
+      reloadDocument: () => {
+        order.push('reload');
+      },
+    });
+    await controller.mount(document.createElement('div'));
+
+    const result = await controller.dispatch({ type: 'request_takeover' });
+
+    expect(result.ok).toBe(true);
+    expect(order).toEqual(['acknowledged', 'reload']);
+    expect(result.snapshot).toMatchObject({
+      takeoverAvailable: true,
+      takeoverStatus: 'reloading',
+      takeoverErrorMessage: null,
+    });
+  });
+
+  it('keeps a contender readonly when a takeover request times out', async () => {
+    const timeout = Object.assign(new Error('timeout'), { code: 'request_timeout' });
+    const reload = vi.fn();
+    const controller = new EditorWebController({
+      engine: new StubEngine(),
+      renderer: new StubRenderer(),
+      documentAccess: 'readonly',
+      readonlyReason: 'held_elsewhere',
+      requestDocumentTakeover: async () => Promise.reject(timeout),
+      reloadDocument: reload,
+    });
+    await controller.mount(document.createElement('div'));
+
+    const result = await controller.dispatch({ type: 'request_takeover' });
+
+    expect(result).toMatchObject({
+      ok: false,
+      snapshot: {
+        documentAccess: 'readonly',
+        takeoverStatus: 'failed',
+        takeoverErrorMessage: '另一页面未响应接管请求，请结束正在进行的操作后重试。',
+      },
+    });
+    expect(reload).not.toHaveBeenCalled();
+  });
+
+  it('rejects relinquish without a writer release port or a fully persisted revision', async () => {
+    const withoutRelease = new EditorWebController({
+      engine: new StubEngine(),
+      renderer: new StubRenderer(),
+    });
+    await withoutRelease.mount(document.createElement('div'));
+    await expect(withoutRelease.relinquishDocument()).rejects.toThrow(
+      '当前宿主未提供安全的编辑权释放能力',
+    );
+
+    const readonly = new EditorWebController({
+      engine: new StubEngine(),
+      renderer: new StubRenderer(),
+      documentAccess: 'readonly',
+      readonlyReason: 'held_elsewhere',
+    });
+    await readonly.mount(document.createElement('div'));
+    await expect(readonly.relinquishDocument()).rejects.toThrow('当前页面没有可让出的编辑权');
+
+    const persistence = new StubPersistence();
+    persistence.setSnapshot({
+      status: 'dirty',
+      persistedRevision: 0,
+      pendingRevision: 1,
+      errorMessage: null,
+    });
+    const release = vi.fn();
+    const pending = new EditorWebController({
+      engine: new StubEngine(),
+      renderer: new StubRenderer(),
+      persistence,
+      onRelinquishDocument: release,
+    });
+    await pending.mount(document.createElement('div'));
+    await expect(pending.relinquishDocument()).rejects.toThrow('最新改动尚未安全保存');
+    expect(release).not.toHaveBeenCalled();
+  });
+
+  it('ignores duplicate takeover actions while the acknowledged page is reloading', async () => {
+    const controller = new EditorWebController({
+      engine: new StubEngine(),
+      renderer: new StubRenderer(),
+      documentAccess: 'readonly',
+      readonlyReason: 'held_elsewhere',
+      requestDocumentTakeover: async () => undefined,
+      reloadDocument: () => undefined,
+    });
+    await controller.mount(document.createElement('div'));
+
+    await expect(controller.dispatch({ type: 'request_takeover' })).resolves.toMatchObject({
+      ok: true,
+    });
+    await expect(controller.dispatch({ type: 'request_takeover' })).resolves.toMatchObject({
+      ok: false,
+      snapshot: { takeoverStatus: 'reloading' },
+    });
+  });
+
+  it('maps every takeover presentation state through the shared host contract', async () => {
+    const controller = new EditorWebController({
+      engine: new StubEngine(),
+      renderer: new StubRenderer(),
+      documentAccess: 'readonly',
+      readonlyReason: 'held_elsewhere',
+      requestDocumentTakeover: async () => undefined,
+      reloadDocument: () => undefined,
+    });
+    await controller.mount(document.createElement('div'));
+    const snapshot = controller.getSnapshot();
+
+    expect(
+      getEditorPersistencePresentation({ ...snapshot, takeoverStatus: 'requesting' }),
+    ).toMatchObject({
+      notice: '正在请求另一页面保存并让出编辑权…',
+      canRequestTakeover: false,
+    });
+    expect(
+      getEditorPersistencePresentation({ ...snapshot, takeoverStatus: 'reloading' }),
+    ).toMatchObject({
+      notice: '编辑权已让出，正在重新载入最新版本…',
+      canRequestTakeover: false,
+    });
+    expect(
+      getEditorPersistencePresentation({
+        ...snapshot,
+        takeoverStatus: 'failed',
+        takeoverErrorMessage: 'failed',
+      }),
+    ).toMatchObject({
+      canRequestTakeover: true,
+      takeoverLabel: '重新接管',
+    });
+    expect(
+      getEditorPersistencePresentation({
+        ...snapshot,
+        readonlyReason: 'taken_over',
+        takeoverAvailable: false,
+      }).notice,
+    ).toBe('编辑权已转移到另一页面，本页面保持只读。');
+    expect(
+      getEditorPersistencePresentation({
+        ...snapshot,
+        readonlyReason: 'unsupported',
+        takeoverAvailable: false,
+      }).notice,
+    ).toBe('当前浏览器无法保证安全写入，已只读打开。');
+    expect(
+      getEditorPersistencePresentation({
+        ...snapshot,
+        readonlyReason: null,
+        recovery: 'migrated_head',
+        takeoverAvailable: false,
+      }).notice,
+    ).toBe('文档已安全升级并保存。');
+  });
+
   it('keeps recovered fallbacks readonly and rejects document actions', async () => {
     const engine = new StubEngine('existing-rect');
     const controller = new EditorWebController({
@@ -1304,6 +1556,7 @@ class StubPersistence implements EditorPersistencePortV1 {
   flushCalls = 0;
   disposeCalls = 0;
   flushPromise: Promise<void> | null = null;
+  flushSnapshot: EditorPersistenceSnapshotV1 | null = null;
   #snapshot: EditorPersistenceSnapshotV1 = {
     status: 'saved',
     persistedRevision: 0,
@@ -1337,6 +1590,9 @@ class StubPersistence implements EditorPersistencePortV1 {
   async flush(): Promise<void> {
     this.flushCalls += 1;
     await this.flushPromise;
+    if (this.flushSnapshot) {
+      this.setSnapshot(this.flushSnapshot);
+    }
   }
 
   dispose(): void {

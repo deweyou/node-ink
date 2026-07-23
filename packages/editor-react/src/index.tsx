@@ -42,7 +42,10 @@ export function NodeInkEditor({ controller, hostLabel = 'React adapter' }: NodeI
   const camera = getEditorCameraPresentation(snapshot);
   const persistence = getEditorPersistencePresentation(snapshot);
   const visibleError =
-    snapshot.errorMessage ?? snapshot.saveErrorMessage ?? snapshot.cameraSaveErrorMessage;
+    snapshot.errorMessage ??
+    snapshot.saveErrorMessage ??
+    snapshot.cameraSaveErrorMessage ??
+    snapshot.takeoverErrorMessage;
   const retryAction = snapshot.errorMessage
     ? null
     : snapshot.saveErrorMessage
@@ -189,7 +192,15 @@ export function NodeInkEditor({ controller, hostLabel = 'React adapter' }: NodeI
         </output>
         {persistence.notice ? (
           <p className="nodeink-notice" role="status">
-            {persistence.notice}
+            <span>{persistence.notice}</span>
+            {persistence.canRequestTakeover ? (
+              <button
+                type="button"
+                onClick={() => void controller.dispatch({ type: 'request_takeover' })}
+              >
+                {persistence.takeoverLabel}
+              </button>
+            ) : null}
           </p>
         ) : null}
         {visibleError ? (
@@ -199,7 +210,9 @@ export function NodeInkEditor({ controller, hostLabel = 'React adapter' }: NodeI
                 ? `保存失败：${visibleError}`
                 : snapshot.cameraSaveErrorMessage
                   ? `视图位置保存失败：${visibleError}`
-                  : visibleError}
+                  : snapshot.takeoverErrorMessage
+                    ? `接管失败：${visibleError}`
+                    : visibleError}
             </span>
             {retryAction ? (
               <button type="button" onClick={() => void controller.dispatch({ type: retryAction })}>

@@ -8,6 +8,10 @@ import {
   type LockManagerPortV1,
 } from '@nodeink-internal/persistence-web';
 import {
+  DocumentTakeoverCoordinatorV1,
+  type BroadcastChannelPortV1,
+} from '@nodeink-internal/persistence-web/document-takeover';
+import {
   DocumentAutosaveCoordinatorV1,
   openLocalDocumentV1,
 } from '@nodeink-internal/persistence-web/local-document';
@@ -21,6 +25,7 @@ export async function createController() {
   let store: IndexedDbSnapshotStoreV1 | null = null;
   let cameraStore: IndexedDbCameraStoreV1 | null = null;
   let migrationEngine: Awaited<ReturnType<typeof createWasmEngine>> | null = null;
+  let takeoverCoordinator: DocumentTakeoverCoordinatorV1 | null = null;
   try {
     await loadCanvasFont();
     store = await IndexedDbSnapshotStoreV1.open(localDatabaseName);
@@ -72,10 +77,17 @@ export async function createController() {
     const openedRelease = opened.release;
     const openStore = store;
     const openCameraStore = cameraStore;
-    store = null;
-    cameraStore = null;
-    migrationEngine = null;
-    return new EditorWebController({
+    takeoverCoordinator =
+      typeof BroadcastChannel === 'undefined'
+        ? null
+        : new DocumentTakeoverCoordinatorV1({
+            documentId: localDocumentId,
+            createChannel: (name) =>
+              new BroadcastChannel(name) as unknown as BroadcastChannelPortV1,
+          });
+    const openTakeoverCoordinator = takeoverCoordinator;
+    let detachTakeoverHandler: (() => void) | null = null;
+    const controller = new EditorWebController({
       engine,
       renderer: new SvgRenderer(),
       ...(persistenceCoordinator ? { persistence: persistenceCoordinator } : {}),
@@ -83,14 +95,37 @@ export async function createController() {
       documentAccess,
       readonlyReason: isDiagnostic ? 'readonly_diagnostic' : opened.readonlyReason,
       recovery: opened.recovery,
+      ...(documentAccess === 'readonly' &&
+      !isDiagnostic &&
+      opened.readonlyReason === 'held_elsewhere' &&
+      openTakeoverCoordinator
+        ? {
+            requestDocumentTakeover: () => openTakeoverCoordinator.requestTakeover(),
+            reloadDocument: () => window.location.reload(),
+          }
+        : {}),
+      ...(documentAccess === 'writer' ? { onRelinquishDocument: () => openedRelease() } : {}),
       onDispose: async () => {
+        detachTakeoverHandler?.();
+        openTakeoverCoordinator?.dispose();
         await openedRelease();
         openMigrationEngine.dispose();
         openCameraStore.close();
         openStore.close();
       },
     });
+    if (documentAccess === 'writer' && openTakeoverCoordinator) {
+      detachTakeoverHandler = openTakeoverCoordinator.handleRequests(() =>
+        controller.relinquishDocument(),
+      );
+    }
+    store = null;
+    cameraStore = null;
+    migrationEngine = null;
+    takeoverCoordinator = null;
+    return controller;
   } catch (error) {
+    takeoverCoordinator?.dispose();
     migrationEngine?.dispose();
     cameraStore?.close();
     store?.close();

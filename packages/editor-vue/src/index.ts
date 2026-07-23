@@ -94,7 +94,8 @@ export const NodeInkEditor = defineComponent({
       const visibleError =
         currentSnapshot.errorMessage ??
         currentSnapshot.saveErrorMessage ??
-        currentSnapshot.cameraSaveErrorMessage;
+        currentSnapshot.cameraSaveErrorMessage ??
+        currentSnapshot.takeoverErrorMessage;
       const retryAction = currentSnapshot.errorMessage
         ? null
         : currentSnapshot.saveErrorMessage
@@ -249,7 +250,19 @@ export const NodeInkEditor = defineComponent({
             h('span', `${currentSnapshot.activeTool} tool`),
           ]),
           persistence.notice
-            ? h('p', { class: 'nodeink-notice', role: 'status' }, persistence.notice)
+            ? h('p', { class: 'nodeink-notice', role: 'status' }, [
+                h('span', persistence.notice),
+                persistence.canRequestTakeover
+                  ? h(
+                      'button',
+                      {
+                        type: 'button',
+                        onClick: () => dispatch({ type: 'request_takeover' }),
+                      },
+                      persistence.takeoverLabel,
+                    )
+                  : null,
+              ])
             : null,
           visibleError
             ? h('p', { class: 'nodeink-error', role: 'alert' }, [
@@ -259,7 +272,9 @@ export const NodeInkEditor = defineComponent({
                     ? `保存失败：${visibleError}`
                     : currentSnapshot.cameraSaveErrorMessage
                       ? `视图位置保存失败：${visibleError}`
-                      : visibleError,
+                      : currentSnapshot.takeoverErrorMessage
+                        ? `接管失败：${visibleError}`
+                        : visibleError,
                 ),
                 retryAction
                   ? h(
