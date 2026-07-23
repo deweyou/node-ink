@@ -13,14 +13,16 @@ flowchart LR
 
 > 日期：2026-07-23
 > 状态：已实现并通过完整 gate 与真实 WASM 三宿主验收
-> 边界：默认位置快捷创建、整元素编辑与有限样式；不包含拖拽创建、顶点编辑、Connector 绑定/路由或 Sketch v2
+> 边界：直接拖拽/点选创建、整元素编辑与有限样式；不包含持久顶点编辑、Connector 绑定/路由或 Sketch v2
 
 ## 用户可见行为
 
-- React、Vue 与 Vanilla 工具栏均提供 Ellipse、Diamond、Line、Polyline、Arrow；点击后立即创建默认几何并回到 Select。
+- React、Vue 与 Vanilla 工具栏提供 Rectangle、Ellipse、Diamond、Line、Polyline、Arrow；点击只进入创建工具，不再自动生成默认位置图形。
+- Rectangle/Ellipse/Diamond/Line/Arrow 有效拖拽后一次提交、选中新元素并回到 Select；3px 以下拖拽不创建。框形支持 `Shift` 等边与 `Alt` 中心展开，Line/Arrow 支持 `Shift` 45° 吸附。
+- Polyline 点选顶点，双击或 `Enter` 完成，`Backspace` 退点，`Escape` 取消；至少三个固定点前不会提交。
 - 新图形创建后与 Rectangle 共用选择框、移动、缩放、旋转、Group、层级、剪贴板、对齐、吸附、删除与 Undo/Redo。
 - Ellipse 与 Diamond 的上下文样式面板提供 fill、stroke 与 width；Line、Polyline 与 Arrow 提供 stroke 与 width。
-- 当前只编辑完整图形。Line/Polyline/Arrow 的顶点手柄、折线追加节点和箭头端点拖动不在本切片中。
+- 当前只编辑完整图形。创建完成后的 Line/Polyline/Arrow 顶点手柄、折线追加节点和箭头端点拖动不在本切片中。
 
 ## 持久语义
 
@@ -52,15 +54,15 @@ flowchart LR
 ## 验收
 
 - `pnpm check`：83 files 格式、lint、类型与 framework boundary 通过。
-- `pnpm test`：20 个 Web test files、417 tests 通过。
-- `pnpm coverage`：Web statements 95.65%、branches 90.98%、functions 95.87%、lines 95.92%；Rust 117 tests，regions 92.02%、functions 91.00%、lines 93.07%，所有逐文件门禁通过。
+- `pnpm test`：20 个 Web test files、426 tests 通过。
+- `pnpm coverage`：Web statements 95.34%、branches 90.73%、functions 95.70%、lines 95.60%；Rust 128 tests，regions 92.17%、functions 91.52%、lines 93.25%，所有逐文件门禁通过。
 - `pnpm exec vp run rust:check`：fmt、Clippy、Rust tests 与 doc tests 通过。
 - `pnpm build`：重新生成真实 WASM，并完成 React、Vue、Vanilla 三入口生产构建。
-- 真实 WASM 按顺序验收：
-  - Vanilla 从 `r409 / 3 elements` 各创建一种基础图形到 `r414 / 8 elements`；Arrow 修改为 blue/4px 并移动到 `(32,16)`，Undo `r418` 恢复 identity，Redo `r419` 恢复 transform，自动保存后刷新仍保持五种 path、样式与位置。
-  - React 从 verified `r419 / 8 elements` 各创建一种基础图形到 `r424 / 13 elements`，五个新 Scene path 与 Rust canonical path 一致并自动保存。
-  - Vue 从 verified `r424 / 13 elements` 各创建一种基础图形到 `r429 / 18 elements`，五个新 Scene path 一致并自动保存；最终 Vanilla 从 `r429` 恢复 18 个 path。
+- 真实 WASM 直接创建验收：
+  - Vanilla 在 `r458 / 22 elements` 上验证工具激活零提交、Shift 等边框形、Alt 中心椭圆、Shift 45° Line/Arrow、3px 以下 no-op，以及 Polyline 的退点/显式完成；六次有效创建到 `r464 / 28 elements`。
+  - 六次 Undo 恢复为 `r470 / 22 elements`，自动保存与刷新后仍为原文档，不残留验收图形。
+  - React 与 Vue 在同一 verified `r470 / 22 elements` 上分别验证 Shape 按钮只切换工具而不修改 Document；三宿主控制台均无错误。
 
 ---
 
-_Last updated: 2026-07-23 | Reason: record full gates and real-WASM parity for the basic-shape slice_
+_Last updated: 2026-07-23 | Reason: replace default-position creation with verified direct shape creation_

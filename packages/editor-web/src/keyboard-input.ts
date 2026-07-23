@@ -5,7 +5,8 @@ export type EditorShortcutAction =
   | 'escape'
   | 'select_tool'
   | 'freehand_tool'
-  | 'text_tool';
+  | 'text_tool'
+  | 'finish_shape_creation';
 
 export type EditorSelectionShortcutAction =
   | 'select_all'
@@ -123,6 +124,9 @@ function unmodifiedEditorAction(event: KeyboardEvent, key: string): EditorShortc
   }
   if (key === 'p') {
     return 'freehand_tool';
+  }
+  if (key === 'enter') {
+    return 'finish_shape_creation';
   }
   return key === 't' ? 'text_tool' : null;
 }

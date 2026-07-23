@@ -97,43 +97,55 @@ export function NodeInkEditor({ controller, hostLabel = 'React adapter' }: NodeI
         </button>
         <button
           type="button"
+          data-tool="rectangle"
+          aria-pressed={snapshot.activeTool === 'rectangle'}
           disabled={!isEditable}
-          onClick={() => void controller.dispatch({ type: 'create_rectangle' })}
+          onClick={() => void controller.dispatch({ type: 'set_tool', tool: 'rectangle' })}
         >
           Rectangle
         </button>
         <button
           type="button"
+          data-tool="ellipse"
+          aria-pressed={snapshot.activeTool === 'ellipse'}
           disabled={!isEditable}
-          onClick={() => void controller.dispatch({ type: 'create_ellipse' })}
+          onClick={() => void controller.dispatch({ type: 'set_tool', tool: 'ellipse' })}
         >
           Ellipse
         </button>
         <button
           type="button"
+          data-tool="diamond"
+          aria-pressed={snapshot.activeTool === 'diamond'}
           disabled={!isEditable}
-          onClick={() => void controller.dispatch({ type: 'create_diamond' })}
+          onClick={() => void controller.dispatch({ type: 'set_tool', tool: 'diamond' })}
         >
           Diamond
         </button>
         <button
           type="button"
+          data-tool="line"
+          aria-pressed={snapshot.activeTool === 'line'}
           disabled={!isEditable}
-          onClick={() => void controller.dispatch({ type: 'create_line' })}
+          onClick={() => void controller.dispatch({ type: 'set_tool', tool: 'line' })}
         >
           Line
         </button>
         <button
           type="button"
+          data-tool="polyline"
+          aria-pressed={snapshot.activeTool === 'polyline'}
           disabled={!isEditable}
-          onClick={() => void controller.dispatch({ type: 'create_polyline' })}
+          onClick={() => void controller.dispatch({ type: 'set_tool', tool: 'polyline' })}
         >
           Polyline
         </button>
         <button
           type="button"
+          data-tool="arrow"
+          aria-pressed={snapshot.activeTool === 'arrow'}
           disabled={!isEditable}
-          onClick={() => void controller.dispatch({ type: 'create_arrow' })}
+          onClick={() => void controller.dispatch({ type: 'set_tool', tool: 'arrow' })}
         >
           Arrow
         </button>

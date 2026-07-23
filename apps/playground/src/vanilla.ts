@@ -49,12 +49,12 @@ rootElement.innerHTML = `
       <button type="button" data-action="set_tool_select" data-tool="select" title="Select tool (V)">Select</button>
       <button type="button" data-action="set_tool_freehand" data-tool="freehand" title="Freehand tool (P)">Draw</button>
       <button type="button" data-action="set_tool_text" data-tool="text" title="Text tool (T)">Text</button>
-      <button type="button" data-action="create_rectangle">Rectangle</button>
-      <button type="button" data-action="create_ellipse">Ellipse</button>
-      <button type="button" data-action="create_diamond">Diamond</button>
-      <button type="button" data-action="create_line">Line</button>
-      <button type="button" data-action="create_polyline">Polyline</button>
-      <button type="button" data-action="create_arrow">Arrow</button>
+      <button type="button" data-action="set_tool_rectangle" data-tool="rectangle">Rectangle</button>
+      <button type="button" data-action="set_tool_ellipse" data-tool="ellipse">Ellipse</button>
+      <button type="button" data-action="set_tool_diamond" data-tool="diamond">Diamond</button>
+      <button type="button" data-action="set_tool_line" data-tool="line">Line</button>
+      <button type="button" data-action="set_tool_polyline" data-tool="polyline">Polyline</button>
+      <button type="button" data-action="set_tool_arrow" data-tool="arrow">Arrow</button>
       <button type="button" data-action="move_active">Move</button>
       <button type="button" data-action="delete_selection" data-danger="true">Delete</button>
       <button type="button" data-action="undo">Undo</button>
@@ -192,22 +192,30 @@ rootElement.addEventListener('click', (event) => {
     return;
   }
   const action = button.dataset.action;
-  if (action === 'create_rectangle') {
-    void controller.dispatch({ type: 'create_rectangle' });
-  } else if (
-    action === 'create_ellipse' ||
-    action === 'create_diamond' ||
-    action === 'create_line' ||
-    action === 'create_polyline' ||
-    action === 'create_arrow'
-  ) {
-    void controller.dispatch({ type: action });
-  } else if (action === 'set_tool_select') {
+  if (action === 'set_tool_select') {
     void controller.dispatch({ type: 'set_tool', tool: 'select' });
   } else if (action === 'set_tool_freehand') {
     void controller.dispatch({ type: 'set_tool', tool: 'freehand' });
   } else if (action === 'set_tool_text') {
     void controller.dispatch({ type: 'set_tool', tool: 'text' });
+  } else if (
+    action === 'set_tool_rectangle' ||
+    action === 'set_tool_ellipse' ||
+    action === 'set_tool_diamond' ||
+    action === 'set_tool_line' ||
+    action === 'set_tool_polyline' ||
+    action === 'set_tool_arrow'
+  ) {
+    void controller.dispatch({
+      type: 'set_tool',
+      tool: action.replace('set_tool_', '') as
+        | 'rectangle'
+        | 'ellipse'
+        | 'diamond'
+        | 'line'
+        | 'polyline'
+        | 'arrow',
+    });
   } else if (action === 'move_active') {
     void controller.dispatch({ type: 'move_active', delta: { x: 32, y: 16 } });
   } else if (action === 'delete_selection') {
@@ -336,12 +344,18 @@ function renderSnapshot(
   setPressed(root, 'select', snapshot.activeTool === 'select');
   setPressed(root, 'freehand', snapshot.activeTool === 'freehand');
   setPressed(root, 'text', snapshot.activeTool === 'text');
-  setDisabled(root, 'create_rectangle', !isEditable);
-  setDisabled(root, 'create_ellipse', !isEditable);
-  setDisabled(root, 'create_diamond', !isEditable);
-  setDisabled(root, 'create_line', !isEditable);
-  setDisabled(root, 'create_polyline', !isEditable);
-  setDisabled(root, 'create_arrow', !isEditable);
+  setPressed(root, 'rectangle', snapshot.activeTool === 'rectangle');
+  setPressed(root, 'ellipse', snapshot.activeTool === 'ellipse');
+  setPressed(root, 'diamond', snapshot.activeTool === 'diamond');
+  setPressed(root, 'line', snapshot.activeTool === 'line');
+  setPressed(root, 'polyline', snapshot.activeTool === 'polyline');
+  setPressed(root, 'arrow', snapshot.activeTool === 'arrow');
+  setDisabled(root, 'set_tool_rectangle', !isEditable);
+  setDisabled(root, 'set_tool_ellipse', !isEditable);
+  setDisabled(root, 'set_tool_diamond', !isEditable);
+  setDisabled(root, 'set_tool_line', !isEditable);
+  setDisabled(root, 'set_tool_polyline', !isEditable);
+  setDisabled(root, 'set_tool_arrow', !isEditable);
   setDisabled(root, 'move_active', !isEditable || selectionCount === 0);
   setDisabled(root, 'delete_selection', !isEditable || selectionCount === 0);
   setDisabled(root, 'paste', !isEditable);

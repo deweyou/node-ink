@@ -177,6 +177,30 @@ describe('attachPointerInput', () => {
     expect(batches.map((batch) => batch[0]?.phase)).toEqual(['down', 'move', 'up']);
   });
 
+  it('forwards hover movement only when a multi-point tool requests it', () => {
+    const target = document.createElement('div');
+    mockBounds(target);
+    const batches: NormalizedPointerEventV1[][] = [];
+    let acceptsHover = false;
+    attachPointerInput(target, (events) => batches.push(events), {
+      shouldHandleHoverMove: () => acceptsHover,
+    });
+
+    target.dispatchEvent(pointerEvent('pointermove', { clientX: 20, clientY: 30 }));
+    acceptsHover = true;
+    target.dispatchEvent(pointerEvent('pointermove', { clientX: 40, clientY: 50, shiftKey: true }));
+
+    expect(batches).toMatchObject([
+      [
+        {
+          phase: 'move',
+          point: { x: 30, y: 30 },
+          modifiers: { shift: true },
+        },
+      ],
+    ]);
+  });
+
   it('finalizes the last visible gesture position after a DOM interruption', () => {
     const target = document.createElement('div');
     document.body.append(target);

@@ -599,6 +599,15 @@ describe('protocol V1 with schema V4 documents', () => {
     );
   });
 
+  it.each(['rectangle', 'ellipse', 'diamond', 'line', 'polyline', 'arrow'] as const)(
+    'accepts the %s shape creation tool',
+    (activeTool) => {
+      expect(parseEngineUpdate(JSON.stringify({ ...updateFixture(), activeTool })).activeTool).toBe(
+        activeTool,
+      );
+    },
+  );
+
   it.each([
     {},
     {

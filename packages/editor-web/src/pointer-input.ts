@@ -7,6 +7,7 @@ export type PointerBatchListener = (events: NormalizedPointerEventV1[]) => void;
 export interface PointerInputOptionsV1 {
   screenScale?: () => number;
   shouldHandleEvent?: (event: PointerEvent) => boolean;
+  shouldHandleHoverMove?: () => boolean;
   onDoubleClick?: (point: { x: number; y: number }) => void;
 }
 
@@ -41,6 +42,12 @@ export function attachPointerInput(
   };
   const handlePointerMove = (event: PointerEvent) => {
     if (!activePointers.has(event.pointerId)) {
+      if (
+        options.shouldHandleHoverMove?.() === true &&
+        options.shouldHandleEvent?.(event) !== false
+      ) {
+        emitNormalized(normalizeEvents([event], 'move', normalizer));
+      }
       return;
     }
     const coalescedEvents = event.getCoalescedEvents?.() ?? [];

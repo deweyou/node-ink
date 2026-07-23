@@ -107,6 +107,8 @@ export type EditorActionV1 =
   | { type: 'align'; alignment: AlignmentV1 }
   | { type: 'clear_selection' }
   | { type: 'escape' }
+  | { type: 'finish_shape_creation' }
+  | { type: 'remove_shape_creation_point' }
   | { type: 'set_tool'; tool: EditorToolV1 }
   | { type: 'begin_text_edit'; point: Vec2 }
   | { type: 'commit_text_edit'; value: string }
@@ -362,8 +364,11 @@ export class EditorWebController implements EditorWebControllerV1 {
               screenScale: () => this.#snapshot.camera.zoom,
               shouldHandleEvent: (event) =>
                 this.#cameraInput?.shouldHandleDocumentPointer(event) ?? true,
+              shouldHandleHoverMove: () => this.#snapshot.activeTool === 'polyline',
               onDoubleClick: (point) => {
-                if (this.#snapshot.activeTool === 'select' && !this.#textEditor) {
+                if (this.#snapshot.activeTool === 'polyline') {
+                  void this.dispatch({ type: 'finish_shape_creation' });
+                } else if (this.#snapshot.activeTool === 'select' && !this.#textEditor) {
                   void this.dispatch({ type: 'begin_text_edit', point });
                 }
               },
@@ -378,7 +383,7 @@ export class EditorWebController implements EditorWebControllerV1 {
             if (this.#snapshot.status !== 'ready' || !isAvailable) {
               return false;
             }
-            void this.dispatch(shortcutToEditorAction(action));
+            void this.dispatch(shortcutToEditorAction(action, this.#snapshot.activeTool));
             return true;
           })
         : null;
@@ -822,6 +827,20 @@ export class EditorWebController implements EditorWebControllerV1 {
       await this.copySelection();
       return { update: await this.#engine.currentUpdate() };
     }
+    if (action.type === 'finish_shape_creation') {
+      const pointerUpdate = await this.#engine.finishShapeCreation();
+      return {
+        update: pointerUpdate.update,
+        pointerMetrics: {
+          processedEventCount: pointerUpdate.processedEventCount,
+          ignoredEventCount: pointerUpdate.ignoredEventCount,
+          didCommit: pointerUpdate.didCommit,
+        },
+      };
+    }
+    if (action.type === 'remove_shape_creation_point') {
+      return { update: await this.#engine.removeShapeCreationPoint() };
+    }
     if (action.type === 'set_tool') {
       this.#freehandInput.reset();
       this.#activeDocumentPointerId = null;
@@ -1153,25 +1172,13 @@ export class EditorWebController implements EditorWebControllerV1 {
     this.#documentId = update.scene.documentId;
     const serializedDocument = this.#engine.serializeDocument().document;
     const semanticElementIds = Object.keys(serializedDocument.elements);
-    const sceneSourceElementIds = [
-      ...new Set(
-        update.scene.rootNodeIds.flatMap((nodeId) => {
-          const sourceElementId = update.scene.nodes[nodeId]?.sourceElementId;
-          return sourceElementId ? [sourceElementId] : [];
-        }),
-      ),
-    ];
-    this.#rootElementIds =
-      serializedDocument.rootOrder.length > 0
-        ? [...serializedDocument.rootOrder]
-        : sceneSourceElementIds;
+    this.#rootElementIds = [...serializedDocument.rootOrder];
     this.#snapshot = {
       ...this.#snapshot,
       status: 'ready',
       documentRevision: update.scene.documentRevision,
       sceneRevision: update.scene.sceneRevision,
-      elementCount:
-        semanticElementIds.length > 0 ? semanticElementIds.length : sceneSourceElementIds.length,
+      elementCount: semanticElementIds.length,
       activeElementId: update.selection.primaryElementId,
       selectedElementIds: [...update.selection.selectedElementIds],
       primaryElementId: update.selection.primaryElementId,
@@ -1241,14 +1248,21 @@ export class EditorWebController implements EditorWebControllerV1 {
     if (action === 'select_all') {
       return this.#rootElementIds.length > 0;
     }
+    if (action === 'finish_shape_creation') {
+      return this.#snapshot.activeTool === 'polyline';
+    }
     if (action === 'paste') {
       return true;
     }
     if (action === 'group_selection') {
       return this.#snapshot.selectedElementIds.length >= 2;
     }
+    if (action === 'delete_selection') {
+      return (
+        this.#snapshot.activeTool === 'polyline' || this.#snapshot.selectedElementIds.length > 0
+      );
+    }
     if (
-      action === 'delete_selection' ||
       action === 'copy_selection' ||
       action === 'cut_selection' ||
       action === 'ungroup_selection' ||
@@ -1549,7 +1563,10 @@ function defaultId(): string {
   return globalThis.crypto.randomUUID();
 }
 
-function shortcutToEditorAction(action: EditorShortcutActionV2): EditorActionV1 {
+function shortcutToEditorAction(
+  action: EditorShortcutActionV2,
+  activeTool: EditorToolV1,
+): EditorActionV1 {
   switch (action) {
     case 'select_tool':
       return { type: 'set_tool', tool: 'select' };
@@ -1557,6 +1574,12 @@ function shortcutToEditorAction(action: EditorShortcutActionV2): EditorActionV1 
       return { type: 'set_tool', tool: 'freehand' };
     case 'text_tool':
       return { type: 'set_tool', tool: 'text' };
+    case 'finish_shape_creation':
+      return { type: 'finish_shape_creation' };
+    case 'delete_selection':
+      return activeTool === 'polyline'
+        ? { type: 'remove_shape_creation_point' }
+        : { type: 'delete_selection' };
     case 'copy_selection':
       return { type: 'copy' };
     case 'cut_selection':

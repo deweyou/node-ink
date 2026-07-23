@@ -13,6 +13,8 @@ declare module '*nodeink_engine.js' {
     provideTextMetrics(snapshotJson: string): string;
     executeDiagramOperation(batchJson: string): string;
     handlePointerEvents(eventsJson: string, commandId: string): string;
+    finishShapeCreation(): string;
+    removeShapeCreationPoint(): string;
     handleStrokeBatchJson(batchJson: string, commandId: string): string;
     handleStrokePoints(
       pointerId: number,

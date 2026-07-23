@@ -454,10 +454,22 @@ stateDiagram-v2
         SelectIdle --> BoxSelecting: pointer down on canvas
         BoxSelecting --> SelectIdle: pointer up / select
 
-        SelectIdle --> Drawing: choose shape or pen
+        SelectIdle --> Drawing: choose pen
         Drawing --> DrawingPreview: pointer down
         DrawingPreview --> Drawing: pointer up / commit
         DrawingPreview --> Drawing: escape / cancel
+
+        SelectIdle --> ShapeCreating: choose box / line / arrow
+        ShapeCreating --> ShapePreview: pointer down
+        ShapePreview --> SelectIdle: valid pointer up / one commit
+        ShapePreview --> ShapeCreating: tiny pointer up / no-op
+        ShapePreview --> SelectIdle: escape / cancel
+
+        SelectIdle --> PolylineCreating: choose polyline
+        PolylineCreating --> PolylineCreating: click / add vertex
+        PolylineCreating --> PolylineCreating: backspace / remove vertex
+        PolylineCreating --> SelectIdle: enter or double click / one commit
+        PolylineCreating --> SelectIdle: escape / cancel
 
         SelectIdle --> TextEditing: double click text
         TextEditing --> SelectIdle: commit or cancel
@@ -468,6 +480,8 @@ stateDiagram-v2
 ```
 
 Phase 1B 在 `SelectIdle` 下增加 `Resizing`、`Rotating` 和多选变换子状态。
+
+Shape/Polyline 创建状态同样由 Rust 持有。Host 只规范化 Pointer/Keyboard 输入；未完成几何只进入瞬态 Scene preview，不增加 Document revision、元素计数或 Undo history。一次有效完成复用既有 create Command，随后选中新元素并切回 Select。
 
 ### 10.2 输入协议
 

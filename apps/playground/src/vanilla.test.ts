@@ -31,23 +31,23 @@ describe('Vanilla playground selection actions', () => {
     expect(optionButton(root, 'reorder', 'placement', 'front').disabled).toBe(true);
     expect(optionButton(root, 'align', 'alignment', 'left').disabled).toBe(true);
     for (const action of [
-      'create_rectangle',
-      'create_ellipse',
-      'create_diamond',
-      'create_line',
-      'create_polyline',
-      'create_arrow',
+      'set_tool_rectangle',
+      'set_tool_ellipse',
+      'set_tool_diamond',
+      'set_tool_line',
+      'set_tool_polyline',
+      'set_tool_arrow',
     ]) {
       expect(actionButton(root, action).disabled).toBe(false);
       actionButton(root, action).click();
     }
     expect(controller.actions).toEqual([
-      { type: 'create_rectangle' },
-      { type: 'create_ellipse' },
-      { type: 'create_diamond' },
-      { type: 'create_line' },
-      { type: 'create_polyline' },
-      { type: 'create_arrow' },
+      { type: 'set_tool', tool: 'rectangle' },
+      { type: 'set_tool', tool: 'ellipse' },
+      { type: 'set_tool', tool: 'diamond' },
+      { type: 'set_tool', tool: 'line' },
+      { type: 'set_tool', tool: 'polyline' },
+      { type: 'set_tool', tool: 'arrow' },
     ]);
     controller.actions.splice(0);
 

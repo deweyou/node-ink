@@ -12,6 +12,7 @@ mod pointer;
 mod scene_patch;
 mod selection;
 mod selection_geometry;
+mod shape_creation;
 mod shape_geometry;
 mod sketch;
 mod snapping;
@@ -48,6 +49,7 @@ pub use selection::{
 };
 use selection::{HitTestMode, SelectionModel, hit_test_document, hit_test_document_with_mode};
 use selection_geometry::VisualAabb;
+use shape_creation::{ShapeCreationMachine, ShapeCreationTransition};
 use shape_geometry::{
     BoxShapeKind, arrow_path_data, boxed_shape_path_data, line_path_data, path_visual_bounds,
 };
@@ -57,9 +59,9 @@ pub use stroke::{StrokeInputBatchV1, StrokePhaseV1};
 use stroke::{StrokeMachine, StrokePreview, StrokeTransition};
 use stroke_geometry::{resolved_stroke_path_data, stroke_visual_bounds};
 pub use style::{
-    DEFAULT_INK_COLOR, DEFAULT_RECTANGLE_FILL_COLOR, DEFAULT_RECTANGLE_STROKE_COLOR,
-    DEFAULT_RECTANGLE_STROKE_WIDTH, DEFAULT_STROKE_WIDTH, ElementStylePatchV1, FillV1,
-    SelectionStyleV1, TextAlignV1, TextAnchorV1,
+    DEFAULT_INK_COLOR, DEFAULT_LINE_STROKE_WIDTH, DEFAULT_RECTANGLE_FILL_COLOR,
+    DEFAULT_RECTANGLE_STROKE_COLOR, DEFAULT_RECTANGLE_STROKE_WIDTH, DEFAULT_STROKE_WIDTH,
+    ElementStylePatchV1, FillV1, SelectionStyleV1, TextAlignV1, TextAnchorV1,
 };
 use style::{aligned_text_x, is_canonical_color, is_valid_font_size, is_valid_stroke_width};
 pub use text::{
@@ -671,6 +673,7 @@ pub struct Engine {
     selection: SelectionModel,
     tool_state: ToolState,
     pointer_machine: PointerMachine,
+    shape_creation_machine: ShapeCreationMachine,
     stroke_machine: StrokeMachine,
     text_metrics: TextMetricsCache,
 }
@@ -687,6 +690,7 @@ impl Engine {
             selection: SelectionModel::default(),
             tool_state: ToolState::default(),
             pointer_machine: PointerMachine::default(),
+            shape_creation_machine: ShapeCreationMachine::default(),
             stroke_machine: StrokeMachine::default(),
             text_metrics: TextMetricsCache::default(),
         })
@@ -739,6 +743,7 @@ impl Engine {
             return Ok(self.current_update());
         }
         self.pointer_machine.cancel();
+        self.shape_creation_machine.cancel();
         self.stroke_machine.cancel();
         let selection_after =
             selection_after_command(&envelope.command, &self.selection, &self.document);
@@ -788,6 +793,7 @@ impl Engine {
         let (revision, next_scene) = match mode {
             DiagramOperationModeV1::Apply => {
                 self.pointer_machine.cancel();
+                self.shape_creation_machine.cancel();
                 self.stroke_machine.cancel();
                 let changed_element_ids = unique_element_ids(&affected_by_operation);
                 let update = self.commit_transaction(
@@ -803,6 +809,7 @@ impl Engine {
                 resolve_scene(
                     &candidate,
                     self.scene_revision + 1,
+                    None,
                     None,
                     None,
                     &candidate.render_profile,
@@ -826,7 +833,12 @@ impl Engine {
         command_id: String,
         events: Vec<NormalizedPointerEventV1>,
     ) -> Result<PointerUpdateV1, EngineErrorV1> {
+        let active_tool = self.tool_state.active_tool();
+        if active_tool.is_shape_creation_tool() {
+            return self.handle_shape_creation_events(active_tool, command_id, events);
+        }
         self.validate_active_tool(EditorToolV1::Select)?;
+        self.shape_creation_machine.cancel();
         self.stroke_machine.cancel();
         let selection_state =
             self.selection
@@ -960,6 +972,90 @@ impl Engine {
         })
     }
 
+    fn handle_shape_creation_events(
+        &mut self,
+        active_tool: EditorToolV1,
+        command_id: String,
+        events: Vec<NormalizedPointerEventV1>,
+    ) -> Result<PointerUpdateV1, EngineErrorV1> {
+        self.pointer_machine.cancel();
+        self.stroke_machine.cancel();
+        self.selection.clear();
+        let outcome = self.shape_creation_machine.process_batch(
+            active_tool,
+            self.document.revision,
+            command_id,
+            events,
+        );
+        let (update, did_commit) = self.apply_shape_creation_transition(outcome.transition)?;
+        Ok(PointerUpdateV1 {
+            update,
+            processed_event_count: outcome.processed_event_count,
+            ignored_event_count: outcome.ignored_event_count,
+            did_commit,
+        })
+    }
+
+    pub fn finish_shape_creation(&mut self) -> Result<PointerUpdateV1, EngineErrorV1> {
+        self.validate_active_tool(EditorToolV1::Polyline)?;
+        let transition = self.shape_creation_machine.finish();
+        let (update, did_commit) = self.apply_shape_creation_transition(transition)?;
+        Ok(PointerUpdateV1 {
+            update,
+            processed_event_count: 0,
+            ignored_event_count: 0,
+            did_commit,
+        })
+    }
+
+    pub fn remove_shape_creation_point(&mut self) -> Result<EngineUpdateV1, EngineErrorV1> {
+        self.validate_active_tool(EditorToolV1::Polyline)?;
+        let transition = self.shape_creation_machine.remove_last_polyline_point();
+        let (update, _) = self.apply_shape_creation_transition(transition)?;
+        Ok(update)
+    }
+
+    fn apply_shape_creation_transition(
+        &mut self,
+        transition: ShapeCreationTransition,
+    ) -> Result<(EngineUpdateV1, bool), EngineErrorV1> {
+        match transition {
+            ShapeCreationTransition::None => {
+                let preview = self.shape_creation_machine.preview();
+                Ok((self.update_with_shape_preview(preview.as_ref()), false))
+            }
+            ShapeCreationTransition::Preview(preview) => {
+                self.scene_revision += 1;
+                Ok((self.update_with_shape_preview(Some(&preview)), false))
+            }
+            ShapeCreationTransition::Cancelled => {
+                self.scene_revision += 1;
+                Ok((self.current_update(), false))
+            }
+            ShapeCreationTransition::Commit(commit) => {
+                let command = shape_creation_command(commit.element);
+                let selection_after =
+                    selection_after_command(&command, &self.selection, &self.document);
+                let previous_tool = self.tool_state.active_tool();
+                self.tool_state.set_active_tool(EditorToolV1::Select);
+                let envelope = CommandEnvelopeV1 {
+                    protocol_version: PROTOCOL_VERSION,
+                    command_id: commit.command_id,
+                    document_id: self.document.document_id.clone(),
+                    expected_revision: commit.expected_revision,
+                    command,
+                };
+                match self.execute_command_without_pointer_reset(envelope, selection_after) {
+                    Ok(update) => Ok((update, true)),
+                    Err(error) => {
+                        self.tool_state.set_active_tool(previous_tool);
+                        Err(error)
+                    }
+                }
+            }
+        }
+    }
+
     fn resolve_pointer_transform_preview(
         &self,
         mut preview: PointerTransformPreview,
@@ -1036,6 +1132,7 @@ impl Engine {
         self.validate_active_tool(EditorToolV1::Freehand)?;
         validate_stroke_input(&batch)?;
         self.pointer_machine.cancel();
+        self.shape_creation_machine.cancel();
         let outcome = self
             .stroke_machine
             .process_batch(self.document.revision, batch);
@@ -1149,6 +1246,7 @@ impl Engine {
 
     pub fn undo(&mut self) -> Result<EngineUpdateV1, EngineErrorV1> {
         self.pointer_machine.cancel();
+        self.shape_creation_machine.cancel();
         self.stroke_machine.cancel();
         let mut previous = self
             .undo_stack
@@ -1165,6 +1263,7 @@ impl Engine {
 
     pub fn redo(&mut self) -> Result<EngineUpdateV1, EngineErrorV1> {
         self.pointer_machine.cancel();
+        self.shape_creation_machine.cancel();
         self.stroke_machine.cancel();
         let mut next = self
             .redo_stack
@@ -1180,16 +1279,19 @@ impl Engine {
     }
 
     pub fn current_update(&self) -> EngineUpdateV1 {
-        self.update(None)
+        let preview = self.shape_creation_machine.preview();
+        self.update_with_operation_and_previews(None, None, None, preview.as_ref())
     }
 
     pub fn set_active_tool(&mut self, active_tool: EditorToolV1) -> EngineUpdateV1 {
         if !self.tool_state.set_active_tool(active_tool) {
             return self.current_update();
         }
-        let had_active_gesture =
-            self.pointer_machine.is_active() || self.stroke_machine.is_active();
+        let had_active_gesture = self.pointer_machine.is_active()
+            || self.shape_creation_machine.is_active()
+            || self.stroke_machine.is_active();
         self.pointer_machine.cancel();
+        self.shape_creation_machine.cancel();
         self.stroke_machine.cancel();
         self.selection.clear();
         if had_active_gesture {
@@ -1204,6 +1306,7 @@ impl Engine {
         primary_element_id: Option<ElementId>,
     ) -> Result<EngineUpdateV1, EngineErrorV1> {
         self.pointer_machine.cancel();
+        self.shape_creation_machine.cancel();
         self.stroke_machine.cancel();
         self.selection
             .set(&self.document, selected_element_ids, primary_element_id)?;
@@ -1302,6 +1405,7 @@ impl Engine {
             self.scene_revision,
             None,
             None,
+            None,
             &profile,
             &self.text_metrics,
         );
@@ -1363,15 +1467,19 @@ impl Engine {
     }
 
     fn update(&self, operation: Option<OperationResultV1>) -> EngineUpdateV1 {
-        self.update_with_operation_and_previews(operation, None, None)
+        self.update_with_operation_and_previews(operation, None, None, None)
     }
 
     fn update_with_preview(&self, preview: Option<&PointerPreview>) -> EngineUpdateV1 {
-        self.update_with_operation_and_previews(None, preview, None)
+        self.update_with_operation_and_previews(None, preview, None, None)
     }
 
     fn update_with_stroke_preview(&self, preview: Option<&StrokePreview>) -> EngineUpdateV1 {
-        self.update_with_operation_and_previews(None, None, preview)
+        self.update_with_operation_and_previews(None, None, preview, None)
+    }
+
+    fn update_with_shape_preview(&self, preview: Option<&ElementRecordV1>) -> EngineUpdateV1 {
+        self.update_with_operation_and_previews(None, None, None, preview)
     }
 
     fn update_with_operation_and_previews(
@@ -1379,6 +1487,7 @@ impl Engine {
         operation: Option<OperationResultV1>,
         pointer_preview: Option<&PointerPreview>,
         stroke_preview: Option<&StrokePreview>,
+        shape_preview: Option<&ElementRecordV1>,
     ) -> EngineUpdateV1 {
         EngineUpdateV1 {
             operation,
@@ -1387,6 +1496,7 @@ impl Engine {
                 self.scene_revision,
                 pointer_preview,
                 stroke_preview,
+                shape_preview,
                 &self.document.render_profile,
                 &self.text_metrics,
             ),
@@ -1418,6 +1528,20 @@ impl Engine {
 enum SelectionAfterCommand {
     Preserve,
     Set(Vec<ElementId>, Option<ElementId>),
+}
+
+fn shape_creation_command(element: ElementRecordV1) -> CommandV1 {
+    match element {
+        ElementRecordV1::Rect(rectangle) => CommandV1::CreateRectangle { rectangle },
+        ElementRecordV1::Ellipse(ellipse) => CommandV1::CreateEllipse { ellipse },
+        ElementRecordV1::Diamond(diamond) => CommandV1::CreateDiamond { diamond },
+        ElementRecordV1::Line(line) => CommandV1::CreateLine { line },
+        ElementRecordV1::Polyline(polyline) => CommandV1::CreatePolyline { polyline },
+        ElementRecordV1::Arrow(arrow) => CommandV1::CreateArrow { arrow },
+        ElementRecordV1::Stroke(_) | ElementRecordV1::Text(_) | ElementRecordV1::Group(_) => {
+            unreachable!("shape creation only produces supported shape elements")
+        }
+    }
 }
 
 fn selection_after_command(
@@ -3022,11 +3146,15 @@ fn resolve_scene(
     scene_revision: u64,
     pointer_preview: Option<&PointerPreview>,
     stroke_preview: Option<&StrokePreview>,
+    shape_preview: Option<&ElementRecordV1>,
     profile: &RenderProfileV1,
     text_metrics: &TextMetricsCache,
 ) -> SceneSnapshotV1 {
-    let mut root_node_ids =
-        Vec::with_capacity(document.root_order.len() + usize::from(stroke_preview.is_some()));
+    let mut root_node_ids = Vec::with_capacity(
+        document.root_order.len()
+            + usize::from(stroke_preview.is_some())
+            + usize::from(shape_preview.is_some()),
+    );
     let mut nodes = BTreeMap::new();
     let hierarchy = document_hierarchy(document).expect("validated Document has valid hierarchy");
     let base_world = resolved_world_transforms(document, None)
@@ -3190,6 +3318,10 @@ fn resolve_scene(
         );
     }
 
+    if let Some(preview) = shape_preview {
+        insert_shape_creation_scene_node(&mut root_node_ids, &mut nodes, preview, profile);
+    }
+
     SceneSnapshotV1 {
         protocol_version: PROTOCOL_VERSION,
         document_id: document.document_id.clone(),
@@ -3198,6 +3330,100 @@ fn resolve_scene(
         render_profile: profile.clone(),
         root_node_ids,
         nodes,
+    }
+}
+
+fn insert_shape_creation_scene_node(
+    root_node_ids: &mut Vec<SceneNodeId>,
+    nodes: &mut BTreeMap<SceneNodeId, SceneNodeV1>,
+    element: &ElementRecordV1,
+    profile: &RenderProfileV1,
+) {
+    match element {
+        ElementRecordV1::Rect(rectangle) => {
+            if matches!(profile, RenderProfileV1::Clean { .. }) {
+                let scene_node_id = format!("{}:shape", rectangle.id);
+                root_node_ids.push(scene_node_id.clone());
+                nodes.insert(
+                    scene_node_id.clone(),
+                    SceneNodeV1::Rect(SceneRectV1 {
+                        id: scene_node_id,
+                        source_element_id: rectangle.id.clone(),
+                        transform: rectangle.transform,
+                        x: rectangle.x,
+                        y: rectangle.y,
+                        width: rectangle.width,
+                        height: rectangle.height,
+                        fill: rectangle.fill.scene_paint().to_string(),
+                        stroke: rectangle.stroke.clone(),
+                        stroke_width: rectangle.stroke_width,
+                    }),
+                );
+            } else {
+                for path in sketch_rectangle(rectangle, profile) {
+                    root_node_ids.push(path.id.clone());
+                    nodes.insert(path.id.clone(), SceneNodeV1::Path(path));
+                }
+            }
+        }
+        ElementRecordV1::Ellipse(ellipse) => insert_boxed_shape_scene_node(
+            root_node_ids,
+            nodes,
+            &ellipse.id,
+            ellipse.transform,
+            BoxShapeKind::Ellipse,
+            ellipse.x,
+            ellipse.y,
+            ellipse.width,
+            ellipse.height,
+            &ellipse.fill,
+            &ellipse.stroke,
+            ellipse.stroke_width,
+        ),
+        ElementRecordV1::Diamond(diamond) => insert_boxed_shape_scene_node(
+            root_node_ids,
+            nodes,
+            &diamond.id,
+            diamond.transform,
+            BoxShapeKind::Diamond,
+            diamond.x,
+            diamond.y,
+            diamond.width,
+            diamond.height,
+            &diamond.fill,
+            &diamond.stroke,
+            diamond.stroke_width,
+        ),
+        ElementRecordV1::Line(line) => insert_line_scene_node(
+            root_node_ids,
+            nodes,
+            &line.id,
+            line.transform,
+            line_path_data(&line.points),
+            &line.stroke,
+            line.stroke_width,
+        ),
+        ElementRecordV1::Polyline(polyline) => insert_line_scene_node(
+            root_node_ids,
+            nodes,
+            &polyline.id,
+            polyline.transform,
+            line_path_data(&polyline.points),
+            &polyline.stroke,
+            polyline.stroke_width,
+        ),
+        ElementRecordV1::Arrow(arrow) => insert_line_scene_node(
+            root_node_ids,
+            nodes,
+            &arrow.id,
+            arrow.transform,
+            arrow_path_data(&arrow.points, arrow.stroke_width),
+            &arrow.stroke,
+            arrow.stroke_width,
+        ),
+        ElementRecordV1::Stroke(_) | ElementRecordV1::Text(_) | ElementRecordV1::Group(_) => {
+            unreachable!("shape creation preview only contains supported shape elements")
+        }
     }
 }
 
@@ -4435,6 +4661,168 @@ mod tests {
             engine.set_active_tool(EditorToolV1::Select).active_tool,
             EditorToolV1::Select
         );
+    }
+
+    #[test]
+    fn shape_drag_previews_without_document_mutation_then_commits_and_selects_once() {
+        let mut engine = Engine::open(NodeInkDocumentV1::blank("doc-1")).unwrap();
+        engine.set_active_tool(EditorToolV1::Rectangle);
+
+        let down = engine
+            .handle_pointer_events(
+                "rect-drag-1".to_string(),
+                vec![pointer_event_at(PointerPhaseV1::Down, 1, 40.0, 50.0)],
+            )
+            .unwrap();
+        assert_eq!(down.update.scene.document_revision, 0);
+        assert!(down.update.scene.root_node_ids.is_empty());
+
+        let preview = engine
+            .handle_pointer_events(
+                "ignored-preview-id".to_string(),
+                vec![pointer_event_at(PointerPhaseV1::Move, 2, 140.0, 110.0)],
+            )
+            .unwrap();
+        assert_eq!(preview.update.scene.document_revision, 0);
+        assert_eq!(preview.update.scene.root_node_ids, ["rect-drag-1:shape"]);
+        assert!(engine.document().elements.is_empty());
+        assert!(!preview.update.history.can_undo);
+
+        let committed = engine
+            .handle_pointer_events(
+                "ignored-commit-id".to_string(),
+                vec![pointer_event_at(PointerPhaseV1::Up, 3, 140.0, 110.0)],
+            )
+            .unwrap();
+        assert!(committed.did_commit);
+        assert_eq!(committed.update.scene.document_revision, 1);
+        assert_eq!(committed.update.active_tool, EditorToolV1::Select);
+        assert_eq!(
+            committed.update.selection.selected_element_ids,
+            ["rect-drag-1"]
+        );
+        let ElementRecordV1::Rect(rectangle) = &engine.document().elements["rect-drag-1"] else {
+            panic!("drag creation should preserve rectangle semantics");
+        };
+        assert_eq!(
+            (rectangle.x, rectangle.y, rectangle.width, rectangle.height),
+            (40.0, 50.0, 100.0, 60.0)
+        );
+        assert!(committed.update.history.can_undo);
+    }
+
+    #[test]
+    fn every_direct_drag_shape_previews_and_commits_through_its_semantic_command() {
+        for (tool, element_id) in [
+            (EditorToolV1::Ellipse, "ellipse-drag"),
+            (EditorToolV1::Diamond, "diamond-drag"),
+            (EditorToolV1::Line, "line-drag"),
+            (EditorToolV1::Arrow, "arrow-drag"),
+        ] {
+            let mut engine = Engine::open(NodeInkDocumentV1::blank("doc-1")).unwrap();
+            engine.set_active_tool(tool);
+            engine
+                .handle_pointer_events(
+                    element_id.to_string(),
+                    vec![pointer_event_at(PointerPhaseV1::Down, 1, 10.0, 20.0)],
+                )
+                .unwrap();
+            let preview = engine
+                .handle_pointer_events(
+                    "ignored-preview-id".to_string(),
+                    vec![pointer_event_at(PointerPhaseV1::Move, 2, 90.0, 70.0)],
+                )
+                .unwrap();
+            assert_eq!(preview.update.scene.document_revision, 0);
+            assert_eq!(preview.update.scene.root_node_ids.len(), 1);
+            assert!(engine.document().elements.is_empty());
+
+            let committed = engine
+                .handle_pointer_events(
+                    "ignored-commit-id".to_string(),
+                    vec![pointer_event_at(PointerPhaseV1::Up, 3, 90.0, 70.0)],
+                )
+                .unwrap();
+            assert!(committed.did_commit);
+            assert_eq!(committed.update.active_tool, EditorToolV1::Select);
+            assert_eq!(
+                committed.update.selection.selected_element_id.as_deref(),
+                Some(element_id)
+            );
+            assert!(matches!(
+                (tool, &engine.document().elements[element_id]),
+                (EditorToolV1::Ellipse, ElementRecordV1::Ellipse(_))
+                    | (EditorToolV1::Diamond, ElementRecordV1::Diamond(_))
+                    | (EditorToolV1::Line, ElementRecordV1::Line(_))
+                    | (EditorToolV1::Arrow, ElementRecordV1::Arrow(_))
+            ));
+        }
+    }
+
+    #[test]
+    fn short_shape_drag_keeps_the_tool_active_without_history() {
+        let mut engine = Engine::open(NodeInkDocumentV1::blank("doc-1")).unwrap();
+        engine.set_active_tool(EditorToolV1::Ellipse);
+        let result = engine
+            .handle_pointer_events(
+                "ellipse-short".to_string(),
+                vec![
+                    pointer_event_at(PointerPhaseV1::Down, 1, 20.0, 20.0),
+                    pointer_event_at(PointerPhaseV1::Up, 2, 22.0, 20.0),
+                ],
+            )
+            .unwrap();
+
+        assert!(!result.did_commit);
+        assert_eq!(result.update.active_tool, EditorToolV1::Ellipse);
+        assert_eq!(result.update.scene.document_revision, 0);
+        assert!(result.update.scene.root_node_ids.is_empty());
+        assert!(!result.update.history.can_undo);
+    }
+
+    #[test]
+    fn polyline_clicks_remain_transient_until_explicit_finish() {
+        let mut engine = Engine::open(NodeInkDocumentV1::blank("doc-1")).unwrap();
+        engine.set_active_tool(EditorToolV1::Polyline);
+        engine
+            .handle_pointer_events(
+                "discarded-point".to_string(),
+                vec![
+                    pointer_event_at(PointerPhaseV1::Down, 1, 5.0, 5.0),
+                    pointer_event_at(PointerPhaseV1::Up, 2, 5.0, 5.0),
+                ],
+            )
+            .unwrap();
+        let removed = engine.remove_shape_creation_point().unwrap();
+        assert!(removed.scene.root_node_ids.is_empty());
+        assert_eq!(removed.active_tool, EditorToolV1::Polyline);
+
+        for (index, (x, y)) in [(20.0, 20.0), (80.0, 20.0), (80.0, 70.0)]
+            .into_iter()
+            .enumerate()
+        {
+            engine
+                .handle_pointer_events(
+                    format!("polyline-click-{index}"),
+                    vec![
+                        pointer_event_at(PointerPhaseV1::Down, 1, x, y),
+                        pointer_event_at(PointerPhaseV1::Up, 2, x, y),
+                    ],
+                )
+                .unwrap();
+        }
+        assert_eq!(engine.current_update().scene.document_revision, 0);
+        assert!(engine.document().elements.is_empty());
+
+        let committed = engine.finish_shape_creation().unwrap();
+        assert!(committed.did_commit);
+        assert_eq!(committed.update.active_tool, EditorToolV1::Select);
+        assert_eq!(committed.update.scene.document_revision, 1);
+        let ElementRecordV1::Polyline(polyline) = &engine.document().elements["polyline-click-0"]
+        else {
+            panic!("finished polyline should keep its semantic kind");
+        };
+        assert_eq!(polyline.points.len(), 3);
     }
 
     #[test]

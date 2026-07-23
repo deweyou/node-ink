@@ -160,6 +160,21 @@ impl EngineHandle {
         serde_json::to_string(&update).map_err(|error| js_error("serialization_failed", error))
     }
 
+    #[wasm_bindgen(js_name = finishShapeCreation)]
+    pub fn finish_shape_creation(&mut self) -> Result<String, JsValue> {
+        let update = self.engine.finish_shape_creation().map_err(engine_error)?;
+        serde_json::to_string(&update).map_err(|error| js_error("serialization_failed", error))
+    }
+
+    #[wasm_bindgen(js_name = removeShapeCreationPoint)]
+    pub fn remove_shape_creation_point(&mut self) -> Result<String, JsValue> {
+        let update = self
+            .engine
+            .remove_shape_creation_point()
+            .map_err(engine_error)?;
+        serde_json::to_string(&update).map_err(|error| js_error("serialization_failed", error))
+    }
+
     #[wasm_bindgen(js_name = handleStrokeBatchJson)]
     pub fn handle_stroke_batch_json(
         &mut self,
@@ -318,6 +333,12 @@ fn parse_editor_tool(active_tool: &str) -> Result<EditorToolV1, JsValue> {
         "select" => Ok(EditorToolV1::Select),
         "freehand" => Ok(EditorToolV1::Freehand),
         "text" => Ok(EditorToolV1::Text),
+        "rectangle" => Ok(EditorToolV1::Rectangle),
+        "ellipse" => Ok(EditorToolV1::Ellipse),
+        "diamond" => Ok(EditorToolV1::Diamond),
+        "line" => Ok(EditorToolV1::Line),
+        "polyline" => Ok(EditorToolV1::Polyline),
+        "arrow" => Ok(EditorToolV1::Arrow),
         _ => Err(js_error("schema_invalid", "unsupported editor tool")),
     }
 }

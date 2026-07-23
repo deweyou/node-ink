@@ -228,7 +228,8 @@
 ### D-32 Phase 1B 基础图形与 Schema V4
 
 - 基础图形新增 `Ellipse`、`Diamond`、`Line`、`Polyline` 与 `Arrow` 五种持久语义 kind；它们不是 Renderer 根据 path 猜出的展示别名。普通 `Arrow` 是自由几何，不含节点绑定、端口或自动路由，也不替代未来的 `Connector`。
-- 本期延续现有 Rectangle 的轻量创建模型：点击工具栏立即在默认位置创建并进入 Select，而不是引入一套只对部分图形生效的拖拽创建状态机。创建后统一复用选择、移动、缩放、旋转、Group、层级、剪贴板、对齐、吸附与 Undo/Redo。
+- Rectangle、Ellipse、Diamond、Line 与 Arrow 使用统一的一次性直接创建：点击工具栏只进入工具，不改变 Document；有效拖拽在 Rust 预览，PointerUp 形成一个 Command/Transaction、选中新元素并回到 Select。小于 3px screen-space 的拖拽不创建且保留当前工具；`Shift` 约束等边框形或 45° 线段，`Alt` 让框形从中心展开。
+- Polyline 通过逐点点击构造 Rust 瞬态 preview，至少三个固定点后由双击或 `Enter` 一次提交；`Backspace` 删除最后一点，`Escape` 或工具切换取消。未完成几何不进入 Document、Undo、元素计数或持久化。内部 programmatic create action 保留为 SDK/自动化入口，但不再是产品工具栏行为。
 - `Ellipse` 与 `Diamond` 使用 fill/stroke/strokeWidth；`Line`、`Polyline` 与 `Arrow` 只使用 stroke/strokeWidth。Line 固定两个点，Polyline 至少三个点，Arrow 至少两个点，连续重复点在 Rust Command 和协议边界被拒绝。
 - Rust Document/Command/Transaction 持有几何与样式真相，并把五种图形确定性解析为通用 `ScenePathV1`。Renderer 不复制椭圆、菱形或箭头算法；React、Vue 与 Vanilla 只通过同一个 framework-neutral Controller 触发显式创建和样式 Command。
 - Schema V4 以 copy-on-write 方式接收 V3 文档，迁移只提升 schemaVersion 与 revision，不改写既有元素语义，也不修改源 payload。协议版本仍为内部 V1；当前 private package 不借此承诺公共 SDK 稳定性。
