@@ -58,19 +58,6 @@ export function NodeInkEditor({ controller, hostLabel = 'React adapter' }: NodeI
           <h1>Framework-neutral canvas</h1>
         </div>
         <div className="nodeink-topbar-actions">
-          <nav className="nodeink-profile-toggle" aria-label="Rendering profile">
-            {(['clean', 'sketch'] as const).map((profile) => (
-              <button
-                key={profile}
-                type="button"
-                aria-pressed={snapshot.renderProfile.kind === profile}
-                disabled={!isEditable}
-                onClick={() => void controller.dispatch({ type: 'set_render_profile', profile })}
-              >
-                {profile === 'clean' ? 'Clean' : 'Sketch'}
-              </button>
-            ))}
-          </nav>
           <span className="nodeink-host-badge">{hostLabel}</span>
         </div>
       </header>

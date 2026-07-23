@@ -243,6 +243,7 @@ describe('createWasmEngine', () => {
         { x: 3, y: 4 },
       ],
       strokeId: null,
+      straightLine: true,
     };
     await expect(
       engine.handleStrokeBatch(strokeBatch, 'stroke-json', 'json'),
@@ -325,6 +326,7 @@ describe('createWasmEngine', () => {
       'move',
       new Float64Array([1, 2, 3, 4]),
       undefined,
+      true,
       'stroke-typed',
     );
     expect(wasm.handle.resolveSceneProfile).toHaveBeenCalledWith(

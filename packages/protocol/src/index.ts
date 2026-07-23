@@ -566,6 +566,7 @@ export interface StrokeInputBatchV1 {
   phase: StrokePhaseV1;
   points: Vec2[];
   strokeId: string | null;
+  straightLine?: boolean;
 }
 
 export interface StrokeUpdateV1 {

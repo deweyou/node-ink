@@ -109,22 +109,6 @@ export const NodeInkEditor = defineComponent({
             h('h1', 'Framework-neutral canvas'),
           ]),
           h('div', { class: 'nodeink-topbar-actions' }, [
-            h(
-              'nav',
-              { class: 'nodeink-profile-toggle', 'aria-label': 'Rendering profile' },
-              (['clean', 'sketch'] as const).map((profile) =>
-                h(
-                  'button',
-                  {
-                    type: 'button',
-                    'aria-pressed': currentSnapshot.renderProfile.kind === profile,
-                    disabled: !isEditable,
-                    onClick: () => dispatch({ type: 'set_render_profile', profile }),
-                  },
-                  profile === 'clean' ? 'Clean' : 'Sketch',
-                ),
-              ),
-            ),
             h('span', { class: 'nodeink-host-badge' }, props.hostLabel),
           ]),
         ]),

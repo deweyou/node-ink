@@ -176,6 +176,7 @@ impl EngineHandle {
     }
 
     #[wasm_bindgen(js_name = handleStrokePoints)]
+    #[allow(clippy::too_many_arguments)] // Keep the hot-path WASM ABI flat and allocation-free.
     pub fn handle_stroke_points(
         &mut self,
         pointer_id: u32,
@@ -183,6 +184,7 @@ impl EngineHandle {
         phase: &str,
         coordinates: &[f64],
         stroke_id: Option<String>,
+        straight_line: bool,
         command_id: String,
     ) -> Result<String, JsValue> {
         let phase = parse_stroke_phase(phase)?;
@@ -209,6 +211,7 @@ impl EngineHandle {
                     phase,
                     points,
                     stroke_id,
+                    straight_line,
                 },
             )
             .map_err(engine_error)?;

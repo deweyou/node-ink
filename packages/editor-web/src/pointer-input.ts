@@ -40,16 +40,16 @@ export function attachPointerInput(
     emitNormalized(normalizeEvents([event], 'down', normalizer));
   };
   const handlePointerMove = (event: PointerEvent) => {
-    if (!activePointers.has(event.pointerId) || options.shouldHandleEvent?.(event) === false) {
+    if (!activePointers.has(event.pointerId)) {
       return;
     }
     const coalescedEvents = event.getCoalescedEvents?.() ?? [];
     const events = coalescedEvents.length > 0 ? coalescedEvents : [event];
     event.preventDefault();
-    emitNormalized(normalizeEvents(events, 'move', normalizer));
+    emitNormalized(normalizeEvents(events, 'move', normalizer, event));
   };
   const handlePointerUp = (event: PointerEvent) => {
-    if (!activePointers.has(event.pointerId) || options.shouldHandleEvent?.(event) === false) {
+    if (!activePointers.has(event.pointerId)) {
       return;
     }
     event.preventDefault();
@@ -60,14 +60,10 @@ export function attachPointerInput(
     normalizer.reset(event.pointerId);
   };
   const handlePointerCancel = (event: PointerEvent) => {
-    if (options.shouldHandleEvent?.(event) === false) {
+    if (!activePointers.has(event.pointerId)) {
       return;
     }
-    emitNormalized(normalizeEvents([event], 'cancel', normalizer));
-    activePointers.delete(event.pointerId);
-    lastEvents.delete(event.pointerId);
-    releasePointer(target, event.pointerId);
-    normalizer.reset(event.pointerId);
+    finalizeActivePointer(event.pointerId);
   };
   const handleDoubleClick = (event: MouseEvent) => {
     if (event.button !== 0 || options.shouldHandleEvent?.(event as PointerEvent) === false) {
@@ -76,16 +72,18 @@ export function attachPointerInput(
     event.preventDefault();
     options.onDoubleClick?.(createScreenToCanvasPoint(target)(event.clientX, event.clientY));
   };
-  const cancelActivePointer = (pointerId: number) => {
+  const finalizeActivePointer = (pointerId: number) => {
     if (!activePointers.has(pointerId)) {
       return;
     }
     const lastEvent = lastEvents.get(pointerId);
+    // Capture loss and window blur are browser interruptions, not explicit editor cancellation.
+    // Commit the last visible preview so a transient DOM event cannot make a transform snap back.
     emitNormalized([
       {
         pointerId,
         sequence: (lastEvent?.sequence ?? 0) + 1,
-        phase: 'cancel',
+        phase: 'up',
         point: lastEvent?.point ?? { x: 0, y: 0 },
         modifiers: lastEvent?.modifiers ?? { shift: false, alt: false, metaOrCtrl: false },
         screenScale: lastEvent?.screenScale ?? options.screenScale?.() ?? 1,
@@ -96,10 +94,10 @@ export function attachPointerInput(
     normalizer.reset(pointerId);
     releasePointer(target, pointerId);
   };
-  const handleLostPointerCapture = (event: PointerEvent) => cancelActivePointer(event.pointerId);
+  const handleLostPointerCapture = (event: PointerEvent) => finalizeActivePointer(event.pointerId);
   const handleWindowBlur = () => {
     for (const pointerId of [...activePointers]) {
-      cancelActivePointer(pointerId);
+      finalizeActivePointer(pointerId);
     }
   };
 
@@ -132,6 +130,7 @@ function normalizeEvents(
   events: PointerEvent[],
   phase: PointerPhaseV1,
   normalizer: ReturnType<typeof createSelectionInputNormalizer>,
+  modifierSource?: PointerEvent,
 ): NormalizedPointerEventV1[] {
   return events.map((event) => {
     const normalized = normalizer.normalize(event, phase);
@@ -140,7 +139,13 @@ function normalizeEvents(
       sequence: normalized.sequence,
       phase: normalized.phase,
       point: normalized.point,
-      modifiers: normalized.modifiers,
+      modifiers: modifierSource
+        ? {
+            shift: modifierSource.shiftKey === true,
+            alt: modifierSource.altKey === true,
+            metaOrCtrl: modifierSource.metaKey === true || modifierSource.ctrlKey === true,
+          }
+        : normalized.modifiers,
       screenScale: normalized.screenScale,
     };
   });

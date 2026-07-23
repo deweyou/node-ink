@@ -42,10 +42,6 @@ rootElement.innerHTML = `
         <h1>Framework-neutral canvas</h1>
       </div>
       <div class="nodeink-topbar-actions">
-        <nav class="nodeink-profile-toggle" aria-label="Rendering profile">
-          <button type="button" data-action="set_render_profile" data-profile="clean">Clean</button>
-          <button type="button" data-action="set_render_profile" data-profile="sketch">Sketch</button>
-        </nav>
         <span class="nodeink-host-badge">Vanilla TypeScript</span>
       </div>
     </header>
@@ -237,11 +233,6 @@ rootElement.addEventListener('click', (event) => {
     void controller.dispatch({ type: 'undo' });
   } else if (action === 'redo') {
     void controller.dispatch({ type: 'redo' });
-  } else if (action === 'set_render_profile') {
-    const profile = button.dataset.profile;
-    if (profile === 'clean' || profile === 'sketch') {
-      void controller.dispatch({ type: 'set_render_profile', profile });
-    }
   } else if (action === 'update_selection_style') {
     const patch = stylePatchFromButton(button, controller.getSnapshot().selectionStyle);
     if (patch) {
@@ -323,13 +314,6 @@ function renderSnapshot(
   });
   setDisabled(root, 'undo', !isEditable || !snapshot.canUndo);
   setDisabled(root, 'redo', !isEditable || !snapshot.canRedo);
-  root.querySelectorAll<HTMLButtonElement>('[data-profile]').forEach((button) => {
-    button.disabled = !isEditable;
-    button.setAttribute(
-      'aria-pressed',
-      String(button.dataset.profile === snapshot.renderProfile.kind),
-    );
-  });
   renderStylePanel(
     requireElement<HTMLElement>(root, '[data-style-panel]'),
     isEditable ? snapshot.selectionStyle : null,

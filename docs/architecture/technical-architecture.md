@@ -395,7 +395,7 @@ PointerDown
 → one Undo entry
 ```
 
-- Escape、pointer cancel 或失焦在提交前撤销 transient state。
+- DOM pointer cancel、capture loss 或失焦提交最后一个已经显示的样本；`Escape` 或工具切换才撤销 transient state。
 - 自由笔在拖动过程中产生 preview points；PointerUp 后创建一个 `StrokeElement`。
 - 文本 composition 与普通输入过程都不修改 Document；composition end 只更新 overlay buffer，blur 或 `Cmd/Ctrl+Enter` 提交一个文本 Transaction，`Escape` 取消。
 - Inspector 连续拖动数值可使用 preview + commit，或显式 merge key 合并为一个 Undo entry；不能产生数百个用户不可理解的撤销步骤。
@@ -467,9 +467,9 @@ interface PointerSample {
 
 ### 10.3 取消、失焦和异常
 
-- `pointercancel`：放弃未提交手势并释放 capture。
-- `Escape`：从最深子状态退回稳定状态；不自动提交。
-- 浏览器失焦：若是拖拽则取消；若是文本编辑则按明确产品策略提交或提示，不能静默丢字。
+- DOM `pointercancel`、capture loss 或浏览器失焦：输入 adapter 使用最后一个已显示样本结束当前画笔/变换，避免偶发平台中断让内容消失或回弹。
+- `Escape` 或工具切换：作为显式编辑器取消，从最深子状态退回稳定状态并恢复未提交变换。
+- 文本编辑失焦：按明确产品策略提交或提示，不能静默丢字。
 - WASM error：冻结新写入，保留当前可渲染 Scene，显示可恢复错误。
 - 文档写入权丢失：结束当前 transient 手势，不提交过期 revision，进入只读冲突状态。
 
@@ -482,6 +482,7 @@ interface PointerSample {
 - 2D Transform、local/world/screen 坐标转换。
 - 几何 bounds、visual bounds 和 selection bounds。
 - 路径标准化、Stroke outline 和 Sketch path 生成。
+- Clean 自由笔从持久原始点确定性解析 midpoint quadratic path；曲线极值 bounds 与有界误差 hit-test 展开共用同一几何模块，Renderer 不重新拟合。
 - 基于 zoom 的 hit tolerance。
 - 基础形状 hit test、selection handles 和 resize/rotate 约束。
 - snapping candidates、guide 计算和空间查询。

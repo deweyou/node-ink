@@ -7,6 +7,7 @@ use crate::{
     TextElementV1, Vec2, aligned_text_x,
     hierarchy::Hierarchy,
     selection_geometry::{OrientedCorners, SelectionGeometry, SelectionHandleKind, VisualAabb},
+    stroke_geometry::{flattened_world_points, stroke_visual_bounds},
     text::TextMetricsCache,
     transform::Point2D,
 };
@@ -572,18 +573,16 @@ fn hit_test_element(
             }),
         ElementRecordV1::Stroke(stroke) => {
             let radius = stroke.stroke_width / 2.0 + tolerance;
-            stroke.points.windows(2).any(|segment| {
-                let Ok(start) = world_transform.apply(Point2D::new(segment[0].x, segment[0].y))
-                else {
-                    return false;
-                };
-                let Ok(end) = world_transform.apply(Point2D::new(segment[1].x, segment[1].y))
-                else {
-                    return false;
-                };
-                point_segment_distance_squared(Point2D::new(point.x, point.y), start, end)
-                    <= radius * radius
-            })
+            flattened_world_points(&stroke.points, world_transform, tolerance).is_some_and(
+                |points| {
+                    points.windows(2).any(|segment| {
+                        let start = segment[0];
+                        let end = segment[1];
+                        point_segment_distance_squared(Point2D::new(point.x, point.y), start, end)
+                            <= radius * radius
+                    })
+                },
+            )
         }
         ElementRecordV1::Text(text) => {
             hit_test_text(text, world_transform, point, tolerance, text_metrics)
@@ -756,27 +755,7 @@ fn element_local_visual_bounds(
             .ok()
         }
         ElementRecordV1::Stroke(stroke) => {
-            let mut points = stroke.points.iter();
-            let first = points.next()?;
-            let (min_x, min_y, max_x, max_y) = points.fold(
-                (first.x, first.y, first.x, first.y),
-                |(min_x, min_y, max_x, max_y), point| {
-                    (
-                        min_x.min(point.x),
-                        min_y.min(point.y),
-                        max_x.max(point.x),
-                        max_y.max(point.y),
-                    )
-                },
-            );
-            let half_width = stroke.stroke_width / 2.0;
-            VisualAabb::new(
-                min_x - half_width,
-                min_y - half_width,
-                max_x - min_x + stroke.stroke_width,
-                max_y - min_y + stroke.stroke_width,
-            )
-            .ok()
+            stroke_visual_bounds(&stroke.points, stroke.stroke_width)
         }
         ElementRecordV1::Text(text) => text_metrics.metric_for(text).and_then(|metric| {
             VisualAabb::new(
@@ -1000,8 +979,8 @@ fn distance(first: Point2D, second: Point2D) -> f64 {
 mod tests {
     use super::*;
     use crate::{
-        FillV1, GroupElementV1, RectElementV1, RenderProfileV1, SCHEMA_VERSION, TextAlignV1,
-        TextElementV1, TextMetricsSnapshotV1, TextMetricsV1,
+        FillV1, GroupElementV1, RectElementV1, RenderProfileV1, SCHEMA_VERSION, StrokeElementV1,
+        TextAlignV1, TextElementV1, TextMetricsSnapshotV1, TextMetricsV1,
     };
 
     const EPSILON: f64 = 1e-9;
@@ -1047,6 +1026,60 @@ mod tests {
                 &TextMetricsCache::default(),
             ),
             Some("front".to_string())
+        );
+    }
+
+    #[test]
+    fn stroke_selection_bounds_and_hit_test_follow_the_smoothed_curve() {
+        let mut document = NodeInkDocumentV1::blank("smooth-stroke");
+        document.root_order.push("stroke".to_string());
+        document.elements.insert(
+            "stroke".to_string(),
+            ElementRecordV1::Stroke(StrokeElementV1 {
+                id: "stroke".to_string(),
+                transform: Affine2D::identity(),
+                points: vec![
+                    Vec2 { x: 0.0, y: 0.0 },
+                    Vec2 { x: 10.0, y: 20.0 },
+                    Vec2 { x: 20.0, y: 0.0 },
+                ],
+                stroke_width: 2.0,
+                stroke: "#0f172a".to_string(),
+            }),
+        );
+
+        let mut selection = SelectionModel::default();
+        selection
+            .set_single(&document, Some("stroke".to_string()))
+            .expect("stroke selection is valid");
+        let snapshot = selection.snapshot(&document, None, &TextMetricsCache::default(), 100.0);
+
+        assert_eq!(
+            snapshot.visual_bounds,
+            Some(SelectionBoundsV1 {
+                x: -1.0,
+                y: -1.0,
+                width: 22.0,
+                height: 17.0,
+            })
+        );
+        assert_eq!(
+            hit_test_document(
+                &document,
+                Vec2 { x: 10.0, y: 15.0 },
+                100.0,
+                &TextMetricsCache::default(),
+            ),
+            Some("stroke".to_string())
+        );
+        assert_eq!(
+            hit_test_document(
+                &document,
+                Vec2 { x: 10.0, y: 20.0 },
+                100.0,
+                &TextMetricsCache::default(),
+            ),
+            None
         );
     }
 

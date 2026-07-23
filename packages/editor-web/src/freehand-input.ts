@@ -28,12 +28,17 @@ export class FreehandInputAdapterV1 {
     }
 
     const strokeId = first.phase === 'down' ? this.#strokeId : null;
+    const last = events.at(-1) ?? first;
+    // A DOM interruption is not an explicit editor cancel. Preserve the ink already sampled
+    // instead of letting capture loss or window blur erase the whole visible stroke.
+    const phase = first.phase === 'cancel' ? 'up' : first.phase;
     const batch: StrokeInputBatchV1 = {
       pointerId: first.pointerId,
       sequenceStart: first.sequence,
-      phase: first.phase,
+      phase,
       points: events.map((event) => event.point),
       strokeId,
+      straightLine: last.modifiers.shift,
     };
 
     if (first.phase === 'up' || first.phase === 'cancel') {

@@ -23,6 +23,7 @@ export class SvgRenderer implements RendererV1 {
   #nodeElements = new Map<string, SVGElement>();
   #rootNodeIds: string[] = [];
   #sceneRevision: number | null = null;
+  #screenPixelsPerWorldUnit = 1;
 
   mount(target: HTMLElement): void {
     this.unmount();
@@ -39,6 +40,7 @@ export class SvgRenderer implements RendererV1 {
     target.replaceChildren(svg);
     this.#svg = svg;
     this.#overlay = overlay;
+    this.#screenPixelsPerWorldUnit = 1;
   }
 
   setOverlay(overlay: EditorOverlayV1): void {
@@ -95,10 +97,15 @@ export class SvgRenderer implements RendererV1 {
     ) {
       throw new Error('SVG viewport must contain finite coordinates and positive dimensions');
     }
-    this.requireSvg().setAttribute(
-      'viewBox',
-      `${viewport.x} ${viewport.y} ${viewport.width} ${viewport.height}`,
-    );
+    const svg = this.requireSvg();
+    svg.setAttribute('viewBox', `${viewport.x} ${viewport.y} ${viewport.width} ${viewport.height}`);
+    this.#screenPixelsPerWorldUnit = screenPixelsPerWorldUnit(svg, viewport);
+    for (const element of this.#nodeElements.values()) {
+      const strokeWidth = Number(element.dataset.nodeinkStrokeWidth);
+      if (Number.isFinite(strokeWidth)) {
+        setDocumentStroke(element, strokeWidth, this.#screenPixelsPerWorldUnit);
+      }
+    }
     return { durationMs: performance.now() - startedAt };
   }
 
@@ -197,6 +204,7 @@ export class SvgRenderer implements RendererV1 {
     this.#nodeElements.clear();
     this.#rootNodeIds = [];
     this.#sceneRevision = null;
+    this.#screenPixelsPerWorldUnit = 1;
   }
 
   private upsertNode(node: SceneRectV1 | ScenePathV1 | SceneTextV1): SVGElement {
@@ -219,7 +227,7 @@ export class SvgRenderer implements RendererV1 {
     rectangle.setAttribute('rx', '12');
     rectangle.setAttribute('fill', node.fill);
     rectangle.setAttribute('stroke', node.stroke);
-    rectangle.setAttribute('stroke-width', String(node.strokeWidth));
+    setDocumentStroke(rectangle, node.strokeWidth, this.#screenPixelsPerWorldUnit);
     setTransform(rectangle, node.transform);
     this.#nodeElements.set(node.id, rectangle);
     return rectangle;
@@ -236,7 +244,7 @@ export class SvgRenderer implements RendererV1 {
     path.setAttribute('d', node.pathData);
     path.setAttribute('fill', node.fill);
     path.setAttribute('stroke', node.stroke);
-    path.setAttribute('stroke-width', String(node.strokeWidth));
+    setDocumentStroke(path, node.strokeWidth, this.#screenPixelsPerWorldUnit);
     path.setAttribute('stroke-linecap', 'round');
     path.setAttribute('stroke-linejoin', 'round');
     setTransform(path, node.transform);
@@ -413,6 +421,25 @@ function setTransform(element: SVGElement, transform: SceneRectV1['transform']):
     'transform',
     `matrix(${transform.a} ${transform.b} ${transform.c} ${transform.d} ${transform.e} ${transform.f})`,
   );
+}
+
+function setDocumentStroke(
+  element: SVGElement,
+  strokeWidth: number,
+  screenPixelsPerWorldUnit: number,
+): void {
+  element.dataset.nodeinkStrokeWidth = String(strokeWidth);
+  element.setAttribute('stroke-width', String(strokeWidth * screenPixelsPerWorldUnit));
+  element.setAttribute('vector-effect', 'non-scaling-stroke');
+}
+
+function screenPixelsPerWorldUnit(svg: SVGSVGElement, viewport: ViewportV1): number {
+  const bounds = svg.getBoundingClientRect();
+  const scaleX = bounds.width / viewport.width;
+  const scaleY = bounds.height / viewport.height;
+  return Number.isFinite(scaleX) && scaleX > 0 && Number.isFinite(scaleY) && scaleY > 0
+    ? Math.min(scaleX, scaleY)
+    : 1;
 }
 
 function validateOverlay(overlay: EditorOverlayV1): void {
