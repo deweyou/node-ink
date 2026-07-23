@@ -11,13 +11,14 @@ import {
 import {
   NODEINK_COLOR_PRESETS,
   NODEINK_FILL_PRESETS,
-  NODEINK_STROKE_WIDTH_PRESETS,
+  NODEINK_SIZE_PRESETS,
   NODEINK_TEXT_ALIGN_PRESETS,
   NODEINK_TEXT_SIZE_PRESETS,
   fillPresetMatches,
   getEditorCameraPresentation,
   getEditorPersistencePresentation,
   type ElementStylePatchV1,
+  type ElementSizeV1,
   type EditorActionV1,
   type EditorWebControllerV1,
   type SelectionStyleV1,
@@ -393,18 +394,14 @@ function renderSelectionStylePanel(
         colorGroup('Stroke', style.stroke, (stroke) =>
           dispatch(closedShapeStylePatch(style.kind, { stroke })),
         ),
-        widthGroup(style.strokeWidth, (strokeWidth) =>
-          dispatch(closedShapeStylePatch(style.kind, { strokeWidth })),
-        ),
+        sizeGroup(style.size, (size) => dispatch(closedShapeStylePatch(style.kind, { size }))),
       ]
     : style.kind !== 'text'
       ? [
           colorGroup('Color', style.stroke, (stroke) =>
             dispatch(lineStylePatch(style.kind, { stroke })),
           ),
-          widthGroup(style.strokeWidth, (strokeWidth) =>
-            dispatch(lineStylePatch(style.kind, { strokeWidth })),
-          ),
+          sizeGroup(style.size, (size) => dispatch(lineStylePatch(style.kind, { size }))),
         ]
       : [
           colorGroup('Color', style.color, (color) => dispatch({ kind: 'text', color })),
@@ -509,18 +506,18 @@ function colorGroup(label: string, value: string, onChange: (color: string) => v
   );
 }
 
-function widthGroup(value: number, onChange: (value: number) => void) {
+function sizeGroup(value: ElementSizeV1, onChange: (value: ElementSizeV1) => void) {
   return styleGroup(
-    'Width',
-    NODEINK_STROKE_WIDTH_PRESETS.map((strokeWidth) =>
+    'Size',
+    NODEINK_SIZE_PRESETS.map((preset) =>
       h(
         'button',
         {
           type: 'button',
-          'aria-pressed': value === strokeWidth,
-          onClick: () => onChange(strokeWidth),
+          'aria-pressed': value === preset.value,
+          onClick: () => onChange(preset.value),
         },
-        `${strokeWidth}px`,
+        preset.label,
       ),
     ),
   );

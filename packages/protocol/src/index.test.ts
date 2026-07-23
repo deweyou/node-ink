@@ -20,6 +20,7 @@ import {
   parseStrokeUpdate,
   parseTextEditTarget,
   parseTextFixtureResolution,
+  parseVertexEditUpdate,
 } from './index';
 
 const fixtureFontFingerprint = 'noto-sans-sc-v40-fontsource-5.3.0';
@@ -49,7 +50,7 @@ describe('protocol V1 with schema V4 documents', () => {
 
   it('creates a blank document with explicit versions', () => {
     expect(createBlankDocument('doc-1')).toEqual({
-      schemaVersion: 4,
+      schemaVersion: 5,
       documentId: 'doc-1',
       revision: 0,
       renderProfile: { kind: 'clean', version: 1 },
@@ -124,7 +125,7 @@ describe('protocol V1 with schema V4 documents', () => {
           kind: 'rect',
           fill: { kind: 'solid', color: '#d1fae5' },
           stroke: '#047857',
-          strokeWidth: 2,
+          size: 'm',
         },
       },
     };
@@ -228,7 +229,7 @@ describe('protocol V1 with schema V4 documents', () => {
     const stroke = lineShapeElementFixture('stroke', 'stroke-1');
     const text = textElementFixture();
     const document = {
-      schemaVersion: 4 as const,
+      schemaVersion: 5 as const,
       documentId: 'all-leaves',
       revision: 0,
       renderProfile: { kind: 'clean' as const, version: 1 as const },
@@ -378,7 +379,7 @@ describe('protocol V1 with schema V4 documents', () => {
           { x: 0, y: 0 },
           { x: 10, y: 10 },
         ],
-        strokeWidth: 2,
+        size: 'm',
         stroke: '#0f172a',
       },
     },
@@ -399,7 +400,7 @@ describe('protocol V1 with schema V4 documents', () => {
     {
       type: 'update_element_style',
       elementId: 'diamond-1',
-      patch: { kind: 'diamond', strokeWidth: 4 },
+      patch: { kind: 'diamond', size: 'm' },
     },
     {
       type: 'update_element_style',
@@ -409,12 +410,12 @@ describe('protocol V1 with schema V4 documents', () => {
     {
       type: 'update_element_style',
       elementId: 'polyline-1',
-      patch: { kind: 'polyline', strokeWidth: 4 },
+      patch: { kind: 'polyline', size: 'm' },
     },
     {
       type: 'update_element_style',
       elementId: 'arrow-1',
-      patch: { kind: 'arrow', stroke: '#dc2626', strokeWidth: 4 },
+      patch: { kind: 'arrow', stroke: '#dc2626', size: 'm' },
     },
     { type: 'set_render_profile', renderProfile: { kind: 'clean', version: 1 } },
     { type: 'transform_elements', elementIds: ['rect-1'], transform: identity() },
@@ -435,6 +436,15 @@ describe('protocol V1 with schema V4 documents', () => {
       payload: '{"version":1}',
       idPrefix: 'paste-1',
       offset: { x: 24, y: 24 },
+    },
+    {
+      type: 'update_path_points',
+      elementId: 'polyline-1',
+      points: [
+        { x: 0, y: 0 },
+        { x: 20, y: 10 },
+        { x: 40, y: 0 },
+      ],
     },
     { type: 'delete_elements', elementIds: ['rect-1'] },
   ])('strictly parses the %s command', (command) => {
@@ -549,6 +559,14 @@ describe('protocol V1 with schema V4 documents', () => {
       idPrefix: 'paste-1',
       offset: { x: 24, y: 24 },
       extra: true,
+    }),
+    commandEnvelopeFixture({
+      type: 'update_path_points',
+      elementId: 'polyline-1',
+      points: [
+        { x: 0, y: 0 },
+        { x: 0, y: 0 },
+      ],
     }),
     { ...commandEnvelopeFixture({ type: 'ungroup_elements', groupId: 'group-1' }), extra: true },
   ])('rejects an invalid command envelope %#', (envelope) => {
@@ -893,7 +911,7 @@ describe('protocol V1 with schema V4 documents', () => {
     {
       ...selectedRectangleFixture(),
       selectedElementId: 'rect-1',
-      style: { ...rectangleSelectionStyle(), strokeWidth: Number.NaN },
+      style: { ...rectangleSelectionStyle(), size: 'xxl' },
     },
     {
       ...selectedRectangleFixture(),
@@ -913,6 +931,15 @@ describe('protocol V1 with schema V4 documents', () => {
     { id: 'east', kind: 'resize', position: { x: null, y: 0 } },
     { id: 'north', kind: 'rotate', position: { x: 0, y: 0 } },
     { id: 'rotate', kind: 'resize', position: { x: 0, y: 0 } },
+    {
+      id: 'vertex',
+      kind: 'vertex',
+      position: { x: 0, y: 0 },
+      vertexIndex: -1,
+      selected: true,
+    },
+    { id: 'vertex', kind: 'vertex', position: { x: 0, y: 0 }, vertexIndex: 0 },
+    { id: 'vertex', kind: 'resize', position: { x: 0, y: 0 } },
   ])('rejects each malformed selection handle boundary %o', (handle) => {
     const selection = { ...selectedRectangleFixture(), handles: [handle] };
     expect(() => parseEngineUpdate(JSON.stringify({ ...updateFixture(), selection }))).toThrow(
@@ -927,6 +954,30 @@ describe('protocol V1 with schema V4 documents', () => {
     { id: 'west', kind: 'resize', position: { x: 0, y: 5 } },
   ])('accepts the remaining resize handle id %s', (handle) => {
     const selection = { ...selectedRectangleFixture(), handles: [handle] };
+    expect(parseEngineUpdate(JSON.stringify({ ...updateFixture(), selection })).selection).toEqual(
+      selection,
+    );
+  });
+
+  it('accepts multiple indexed vertex handles and their selected state', () => {
+    const handles = [
+      {
+        id: 'vertex',
+        kind: 'vertex',
+        position: { x: 0, y: 0 },
+        vertexIndex: 0,
+        selected: false,
+      },
+      {
+        id: 'vertex',
+        kind: 'vertex',
+        position: { x: 10, y: 10 },
+        vertexIndex: 1,
+        selected: true,
+      },
+    ];
+    const selection = { ...selectedRectangleFixture(), handles };
+
     expect(parseEngineUpdate(JSON.stringify({ ...updateFixture(), selection })).selection).toEqual(
       selection,
     );
@@ -979,7 +1030,7 @@ describe('protocol V1 with schema V4 documents', () => {
     const selection = {
       ...selectedRectangleFixture(),
       guides: [{ axis: 'y' as const, position: 5, start: 0, end: 10 }],
-      style: { kind: 'stroke' as const, stroke: '#0f172a', strokeWidth: 2 },
+      style: { kind: 'stroke' as const, stroke: '#0f172a', size: 's' as const },
     };
     expect(parseEngineUpdate(JSON.stringify({ ...updateFixture(), selection })).selection).toEqual(
       selection,
@@ -1047,6 +1098,18 @@ describe('protocol V1 with schema V4 documents', () => {
     { update: {}, processedEventCount: 1, ignoredEventCount: 0, didCommit: 'false' },
   ])('rejects invalid pointer update metadata', (value) => {
     expect(() => parsePointerUpdate(JSON.stringify(value))).toThrow('invalid pointer update');
+  });
+
+  it('parses vertex edit metadata around a valid engine update', () => {
+    const value = {
+      update: updateFixture(),
+      didCommit: true,
+    };
+
+    expect(parseVertexEditUpdate(JSON.stringify(value))).toEqual(value);
+    expect(() =>
+      parseVertexEditUpdate(JSON.stringify({ update: updateFixture(), didCommit: 'true' })),
+    ).toThrow('invalid vertex edit update');
   });
 
   it('parses stroke processing metadata around a valid engine update', () => {
@@ -1160,7 +1223,7 @@ describe('protocol V1 with schema V4 documents', () => {
     const success = {
       result: {
         sourceSchemaVersion: 0,
-        targetSchemaVersion: 4,
+        targetSchemaVersion: 5,
         migrated: true,
         document: createBlankDocument('doc-1'),
         canonicalPayload: '{}',
@@ -1173,7 +1236,7 @@ describe('protocol V1 with schema V4 documents', () => {
         stage: 'schema',
         code: 'unknown_schema',
         sourceSchemaVersion: 99,
-        targetSchemaVersion: 4,
+        targetSchemaVersion: 5,
         message: 'unsupported',
         recovery: 'try_next_snapshot_then_readonly_diagnostic',
       },
@@ -1330,7 +1393,7 @@ function rectangleSelectionStyle() {
     kind: 'rect' as const,
     fill: { kind: 'solid' as const, color: '#d1fae5' },
     stroke: '#047857',
-    strokeWidth: 2,
+    size: 'm' as const,
   };
 }
 
@@ -1346,7 +1409,7 @@ function textSelectionStyle() {
 
 function styledDocumentFixture() {
   return {
-    schemaVersion: 4 as const,
+    schemaVersion: 5 as const,
     documentId: 'doc-1',
     revision: 3,
     renderProfile: {
@@ -1366,7 +1429,7 @@ function styledDocumentFixture() {
 
 function groupedDocumentFixture() {
   return {
-    schemaVersion: 4 as const,
+    schemaVersion: 5 as const,
     documentId: 'doc-groups',
     revision: 1,
     renderProfile: { kind: 'clean' as const, version: 1 as const },
@@ -1415,7 +1478,7 @@ function closedShapeElementFixture(kind: 'ellipse' | 'diamond', id: string) {
     height: 96,
     fill: { kind: 'solid' as const, color: '#d1fae5' },
     stroke: '#047857',
-    strokeWidth: 2,
+    size: 'm' as const,
   };
 }
 
@@ -1432,7 +1495,7 @@ function lineShapeElementFixture(
     id,
     transform: identity(),
     points,
-    strokeWidth: 2,
+    size: 'm' as const,
     stroke: '#0f172a',
   };
 }

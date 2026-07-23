@@ -33,6 +33,7 @@ import {
   type TextMeasureRequestV1,
   type TextMetricsSnapshotV1,
   type Vec2,
+  type VertexEditUpdateV1,
 } from '@nodeink-internal/protocol';
 
 import { attachPointerInput } from './pointer-input';
@@ -111,6 +112,7 @@ export type EditorActionV1 =
   | { type: 'remove_shape_creation_point' }
   | { type: 'set_tool'; tool: EditorToolV1 }
   | { type: 'begin_text_edit'; point: Vec2 }
+  | { type: 'insert_polyline_vertex'; point: Vec2 }
   | { type: 'commit_text_edit'; value: string }
   | { type: 'cancel_text_edit' }
   | { type: 'update_selection_style'; patch: ElementStylePatchV1 }
@@ -211,6 +213,7 @@ export interface EditorActionResultV1 {
   snapshot: EditorUiSnapshotV1;
   pointerMetrics?: Pick<PointerUpdateV1, 'processedEventCount' | 'ignoredEventCount' | 'didCommit'>;
   strokeMetrics?: Pick<StrokeUpdateV1, 'processedPointCount' | 'ignoredPointCount' | 'didCommit'>;
+  vertexMetrics?: Pick<VertexEditUpdateV1, 'didCommit'>;
   performance?: EditorActionPerformanceV1;
 }
 
@@ -369,7 +372,11 @@ export class EditorWebController implements EditorWebControllerV1 {
                 if (this.#snapshot.activeTool === 'polyline') {
                   void this.dispatch({ type: 'finish_shape_creation' });
                 } else if (this.#snapshot.activeTool === 'select' && !this.#textEditor) {
-                  void this.dispatch({ type: 'begin_text_edit', point });
+                  void this.dispatch({ type: 'insert_polyline_vertex', point }).then((result) => {
+                    if (result.ok && result.vertexMetrics?.didCommit === false) {
+                      void this.dispatch({ type: 'begin_text_edit', point });
+                    }
+                  });
                 }
               },
             },
@@ -532,6 +539,7 @@ export class EditorWebController implements EditorWebControllerV1 {
         snapshot: this.#snapshot,
         ...(execution.pointerMetrics ? { pointerMetrics: execution.pointerMetrics } : {}),
         ...(execution.strokeMetrics ? { strokeMetrics: execution.strokeMetrics } : {}),
+        ...(execution.vertexMetrics ? { vertexMetrics: execution.vertexMetrics } : {}),
         performance: {
           inputToVisibleMs: performance.now() - startedAt,
           rendererApplyMs: renderResult.durationMs ?? 0,
@@ -870,6 +878,16 @@ export class EditorWebController implements EditorWebControllerV1 {
       this.openTextEditor(target.element, action.point, target.update.selection.visualBounds);
       return { update: target.update };
     }
+    if (action.type === 'insert_polyline_vertex') {
+      const vertexUpdate = await this.#engine.insertPolylineVertexAt(
+        action.point,
+        this.#createId(),
+      );
+      return {
+        update: vertexUpdate.update,
+        vertexMetrics: { didCommit: vertexUpdate.didCommit },
+      };
+    }
     if (action.type === 'commit_text_edit') {
       return { update: await this.commitTextDraft(action.value) };
     }
@@ -932,6 +950,16 @@ export class EditorWebController implements EditorWebControllerV1 {
     }
     if (action.type === 'cut') {
       await this.copySelection();
+    }
+    if (
+      action.type === 'delete_selection' &&
+      this.#snapshot.selectionHandles.some((handle) => handle.kind === 'vertex' && handle.selected)
+    ) {
+      const vertexUpdate = await this.#engine.deleteSelectedVertex(commandId);
+      return {
+        update: vertexUpdate.update,
+        vertexMetrics: { didCommit: vertexUpdate.didCommit },
+      };
     }
     const pastePayload = action.type === 'paste' ? await this.#clipboard.read() : null;
     if (action.type === 'paste' && pastePayload === null) {
@@ -1386,6 +1414,7 @@ interface ActionExecutionResult {
   update: EngineUpdateV1;
   pointerMetrics?: Pick<PointerUpdateV1, 'processedEventCount' | 'ignoredEventCount' | 'didCommit'>;
   strokeMetrics?: Pick<StrokeUpdateV1, 'processedPointCount' | 'ignoredPointCount' | 'didCommit'>;
+  vertexMetrics?: Pick<VertexEditUpdateV1, 'didCommit'>;
 }
 
 interface TextEditingDraftV1 {
@@ -1416,8 +1445,8 @@ export {
   NODEINK_DEFAULT_STROKE_STYLE,
   NODEINK_DEFAULT_TEXT_STYLE,
   NODEINK_FILL_PRESETS,
+  NODEINK_SIZE_PRESETS,
   NODEINK_SKETCH_PROFILE,
-  NODEINK_STROKE_WIDTH_PRESETS,
   NODEINK_TEXT_ALIGN_PRESETS,
   NODEINK_TEXT_SIZE_PRESETS,
   fillPresetMatches,
@@ -1428,7 +1457,11 @@ export { CanvasTextMetricsAdapter } from './text-metrics';
 export type { CanvasTextMetricsAdapterOptions, TextMeasureBatchResultV1 } from './text-metrics';
 export { defaultClipboardPort, MemoryClipboardPortV1 } from './clipboard-port';
 export type { ClipboardPayloadV1, ClipboardPortV1 } from './clipboard-port';
-export type { ElementStylePatchV1, SelectionStyleV1 } from '@nodeink-internal/protocol';
+export type {
+  ElementSizeV1,
+  ElementStylePatchV1,
+  SelectionStyleV1,
+} from '@nodeink-internal/protocol';
 
 function createRectangle(
   id: string,
@@ -1443,7 +1476,7 @@ function createRectangle(
     height: 104,
     fill: NODEINK_DEFAULT_RECT_STYLE.fill,
     stroke: NODEINK_DEFAULT_RECT_STYLE.stroke,
-    strokeWidth: NODEINK_DEFAULT_RECT_STYLE.strokeWidth,
+    size: NODEINK_DEFAULT_RECT_STYLE.size,
     transform: identityTransform(),
   };
 }
@@ -1461,7 +1494,7 @@ function createEllipse(
     height: 104,
     fill: NODEINK_DEFAULT_RECT_STYLE.fill,
     stroke: NODEINK_DEFAULT_RECT_STYLE.stroke,
-    strokeWidth: NODEINK_DEFAULT_RECT_STYLE.strokeWidth,
+    size: NODEINK_DEFAULT_RECT_STYLE.size,
     transform: identityTransform(),
   };
 }
@@ -1479,7 +1512,7 @@ function createDiamond(
     height: 104,
     fill: NODEINK_DEFAULT_RECT_STYLE.fill,
     stroke: NODEINK_DEFAULT_RECT_STYLE.stroke,
-    strokeWidth: NODEINK_DEFAULT_RECT_STYLE.strokeWidth,
+    size: NODEINK_DEFAULT_RECT_STYLE.size,
     transform: identityTransform(),
   };
 }
@@ -1494,7 +1527,7 @@ function createLine(id: string, position: { x: number; y: number } | undefined):
       { x: origin.x + 176, y: origin.y + 16 },
     ],
     stroke: NODEINK_DEFAULT_LINE_STYLE.stroke,
-    strokeWidth: NODEINK_DEFAULT_LINE_STYLE.strokeWidth,
+    size: NODEINK_DEFAULT_LINE_STYLE.size,
     transform: identityTransform(),
   };
 }
@@ -1513,7 +1546,7 @@ function createPolyline(
       { x: origin.x + 176, y: origin.y + 72 },
     ],
     stroke: NODEINK_DEFAULT_LINE_STYLE.stroke,
-    strokeWidth: NODEINK_DEFAULT_LINE_STYLE.strokeWidth,
+    size: NODEINK_DEFAULT_LINE_STYLE.size,
     transform: identityTransform(),
   };
 }
@@ -1528,7 +1561,7 @@ function createArrow(id: string, position: { x: number; y: number } | undefined)
       { x: origin.x + 176, y: origin.y + 16 },
     ],
     stroke: NODEINK_DEFAULT_LINE_STYLE.stroke,
-    strokeWidth: NODEINK_DEFAULT_LINE_STYLE.strokeWidth,
+    size: NODEINK_DEFAULT_LINE_STYLE.size,
     transform: identityTransform(),
   };
 }

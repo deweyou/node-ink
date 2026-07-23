@@ -1,4 +1,9 @@
-import type { FillV1, RenderProfileV1, TextAlignV1 } from '@nodeink-internal/protocol';
+import type {
+  ElementSizeV1,
+  FillV1,
+  RenderProfileV1,
+  TextAlignV1,
+} from '@nodeink-internal/protocol';
 
 export const NODEINK_CLEAN_PROFILE = {
   kind: 'clean',
@@ -28,7 +33,12 @@ export const NODEINK_COLOR_PRESETS = [
   { id: 'rose', label: 'Rose', value: '#e11d48' },
 ] as const;
 
-export const NODEINK_STROKE_WIDTH_PRESETS = [1, 2, 4] as const;
+export const NODEINK_SIZE_PRESETS = [
+  { value: 's', label: 'S' },
+  { value: 'm', label: 'M' },
+  { value: 'l', label: 'L' },
+  { value: 'xl', label: 'XL' },
+] as const satisfies ReadonlyArray<{ value: ElementSizeV1; label: string }>;
 export const NODEINK_TEXT_SIZE_PRESETS = [18, 24, 32] as const;
 export const NODEINK_TEXT_ALIGN_PRESETS = [
   { value: 'start', label: 'Left' },
@@ -39,17 +49,17 @@ export const NODEINK_TEXT_ALIGN_PRESETS = [
 export const NODEINK_DEFAULT_RECT_STYLE = {
   fill: NODEINK_FILL_PRESETS[0].value,
   stroke: '#047857',
-  strokeWidth: 2,
+  size: 'm',
 } as const;
 
 export const NODEINK_DEFAULT_STROKE_STYLE = {
   stroke: '#0f172a',
-  strokeWidth: 3,
+  size: 'm',
 } as const;
 
 export const NODEINK_DEFAULT_LINE_STYLE = {
   stroke: '#0f172a',
-  strokeWidth: 2,
+  size: 'm',
 } as const;
 
 export const NODEINK_DEFAULT_TEXT_STYLE = {

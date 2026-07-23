@@ -74,7 +74,7 @@ pub fn benchmark_scene_snapshot(
                 height: 10.0,
                 fill: "#d1fae5".to_string(),
                 stroke: "#047857".to_string(),
-                stroke_width: crate::DEFAULT_RECTANGLE_STROKE_WIDTH,
+                stroke_width: crate::DEFAULT_ELEMENT_SIZE.stroke_width(),
             }),
         );
     }
@@ -133,7 +133,7 @@ mod tests {
                 height: 10.0,
                 fill: "#d1fae5".to_string(),
                 stroke: "#047857".to_string(),
-                stroke_width: crate::DEFAULT_RECTANGLE_STROKE_WIDTH,
+                stroke_width: crate::DEFAULT_ELEMENT_SIZE.stroke_width(),
             })
         );
     }
@@ -154,7 +154,7 @@ mod tests {
             height: 16.0,
             fill: "none".to_string(),
             stroke: "black".to_string(),
-            stroke_width: crate::DEFAULT_RECTANGLE_STROKE_WIDTH,
+            stroke_width: crate::DEFAULT_ELEMENT_SIZE.stroke_width(),
         });
         after
             .nodes

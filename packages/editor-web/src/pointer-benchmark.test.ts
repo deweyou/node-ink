@@ -21,7 +21,7 @@ const readySnapshot: EditorUiSnapshotV1 = {
     kind: 'rect',
     fill: { kind: 'solid', color: '#d1fae5' },
     stroke: '#047857',
-    strokeWidth: 2,
+    size: 'm',
   },
   renderProfile: { kind: 'clean', version: 1 },
   canUndo: false,

@@ -194,7 +194,7 @@ mod tests {
             height: 20.0,
             fill: FillV1::default_rectangle(),
             stroke: "#047857".to_string(),
-            stroke_width: 2.0,
+            size: crate::ElementSizeV1::S,
         };
         let payload = encode_clipboard(
             "source",

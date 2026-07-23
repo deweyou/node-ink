@@ -47,7 +47,16 @@ pub(crate) struct TargetedPointerEvent {
     pub target_element_id: Option<ElementId>,
     pub selected_element_ids: Vec<ElementId>,
     pub target_handle: Option<SelectionHandleIdV1>,
+    pub target_vertex: Option<TargetedVertexHandle>,
     pub oriented_bounds: Option<OrientedSelectionBoundsV1>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct TargetedVertexHandle {
+    pub element_id: ElementId,
+    pub vertex_index: usize,
+    pub points: Vec<Vec2>,
+    pub world_to_local: Affine2D,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -68,10 +77,18 @@ pub(crate) struct PointerTransformPreview {
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum PointerPreview {
     Transform(PointerTransformPreview),
+    Vertex(PointerVertexPreview),
     Marquee {
         bounds: SelectionBoundsV1,
         mode: SelectionMarqueeModeV1,
     },
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct PointerVertexPreview {
+    pub element_id: ElementId,
+    pub vertex_index: usize,
+    pub points: Vec<Vec2>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -88,6 +105,10 @@ pub(crate) enum PointerTransition {
     None,
     Preview(PointerPreview),
     Commit(PointerCommit),
+    VertexCommit {
+        preview: PointerVertexPreview,
+        expected_revision: u64,
+    },
     MarqueeCommit {
         bounds: SelectionBoundsV1,
         mode: SelectionMarqueeModeV1,
@@ -99,6 +120,11 @@ pub(crate) enum PointerTransition {
 pub(crate) enum PointerSelectionChange {
     Replace(Option<ElementId>),
     Toggle(ElementId),
+    ClearVertex,
+    Vertex {
+        element_id: ElementId,
+        vertex_index: usize,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -125,6 +151,15 @@ enum PointerState {
         last_sequence: u64,
         expected_revision: u64,
         gesture: TransformGesture,
+    },
+    EditingVertex {
+        pointer_id: u32,
+        element_id: ElementId,
+        vertex_index: usize,
+        points: Vec<Vec2>,
+        world_to_local: Affine2D,
+        last_sequence: u64,
+        expected_revision: u64,
     },
     ShiftTarget {
         pointer_id: u32,
@@ -209,6 +244,7 @@ impl PointerMachine {
             target_element_id,
             selected_element_ids,
             target_handle,
+            target_vertex,
             oriented_bounds,
         } = event;
         if !valid_input(&input) {
@@ -218,6 +254,24 @@ impl PointerMachine {
             PointerState::Idle => {
                 if input.phase != PointerPhaseV1::Down {
                     return EventOutcome::Ignored;
+                }
+                if let Some(target_vertex) = target_vertex {
+                    self.state = PointerState::EditingVertex {
+                        pointer_id: input.pointer_id,
+                        element_id: target_vertex.element_id.clone(),
+                        vertex_index: target_vertex.vertex_index,
+                        points: target_vertex.points,
+                        world_to_local: target_vertex.world_to_local,
+                        last_sequence: input.sequence,
+                        expected_revision,
+                    };
+                    return EventOutcome::accepted(
+                        PointerTransition::None,
+                        Some(PointerSelectionChange::Vertex {
+                            element_id: target_vertex.element_id,
+                            vertex_index: target_vertex.vertex_index,
+                        }),
+                    );
                 }
                 if let (Some(handle), Some(bounds)) = (target_handle, oriented_bounds) {
                     if !selected_element_ids.is_empty() {
@@ -265,8 +319,11 @@ impl PointerMachine {
                         expected_revision,
                         gesture: TransformGesture::Move,
                     };
-                    let selection = (!was_selected)
-                        .then_some(PointerSelectionChange::Replace(Some(element_id)));
+                    let selection = if was_selected {
+                        Some(PointerSelectionChange::ClearVertex)
+                    } else {
+                        Some(PointerSelectionChange::Replace(Some(element_id)))
+                    };
                     return EventOutcome::accepted(PointerTransition::None, selection);
                 }
                 let mode = if input.modifiers.shift {
@@ -334,8 +391,11 @@ impl PointerMachine {
                     kind: PointerTransformKind::Move,
                     disable_snap: input.modifiers.meta_or_ctrl,
                 };
-                let selection = (!*target_was_selected)
-                    .then(|| PointerSelectionChange::Toggle(target_element_id.clone()));
+                let selection = if *target_was_selected {
+                    Some(PointerSelectionChange::ClearVertex)
+                } else {
+                    Some(PointerSelectionChange::Toggle(target_element_id.clone()))
+                };
                 let transition = if input.phase == PointerPhaseV1::Up {
                     let commit = PointerCommit {
                         element_ids,
@@ -409,6 +469,66 @@ impl PointerMachine {
                 };
                 EventOutcome::accepted(transition, None)
             }
+            PointerState::EditingVertex {
+                pointer_id,
+                element_id,
+                vertex_index,
+                points,
+                world_to_local,
+                last_sequence,
+                expected_revision,
+            } => {
+                if input.pointer_id != *pointer_id || input.sequence <= *last_sequence {
+                    return EventOutcome::Ignored;
+                }
+                *last_sequence = input.sequence;
+                let transition = match input.phase {
+                    PointerPhaseV1::Move | PointerPhaseV1::Up => {
+                        let Ok(local) =
+                            world_to_local.apply(Point2D::new(input.point.x, input.point.y))
+                        else {
+                            return EventOutcome::Ignored;
+                        };
+                        let Some(next_points) = move_vertex(
+                            points,
+                            *vertex_index,
+                            Vec2 {
+                                x: local.x,
+                                y: local.y,
+                            },
+                            input.modifiers.shift,
+                        ) else {
+                            return EventOutcome::Ignored;
+                        };
+                        let preview = PointerVertexPreview {
+                            element_id: element_id.clone(),
+                            vertex_index: *vertex_index,
+                            points: next_points,
+                        };
+                        if input.phase == PointerPhaseV1::Up {
+                            let expected_revision = *expected_revision;
+                            let did_change = preview.points != *points;
+                            self.state = PointerState::Idle;
+                            if did_change {
+                                PointerTransition::VertexCommit {
+                                    preview,
+                                    expected_revision,
+                                }
+                            } else {
+                                PointerTransition::None
+                            }
+                        } else {
+                            PointerTransition::Preview(PointerPreview::Vertex(preview))
+                        }
+                    }
+                    PointerPhaseV1::Cancel => {
+                        self.state = PointerState::Idle;
+                        PointerTransition::Cancelled
+                    }
+                    PointerPhaseV1::Down => return EventOutcome::Ignored,
+                };
+                EventOutcome::accepted(transition, None)
+            }
             PointerState::Marquee {
                 pointer_id,
                 origin,
@@ -441,6 +561,73 @@ impl PointerMachine {
             }
         }
     }
+}
+
+fn move_vertex(
+    points: &[Vec2],
+    vertex_index: usize,
+    point: Vec2,
+    constrain_to_forty_five_degrees: bool,
+) -> Option<Vec<Vec2>> {
+    if vertex_index >= points.len() || !point.x.is_finite() || !point.y.is_finite() {
+        return None;
+    }
+    let point = if constrain_to_forty_five_degrees {
+        constrained_vertex(points, vertex_index, point)?
+    } else {
+        point
+    };
+    let mut next = points.to_vec();
+    next[vertex_index] = point;
+    Some(next)
+}
+
+fn constrained_vertex(points: &[Vec2], vertex_index: usize, point: Vec2) -> Option<Vec2> {
+    let previous = vertex_index
+        .checked_sub(1)
+        .and_then(|index| points.get(index));
+    let next = points.get(vertex_index + 1);
+    match (previous, next) {
+        (Some(previous), Some(next)) => {
+            let from_previous = snap_point_to_forty_five_degrees(*previous, point)?;
+            let from_next = snap_point_to_forty_five_degrees(*next, point)?;
+            let previous_correction = squared_distance(from_previous, point);
+            let next_correction = squared_distance(from_next, point);
+            Some(if previous_correction <= next_correction {
+                from_previous
+            } else {
+                from_next
+            })
+        }
+        (Some(anchor), None) | (None, Some(anchor)) => {
+            snap_point_to_forty_five_degrees(*anchor, point)
+        }
+        (None, None) => None,
+    }
+}
+
+fn snap_point_to_forty_five_degrees(anchor: Vec2, point: Vec2) -> Option<Vec2> {
+    let delta_x = point.x - anchor.x;
+    let delta_y = point.y - anchor.y;
+    let length = delta_x.hypot(delta_y);
+    if !length.is_finite() {
+        return None;
+    }
+    if length <= f64::EPSILON {
+        return Some(point);
+    }
+    let step = std::f64::consts::FRAC_PI_4;
+    let angle = (delta_y.atan2(delta_x) / step).round() * step;
+    Some(Vec2 {
+        x: anchor.x + length * angle.cos(),
+        y: anchor.y + length * angle.sin(),
+    })
+}
+
+fn squared_distance(first: Vec2, second: Vec2) -> f64 {
+    let delta_x = first.x - second.x;
+    let delta_y = first.y - second.y;
+    delta_x * delta_x + delta_y * delta_y
 }
 
 impl EventOutcome {
@@ -584,7 +771,7 @@ fn opposite_local(
         SelectionHandleIdV1::South => Point2D::new(0.0, -half_height),
         SelectionHandleIdV1::SouthWest => Point2D::new(half_width, -half_height),
         SelectionHandleIdV1::West => Point2D::new(half_width, 0.0),
-        SelectionHandleIdV1::Rotate => return None,
+        SelectionHandleIdV1::Rotate | SelectionHandleIdV1::Vertex => return None,
     })
 }
 
@@ -622,6 +809,7 @@ mod tests {
             target_element_id: Some("rect".to_string()),
             selected_element_ids: vec!["rect".to_string()],
             target_handle: None,
+            target_vertex: None,
             oriented_bounds: None,
         };
         machine.process_batch(
@@ -658,6 +846,7 @@ mod tests {
                 target_element_id: Some("rect".to_string()),
                 selected_element_ids: vec!["rect".to_string()],
                 target_handle: None,
+                target_vertex: None,
                 oriented_bounds: None,
             }
         };
@@ -704,7 +893,69 @@ mod tests {
             panic!("Shift drag should start a transform preview")
         };
         assert_eq!((preview.transform.e, preview.transform.f), (40.0, 0.0));
-        assert_eq!(drag.selection_change, None);
+        assert_eq!(
+            drag.selection_change,
+            Some(PointerSelectionChange::ClearVertex)
+        );
+    }
+
+    #[test]
+    fn vertex_constraint_helpers_cover_invalid_and_middle_vertex_edges() {
+        let points = [
+            Vec2 { x: 0.0, y: 0.0 },
+            Vec2 { x: 10.0, y: 10.0 },
+            Vec2 { x: 20.0, y: 0.0 },
+        ];
+
+        assert!(move_vertex(&points, 3, Vec2 { x: 1.0, y: 1.0 }, false).is_none());
+        assert!(
+            move_vertex(
+                &points,
+                1,
+                Vec2 {
+                    x: f64::NAN,
+                    y: 1.0
+                },
+                false
+            )
+            .is_none()
+        );
+        assert!(
+            snap_point_to_forty_five_degrees(
+                Vec2 { x: 0.0, y: 0.0 },
+                Vec2 {
+                    x: f64::INFINITY,
+                    y: 1.0,
+                },
+            )
+            .is_none()
+        );
+
+        let constrained =
+            move_vertex(&points, 1, Vec2 { x: 12.0, y: 3.0 }, true).expect("middle vertex snaps");
+        assert_ne!(constrained[1], points[1]);
+        assert!(constrained[1].x.is_finite());
+        assert!(constrained[1].y.is_finite());
+    }
+
+    #[test]
+    fn every_resize_handle_has_a_stable_opposite_pivot() {
+        let expected = [
+            (SelectionHandleIdV1::NorthWest, Point2D::new(4.0, 3.0)),
+            (SelectionHandleIdV1::North, Point2D::new(0.0, 3.0)),
+            (SelectionHandleIdV1::NorthEast, Point2D::new(-4.0, 3.0)),
+            (SelectionHandleIdV1::East, Point2D::new(-4.0, 0.0)),
+            (SelectionHandleIdV1::SouthEast, Point2D::new(-4.0, -3.0)),
+            (SelectionHandleIdV1::South, Point2D::new(0.0, -3.0)),
+            (SelectionHandleIdV1::SouthWest, Point2D::new(4.0, -3.0)),
+            (SelectionHandleIdV1::West, Point2D::new(4.0, 0.0)),
+        ];
+
+        for (handle, pivot) in expected {
+            assert_eq!(opposite_local(handle, 4.0, 3.0), Some(pivot));
+        }
+        assert_eq!(opposite_local(SelectionHandleIdV1::Rotate, 4.0, 3.0), None);
+        assert_eq!(opposite_local(SelectionHandleIdV1::Vertex, 4.0, 3.0), None);
     }
 
     #[test]
@@ -715,6 +966,7 @@ mod tests {
             target_element_id: None,
             selected_element_ids: Vec::new(),
             target_handle: None,
+            target_vertex: None,
             oriented_bounds: None,
         };
         machine.process_batch(
@@ -838,5 +1090,73 @@ mod tests {
         let angle = transform.b.atan2(transform.a);
         let final_orientation = bounds.rotation + angle;
         assert!((final_orientation - std::f64::consts::FRAC_PI_4).abs() < 1e-10);
+    }
+
+    #[test]
+    fn vertex_drag_previews_local_points_and_shift_snaps_the_adjacent_segment() {
+        let mut machine = PointerMachine::default();
+        let points = vec![Vec2 { x: 0.0, y: 0.0 }, Vec2 { x: 10.0, y: 0.0 }];
+        let down = TargetedPointerEvent {
+            input: event(PointerPhaseV1::Down, 1, Vec2 { x: 10.0, y: 0.0 }),
+            target_element_id: None,
+            selected_element_ids: vec!["line".to_string()],
+            target_handle: None,
+            target_vertex: Some(TargetedVertexHandle {
+                element_id: "line".to_string(),
+                vertex_index: 1,
+                points,
+                world_to_local: Affine2D::identity(),
+            }),
+            oriented_bounds: None,
+        };
+        let down_outcome = machine.process_batch(4, vec![down]);
+        assert_eq!(
+            down_outcome.selection_change,
+            Some(PointerSelectionChange::Vertex {
+                element_id: "line".to_string(),
+                vertex_index: 1,
+            })
+        );
+
+        let mut move_input = event(PointerPhaseV1::Move, 2, Vec2 { x: 9.0, y: 4.0 });
+        move_input.modifiers.shift = true;
+        let moved = machine.process_batch(
+            4,
+            vec![TargetedPointerEvent {
+                input: move_input,
+                target_element_id: None,
+                selected_element_ids: vec!["line".to_string()],
+                target_handle: None,
+                target_vertex: None,
+                oriented_bounds: None,
+            }],
+        );
+        let PointerTransition::Preview(PointerPreview::Vertex(preview)) = moved.transition else {
+            panic!("vertex drag must preview updated points");
+        };
+        assert!((preview.points[1].x - preview.points[1].y).abs() < 1e-10);
+
+        let mut up_input = event(PointerPhaseV1::Up, 3, Vec2 { x: 9.0, y: 4.0 });
+        up_input.modifiers.shift = true;
+        let committed = machine.process_batch(
+            4,
+            vec![TargetedPointerEvent {
+                input: up_input,
+                target_element_id: None,
+                selected_element_ids: vec!["line".to_string()],
+                target_handle: None,
+                target_vertex: None,
+                oriented_bounds: None,
+            }],
+        );
+        let PointerTransition::VertexCommit {
+            preview,
+            expected_revision,
+        } = committed.transition
+        else {
+            panic!("vertex pointer up must produce one commit");
+        };
+        assert_eq!(expected_revision, 4);
+        assert!((preview.points[1].x - preview.points[1].y).abs() < 1e-10);
     }
 }

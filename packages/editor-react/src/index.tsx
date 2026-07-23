@@ -3,13 +3,14 @@ import { useEffect, useRef, useSyncExternalStore, type CSSProperties, type React
 import {
   NODEINK_COLOR_PRESETS,
   NODEINK_FILL_PRESETS,
-  NODEINK_STROKE_WIDTH_PRESETS,
+  NODEINK_SIZE_PRESETS,
   NODEINK_TEXT_ALIGN_PRESETS,
   NODEINK_TEXT_SIZE_PRESETS,
   fillPresetMatches,
   getEditorCameraPresentation,
   getEditorPersistencePresentation,
   type ElementStylePatchV1,
+  type ElementSizeV1,
   type EditorActionV1,
   type EditorWebControllerV1,
   type SelectionStyleV1,
@@ -440,9 +441,9 @@ function SelectionStylePanel({
             value={style.stroke}
             onChange={(stroke) => dispatch(closedShapeStylePatch(style.kind, { stroke }))}
           />
-          <WidthGroup
-            value={style.strokeWidth}
-            onChange={(strokeWidth) => dispatch(closedShapeStylePatch(style.kind, { strokeWidth }))}
+          <SizeGroup
+            value={style.size}
+            onChange={(size) => dispatch(closedShapeStylePatch(style.kind, { size }))}
           />
         </>
       ) : style.kind !== 'text' ? (
@@ -452,9 +453,9 @@ function SelectionStylePanel({
             value={style.stroke}
             onChange={(stroke) => dispatch(lineStylePatch(style.kind, { stroke }))}
           />
-          <WidthGroup
-            value={style.strokeWidth}
-            onChange={(strokeWidth) => dispatch(lineStylePatch(style.kind, { strokeWidth }))}
+          <SizeGroup
+            value={style.size}
+            onChange={(size) => dispatch(lineStylePatch(style.kind, { size }))}
           />
         </>
       ) : (
@@ -549,17 +550,23 @@ function ColorGroup({
   );
 }
 
-function WidthGroup({ value, onChange }: { value: number; onChange: (value: number) => void }) {
+function SizeGroup({
+  value,
+  onChange,
+}: {
+  value: ElementSizeV1;
+  onChange: (value: ElementSizeV1) => void;
+}) {
   return (
-    <StyleGroup label="Width">
-      {NODEINK_STROKE_WIDTH_PRESETS.map((strokeWidth) => (
+    <StyleGroup label="Size">
+      {NODEINK_SIZE_PRESETS.map((preset) => (
         <button
-          key={strokeWidth}
+          key={preset.value}
           type="button"
-          aria-pressed={value === strokeWidth}
-          onClick={() => onChange(strokeWidth)}
+          aria-pressed={value === preset.value}
+          onClick={() => onChange(preset.value)}
         >
-          {strokeWidth}px
+          {preset.label}
         </button>
       ))}
     </StyleGroup>

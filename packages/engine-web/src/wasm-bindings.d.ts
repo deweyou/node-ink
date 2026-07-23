@@ -15,6 +15,8 @@ declare module '*nodeink_engine.js' {
     handlePointerEvents(eventsJson: string, commandId: string): string;
     finishShapeCreation(): string;
     removeShapeCreationPoint(): string;
+    insertPolylineVertexAt(pointJson: string, commandId: string): string;
+    deleteSelectedVertex(commandId: string): string;
     handleStrokeBatchJson(batchJson: string, commandId: string): string;
     handleStrokePoints(
       pointerId: number,

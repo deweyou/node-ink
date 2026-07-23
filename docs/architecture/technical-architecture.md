@@ -188,8 +188,8 @@ TypeScript 负责平台能力和用户体验集成：
 type DocumentId = string;
 type ElementId = string;
 
-interface NodeInkDocumentV4 {
-  schemaVersion: 4;
+interface NodeInkDocumentV5 {
+  schemaVersion: 5;
   documentId: DocumentId;
   revision: number;
   renderProfile: RenderProfileV1;
@@ -209,11 +209,11 @@ type RenderProfileV1 =
     };
 ```
 
-Schema V4 是当前持久格式。V0/V1 补齐原视觉默认值与 Clean Profile，V2 为每个旧元素补 identity affine，V3 以 copy-on-write 方式升级并开放基础图形 kind；所有迁移都由 Rust 完成且不修改源 payload。`rootOrder` 只包含根元素，Group 的 `childOrder` 持有直接子节点顺序；每个非根元素必须恰好出现一次，层级必须无环。
+Schema V5 是当前持久格式。V0/V1 补齐旧视觉默认值与兼容 Profile，V2 为每个旧元素补 identity affine，V3/V4 开放基础图形 kind，V5 将数值 strokeWidth copy-on-write 映射为元素级语义 Size；所有迁移都由 Rust 完成且不修改源 payload。`rootOrder` 只包含根元素，Group 的 `childOrder` 持有直接子节点顺序；每个非根元素必须恰好出现一次，层级必须无环。
 
 ### 8.2 元素公共字段（当前实现）
 
-Schema V4 的 Rect、Ellipse、Diamond、Line、Polyline、Arrow、Stroke、Text 与 Group 都持有同一种 affine matrix。元素自身的几何字段保持在 local space；Rust 组合祖先与自身 transform，Scene 只输出最终 world transform。封闭图形持久化 fill/stroke/strokeWidth，线类图形与 Stroke 持久化 stroke/strokeWidth，Text 持久化 color/fontSize/fontWeight/textAlign。
+Schema V5 的 Rect、Ellipse、Diamond、Line、Polyline、Arrow、Stroke、Text 与 Group 都持有同一种 affine matrix。元素自身的几何字段保持在 local space；Rust 组合祖先与自身 transform，Scene 只输出最终 world transform。封闭图形持久化 fill/stroke/size，线类图形与 Stroke 持久化 stroke/size，Text 持久化 color/fontSize/fontWeight/textAlign。
 
 ```ts
 interface ElementBaseV1 {
@@ -238,8 +238,10 @@ interface ClosedShapeFieldsV1 {
   height: number;
   fill: FillV1;
   stroke: string;
-  strokeWidth: number;
+  size: ElementSizeV1;
 }
+
+type ElementSizeV1 = 's' | 'm' | 'l' | 'xl';
 ```
 
 持久化时对浮点值执行明确的 finite 检查和规范化舍入，拒绝 `NaN`、`Infinity` 和超出安全边界的坐标。渲染阶段可以保留更高内部精度。
@@ -274,28 +276,28 @@ interface LineElementV1 extends ElementBaseV1 {
   kind: 'line';
   points: [Vec2, Vec2];
   stroke: string;
-  strokeWidth: number;
+  size: ElementSizeV1;
 }
 
 interface PolylineElementV1 extends ElementBaseV1 {
   kind: 'polyline';
   points: [Vec2, Vec2, Vec2, ...Vec2[]];
   stroke: string;
-  strokeWidth: number;
+  size: ElementSizeV1;
 }
 
 interface ArrowElementV1 extends ElementBaseV1 {
   kind: 'arrow';
   points: [Vec2, Vec2, ...Vec2[]];
   stroke: string;
-  strokeWidth: number;
+  size: ElementSizeV1;
 }
 
 interface StrokeElementV1 extends ElementBaseV1 {
   kind: 'stroke';
   points: Vec2[];
   stroke: string;
-  strokeWidth: number;
+  size: ElementSizeV1;
 }
 
 interface TextElementV1 extends ElementBaseV1 {
@@ -317,7 +319,7 @@ interface GroupElementV1 extends ElementBaseV1 {
 }
 ```
 
-`Ellipse`、`Diamond` 和线类元素保持独立 kind，避免 Renderer 从 path 反推用户语义。它们由 Rust 解析为通用 `ScenePathV1`，SVG Renderer 只消费已解析几何。普通 `Arrow` 是自由几何；未来 `Connector` 有 source/target binding、port 和 route，是不同领域对象。
+`Ellipse`、`Diamond` 和线类元素保持独立 kind，避免 Renderer 从 path 反推用户语义。它们由 Rust 解析为通用 `ScenePathV1`，SVG Renderer 只消费已解析几何和数值 strokeWidth。Size 在 Rust 中解析为 2/4/6/8 的 Scene stroke；Arrow 还按同一个 Size 解析 28/40/56/72 的箭头长度和 25.2/36/50.4/64.8 的开口宽度。Arrow 的箭身 points 保持 local space，但 Rust 使用最终 world-space 末段方向解析箭头，并输出 identity-transform Scene path；visual bounds 与 hit-test 复用同一解析，非等比元素或 Group affine 不会拉伸箭头，箭尖始终位于持久 endpoint。普通 `Arrow` 是自由几何；未来 `Connector` 有 source/target binding、port 和 route，是不同领域对象。
 
 ### 8.4 语义扩展策略
 
@@ -363,6 +365,7 @@ type CommandV1 =
   | { type: 'update_elements'; updates: ElementUpdateV1[] }
   | { type: 'delete_elements'; elementIds: ElementId[] }
   | { type: 'move_elements'; elementIds: ElementId[]; delta: Vec2 }
+  | { type: 'update_path_points'; elementId: ElementId; points: Vec2[] }
   | { type: 'update_element_style'; elementId: ElementId; patch: ElementStylePatchV1 }
   | { type: 'set_render_profile'; renderProfile: RenderProfileV1 }
   | { type: 'transform_elements'; elementIds: ElementId[]; transform: Affine2D }
@@ -425,8 +428,9 @@ PointerDown
 → one Undo entry
 ```
 
-- DOM pointer cancel、capture loss 或失焦提交最后一个已经显示的样本；`Escape` 或工具切换才撤销 transient state。
+- DOM pointer cancel、capture loss 或失焦提交最后一个已经显示的样本、transform 或顶点 preview；`Escape` 或工具切换才撤销 transient state。
 - 自由笔在拖动过程中产生 preview points；PointerUp 后创建一个 `StrokeElement`。
+- Line/Polyline/Arrow 顶点拖动只更新 Rust Editor State 的 local-space points preview；PointerUp 形成一个 `update_path_points` Command，嵌套 Group affine 通过 world/local 逆变换换算，不把 stroke width 烘焙进几何。
 - 文本 composition 与普通输入过程都不修改 Document；composition end 只更新 overlay buffer，blur 或 `Cmd/Ctrl+Enter` 提交一个文本 Transaction，`Escape` 取消。
 - Inspector 连续拖动数值可使用 preview + commit，或显式 merge key 合并为一个 Undo entry；不能产生数百个用户不可理解的撤销步骤。
 
@@ -453,6 +457,10 @@ stateDiagram-v2
         Pointing --> SelectIdle: click / select
         SelectIdle --> BoxSelecting: pointer down on canvas
         BoxSelecting --> SelectIdle: pointer up / select
+        SelectIdle --> VertexEditing: pointer down on path vertex
+        VertexEditing --> VertexEditing: pointer move / Rust preview
+        VertexEditing --> SelectIdle: pointer up / one commit
+        VertexEditing --> SelectIdle: escape / cancel
 
         SelectIdle --> Drawing: choose pen
         Drawing --> DrawingPreview: pointer down
@@ -479,9 +487,11 @@ stateDiagram-v2
     }
 ```
 
-Phase 1B 在 `SelectIdle` 下增加 `Resizing`、`Rotating` 和多选变换子状态。
+Phase 1B 在 `SelectIdle` 下增加 `Resizing`、`Rotating`、`VertexEditing` 和多选变换子状态。
 
 Shape/Polyline 创建状态同样由 Rust 持有。Host 只规范化 Pointer/Keyboard 输入；未完成几何只进入瞬态 Scene preview，不增加 Document revision、元素计数或 Undo history。一次有效完成复用既有 create Command，随后选中新元素并切回 Select。
+
+完成后的 Line/Polyline/Arrow 顶点同样由 Rust Selection Model 和 Pointer Machine 持有。Selection snapshot 输出带稳定 `vertexIndex` 的 world-space handles；输入命中后，Rust 用 resolved ancestor affine 的逆矩阵把 world pointer 转回 local points。Polyline 线段双击插点和已选顶点删除也只调用 Rust-owned API，并最终复用同一个 `update_path_points` Command；Renderer 与 React/Vue/Vanilla 不维护平行几何。
 
 ### 10.2 输入协议
 
@@ -675,14 +685,13 @@ interface ScenePatchV1 {
 - Patch 顺序由 Host 串行化；旧请求完成后不得覆盖新 revision。
 - Camera 改变通常不增加 document revision；它可以触发独立的 viewport/culling patch。
 
-### 12.4 Sketch 所有权
+### 12.4 手绘样式所有权
 
-- **推荐方案**：Render Profile 是 Scene Resolution 输入，Rust 生成最终 Sketch path。
-- **理由**：SVG、Canvas、Headless 和导出共享确定性几何；Renderer 保持简单。
-- **替代方案**：Renderer 根据 roughness/seed 各自生成路径。
-- **适用边界**：若未来 GPU Renderer 需要专用 tessellation，可在 Scene 中携带规范化 path/segment，而不是重做随机几何。
-- **当前实施**：Phase 0 验证同 seed Scene hash；Phase 1A 已把 Clean/Sketch 作为持久 Document Profile，并让两种 resolver 消费同一份元素 paint。Renderer 只接收最终 fill/stroke/textAnchor。
-- **未来切换成本**：若从 Renderer 后移回 Scene，成本高；因此从第一天固定在 Scene 层。
+- **当前边界**：产品不定义 Clean/Sketch 整板主题；旧 `renderProfile` 与 Sketch v1 resolver 仅用于兼容旧快照和确定性测试。
+- **未来推荐方案**：hand-drawn/roughness 是元素级持久样式，允许同一画板混用；Rust Scene Resolution 根据显式 seed 生成最终 path。
+- **理由**：Document 记住用户选择，SVG、Canvas、Headless 和导出共享确定性几何，Renderer 保持只消费 resolved Scene。
+- **不采用**：Renderer 根据 roughness/seed 各自生成语义几何；这会让 bounds、hit-test、导出和不同 renderer 产生分歧。
+- **适用边界**：solid/dashed/dotted 这类纯 paint 仍可由 Scene 携带规范化 dash；若未来 GPU Renderer 需要专用 tessellation，可在 Scene 中携带规范化 path/segment，而不是重做随机几何。
 
 ## 13. Renderer 接口
 
