@@ -240,6 +240,8 @@ rootElement.addEventListener('click', (event) => {
     }
   } else if (action === 'retry_save') {
     void controller.dispatch({ type: 'retry_save' });
+  } else if (action === 'request_takeover') {
+    void controller.dispatch({ type: 'request_takeover' });
   } else if (action === 'retry_camera_save') {
     void controller.dispatch({ type: 'retry_camera_save' });
   } else if (action === 'zoom_out' || action === 'zoom_in' || action === 'reset_camera') {
@@ -268,9 +270,24 @@ function renderSnapshot(
     <span>${snapshot.activeTool} tool</span>
   `;
   noticeElement.hidden = !persistence.notice;
-  noticeElement.textContent = persistence.notice;
+  noticeElement.replaceChildren();
+  if (persistence.notice) {
+    const message = document.createElement('span');
+    message.textContent = persistence.notice;
+    noticeElement.append(message);
+    if (persistence.canRequestTakeover) {
+      const takeover = document.createElement('button');
+      takeover.type = 'button';
+      takeover.dataset.action = 'request_takeover';
+      takeover.textContent = persistence.takeoverLabel;
+      noticeElement.append(takeover);
+    }
+  }
   const visibleError =
-    snapshot.errorMessage ?? snapshot.saveErrorMessage ?? snapshot.cameraSaveErrorMessage;
+    snapshot.errorMessage ??
+    snapshot.saveErrorMessage ??
+    snapshot.cameraSaveErrorMessage ??
+    snapshot.takeoverErrorMessage;
   errorElement.hidden = !visibleError;
   errorElement.replaceChildren();
   if (visibleError) {
@@ -279,7 +296,9 @@ function renderSnapshot(
       ? `保存失败：${visibleError}`
       : snapshot.cameraSaveErrorMessage
         ? `视图位置保存失败：${visibleError}`
-        : visibleError;
+        : snapshot.takeoverErrorMessage
+          ? `接管失败：${visibleError}`
+          : visibleError;
     errorElement.append(message);
     const retryAction = snapshot.errorMessage
       ? null

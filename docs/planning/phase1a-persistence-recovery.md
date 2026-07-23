@@ -60,7 +60,7 @@ stateDiagram-v2
 
 - P-02 固定画布字体仍待确认，与本切片分离。
 - Camera 已在独立纵向切片进入 Controller，并使用独立 session database；详见 [phase1a-camera-viewport.md](phase1a-camera-viewport.md)。Document snapshot 仍不包含 Camera、selection、hover、active transform 或 IME buffer。
-- Phase 1B 增加显式接管、多文档库、恢复副本/诊断包体验；在此之前不允许写入 fallback 或损坏源。
+- Phase 1B 已在 [phase1b-lease-takeover.md](phase1b-lease-takeover.md) 增加显式接管；多文档库与恢复副本/诊断包仍未实现，fallback 或损坏源仍不允许写入。
 
 ---
 *Last updated: 2026-07-22 | Reason: record the first integrated Phase 1A persistence and recovery slice*

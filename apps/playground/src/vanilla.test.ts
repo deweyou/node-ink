@@ -81,6 +81,14 @@ describe('Vanilla playground selection actions', () => {
         (button) => button.disabled,
       ),
     ).toBe(true);
+
+    controller.setSnapshot({
+      ...controller.getSnapshot(),
+      readonlyReason: 'held_elsewhere',
+      takeoverAvailable: true,
+    });
+    actionButton(root, 'request_takeover').click();
+    expect(controller.actions.at(-1)).toEqual({ type: 'request_takeover' });
   });
 });
 
@@ -106,6 +114,8 @@ class StubController implements EditorWebControllerV1 {
     this.actions.push(action);
     return { ok: true, snapshot: this.#snapshot };
   }
+
+  async relinquishDocument(): Promise<void> {}
 
   setSnapshot(snapshot: EditorUiSnapshotV1): void {
     this.#snapshot = snapshot;
@@ -139,6 +149,9 @@ function snapshotFixture(): EditorUiSnapshotV1 {
     saveErrorMessage: null,
     documentAccess: 'writer',
     readonlyReason: null,
+    takeoverAvailable: false,
+    takeoverStatus: 'idle',
+    takeoverErrorMessage: null,
     recovery: 'blank',
     camera: { x: 0, y: 0, zoom: 1 },
     cameraZoomPercent: 100,

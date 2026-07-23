@@ -87,6 +87,7 @@ export type EditorActionV1 =
   | { type: 'undo' }
   | { type: 'redo' }
   | { type: 'retry_save' }
+  | { type: 'request_takeover' }
   | { type: 'camera_action'; action: CameraActionV1 }
   | { type: 'zoom_in' }
   | { type: 'zoom_out' }
@@ -96,8 +97,10 @@ export type EditorActionV1 =
 export type EditorSaveStatusV1 = 'saved' | 'dirty' | 'saving' | 'save_failed' | 'readonly';
 export type EditorCameraSaveStatusV1 = 'saved' | 'dirty' | 'saving' | 'save_failed';
 export type EditorDocumentAccessV1 = 'writer' | 'readonly';
+export type EditorTakeoverStatusV1 = 'idle' | 'requesting' | 'reloading' | 'failed';
 export type EditorReadonlyReasonV1 =
   | 'held_elsewhere'
+  | 'taken_over'
   | 'unsupported'
   | 'recovered_fallback'
   | 'migration_save_failed'
@@ -160,6 +163,9 @@ export interface EditorUiSnapshotV1 {
   saveErrorMessage: string | null;
   documentAccess: EditorDocumentAccessV1;
   readonlyReason: EditorReadonlyReasonV1 | null;
+  takeoverAvailable: boolean;
+  takeoverStatus: EditorTakeoverStatusV1;
+  takeoverErrorMessage: string | null;
   recovery: EditorRecoveryV1;
   camera: CameraV1;
   cameraZoomPercent: number;
@@ -187,6 +193,7 @@ export interface EditorWebControllerV1 {
   getSnapshot(): EditorUiSnapshotV1;
   subscribe(listener: () => void): () => void;
   dispatch(action: EditorActionV1): Promise<EditorActionResultV1>;
+  relinquishDocument(): Promise<void>;
   dispose(): void;
 }
 
@@ -201,6 +208,9 @@ export interface EditorWebControllerOptions {
   documentAccess?: EditorDocumentAccessV1;
   readonlyReason?: EditorReadonlyReasonV1 | null;
   recovery?: EditorRecoveryV1;
+  requestDocumentTakeover?: () => Promise<void>;
+  reloadDocument?: () => void | Promise<void>;
+  onRelinquishDocument?: () => void | Promise<void>;
   onDispose?: () => void | Promise<void>;
 }
 
@@ -212,6 +222,9 @@ export class EditorWebController implements EditorWebControllerV1 {
   readonly #cameraPersistence: EditorCameraPersistencePortV1 | null;
   readonly #textMetrics: EditorTextMetricsPortV1;
   readonly #clipboard: ClipboardPortV1;
+  readonly #requestDocumentTakeover: (() => Promise<void>) | null;
+  readonly #reloadDocument: (() => void | Promise<void>) | null;
+  readonly #onRelinquishDocument: (() => void | Promise<void>) | null;
   readonly #onDispose: (() => void | Promise<void>) | null;
   readonly #listeners = new Set<() => void>();
   #snapshot: EditorUiSnapshotV1;
@@ -232,6 +245,7 @@ export class EditorWebController implements EditorWebControllerV1 {
   readonly #freehandInput = new FreehandInputAdapterV1();
   #textEditor: TextEditorOverlayV1 | null = null;
   #textDraft: TextEditingDraftV1 | null = null;
+  #activeDocumentPointerId: number | null = null;
   #queue = Promise.resolve();
   #isDisposed = false;
 
@@ -243,6 +257,9 @@ export class EditorWebController implements EditorWebControllerV1 {
     this.#cameraPersistence = options.cameraPersistence ?? null;
     this.#textMetrics = options.textMetrics ?? new CanvasTextMetricsAdapter();
     this.#clipboard = options.clipboard ?? defaultClipboardPort;
+    this.#requestDocumentTakeover = options.requestDocumentTakeover ?? null;
+    this.#reloadDocument = options.reloadDocument ?? null;
+    this.#onRelinquishDocument = options.onRelinquishDocument ?? null;
     this.#onDispose = options.onDispose ?? null;
     const documentAccess = options.documentAccess ?? 'writer';
     const persistenceSnapshot = this.#persistence?.getSnapshot() ?? null;
@@ -270,6 +287,9 @@ export class EditorWebController implements EditorWebControllerV1 {
       saveErrorMessage: persistenceSnapshot?.errorMessage ?? null,
       documentAccess,
       readonlyReason: options.readonlyReason ?? null,
+      takeoverAvailable: Boolean(this.#requestDocumentTakeover && this.#reloadDocument),
+      takeoverStatus: 'idle',
+      takeoverErrorMessage: null,
       recovery: options.recovery ?? 'blank',
       camera: { x: 0, y: 0, zoom: 1 },
       cameraZoomPercent: 100,
@@ -389,6 +409,15 @@ export class EditorWebController implements EditorWebControllerV1 {
     return operation;
   }
 
+  relinquishDocument(): Promise<void> {
+    const operation = this.#queue.then(() => this.runRelinquishDocument());
+    this.#queue = operation.then(
+      () => undefined,
+      () => undefined,
+    );
+    return operation;
+  }
+
   dispose(): void {
     if (this.#isDisposed) {
       return;
@@ -408,6 +437,7 @@ export class EditorWebController implements EditorWebControllerV1 {
     this.#detachResize = null;
     this.#cameraTarget = null;
     this.#freehandInput.reset();
+    this.#activeDocumentPointerId = null;
     this.#textEditor?.dispose();
     this.#textEditor = null;
     this.#textDraft = null;
@@ -430,6 +460,9 @@ export class EditorWebController implements EditorWebControllerV1 {
 
   private async runAction(action: EditorActionV1): Promise<EditorActionResultV1> {
     this.ensureActive();
+    if (action.type === 'request_takeover') {
+      return this.runTakeoverRequest();
+    }
     if (action.type === 'retry_save') {
       if (!this.#persistence || this.#snapshot.documentAccess === 'readonly') {
         return { ok: false, snapshot: this.#snapshot };
@@ -474,6 +507,96 @@ export class EditorWebController implements EditorWebControllerV1 {
       this.setError(error);
       return { ok: false, snapshot: this.#snapshot };
     }
+  }
+
+  private async runTakeoverRequest(): Promise<EditorActionResultV1> {
+    if (
+      this.#snapshot.documentAccess !== 'readonly' ||
+      this.#snapshot.readonlyReason !== 'held_elsewhere' ||
+      !this.#requestDocumentTakeover ||
+      !this.#reloadDocument ||
+      this.#snapshot.takeoverStatus === 'requesting' ||
+      this.#snapshot.takeoverStatus === 'reloading'
+    ) {
+      return { ok: false, snapshot: this.#snapshot };
+    }
+    this.#snapshot = {
+      ...this.#snapshot,
+      takeoverStatus: 'requesting',
+      takeoverErrorMessage: null,
+    };
+    this.emit();
+    try {
+      await this.#requestDocumentTakeover();
+      this.#snapshot = {
+        ...this.#snapshot,
+        takeoverStatus: 'reloading',
+        takeoverErrorMessage: null,
+      };
+      this.emit();
+      await this.#reloadDocument();
+      return { ok: true, snapshot: this.#snapshot };
+    } catch (error) {
+      this.#snapshot = {
+        ...this.#snapshot,
+        takeoverStatus: 'failed',
+        takeoverErrorMessage: takeoverErrorMessage(error),
+      };
+      this.emit();
+      return { ok: false, snapshot: this.#snapshot };
+    }
+  }
+
+  private async runRelinquishDocument(): Promise<void> {
+    this.ensureActive();
+    if (
+      this.#snapshot.documentAccess === 'readonly' &&
+      this.#snapshot.readonlyReason === 'taken_over'
+    ) {
+      return;
+    }
+    if (this.#snapshot.documentAccess !== 'writer') {
+      throw new Error('当前页面没有可让出的编辑权。');
+    }
+    if (!this.#onRelinquishDocument) {
+      throw new Error('当前宿主未提供安全的编辑权释放能力。');
+    }
+    if (this.#activeDocumentPointerId !== null || this.#textEditor) {
+      throw new Error('当前页面正在编辑，请结束当前操作后重试接管。');
+    }
+    await this.#persistence?.flush();
+    const persistenceSnapshot = this.#persistence?.getSnapshot() ?? null;
+    if (
+      persistenceSnapshot?.status === 'save_failed' ||
+      (persistenceSnapshot &&
+        persistenceSnapshot.pendingRevision > persistenceSnapshot.persistedRevision)
+    ) {
+      throw new Error(
+        persistenceSnapshot.errorMessage
+          ? `保存失败：${persistenceSnapshot.errorMessage}`
+          : '最新改动尚未安全保存。',
+      );
+    }
+    await this.#onRelinquishDocument();
+    this.#detachPointerInput?.();
+    this.#detachPointerInput = null;
+    this.#detachEditorShortcuts?.();
+    this.#detachEditorShortcuts = null;
+    this.#detachPersistence?.();
+    this.#detachPersistence = null;
+    this.#activeDocumentPointerId = null;
+    this.#freehandInput.reset();
+    this.#cameraTarget?.removeAttribute('data-active-tool');
+    this.#snapshot = {
+      ...this.#snapshot,
+      documentAccess: 'readonly',
+      readonlyReason: 'taken_over',
+      saveStatus: 'readonly',
+      saveErrorMessage: null,
+      takeoverStatus: 'idle',
+      takeoverErrorMessage: null,
+    };
+    this.emit();
   }
 
   private async runCameraAction(action: EditorActionV1): Promise<EditorActionResultV1> {
@@ -670,6 +793,7 @@ export class EditorWebController implements EditorWebControllerV1 {
     }
     if (action.type === 'set_tool') {
       this.#freehandInput.reset();
+      this.#activeDocumentPointerId = null;
       this.#textEditor?.cancel();
       return { update: await this.#engine.setActiveTool(action.tool) };
     }
@@ -679,6 +803,7 @@ export class EditorWebController implements EditorWebControllerV1 {
         return { update: await this.#engine.currentUpdate() };
       }
       this.#freehandInput.reset();
+      this.#activeDocumentPointerId = null;
       return {
         update:
           this.#snapshot.activeTool !== 'select'
@@ -701,6 +826,7 @@ export class EditorWebController implements EditorWebControllerV1 {
 
     const commandId = this.#createId();
     if (action.type === 'pointer_events') {
+      this.updateDocumentPointerState(action.events);
       const down = action.events.find((event) => event.phase === 'down');
       if (down && this.#textEditor) {
         this.#textEditor.commit();
@@ -1065,6 +1191,20 @@ export class EditorWebController implements EditorWebControllerV1 {
     return true;
   }
 
+  private updateDocumentPointerState(events: NormalizedPointerEventV1[]): void {
+    for (const event of events) {
+      if (event.phase === 'down' && this.#activeDocumentPointerId === null) {
+        this.#activeDocumentPointerId = event.pointerId;
+      }
+      if (
+        (event.phase === 'up' || event.phase === 'cancel') &&
+        event.pointerId === this.#activeDocumentPointerId
+      ) {
+        this.#activeDocumentPointerId = null;
+      }
+    }
+  }
+
   private applySelectionOverlay(): void {
     this.#renderer.setOverlay({
       selectionBounds: this.#snapshot.selectionBounds,
@@ -1093,6 +1233,8 @@ export interface EditorPersistencePresentationV1 {
   statusLabel: string;
   notice: string | null;
   canRetrySave: boolean;
+  canRequestTakeover: boolean;
+  takeoverLabel: string;
 }
 
 export interface EditorCameraPresentationV1 {
@@ -1130,16 +1272,28 @@ export function getEditorPersistencePresentation(
         : snapshot.readonlyReason === 'migration_save_failed'
           ? '迁移结果未能安全保存，已只读打开。'
           : snapshot.readonlyReason === 'held_elsewhere'
-            ? '此画布已在另一页面打开。关闭其他页面后刷新重试。'
-            : snapshot.readonlyReason === 'unsupported'
-              ? '当前浏览器无法保证安全写入，已只读打开。'
-              : snapshot.recovery === 'migrated_head'
-                ? '文档已安全升级并保存。'
-                : null;
+            ? snapshot.takeoverStatus === 'requesting'
+              ? '正在请求另一页面保存并让出编辑权…'
+              : snapshot.takeoverStatus === 'reloading'
+                ? '编辑权已让出，正在重新载入最新版本…'
+                : '此画布已在另一页面打开。可以请求对方保存并让出编辑权。'
+            : snapshot.readonlyReason === 'taken_over'
+              ? '编辑权已转移到另一页面，本页面保持只读。'
+              : snapshot.readonlyReason === 'unsupported'
+                ? '当前浏览器无法保证安全写入，已只读打开。'
+                : snapshot.recovery === 'migrated_head'
+                  ? '文档已安全升级并保存。'
+                  : null;
   return {
     statusLabel,
     notice,
     canRetrySave: snapshot.saveStatus === 'save_failed',
+    canRequestTakeover:
+      snapshot.status === 'ready' &&
+      snapshot.readonlyReason === 'held_elsewhere' &&
+      snapshot.takeoverAvailable &&
+      (snapshot.takeoverStatus === 'idle' || snapshot.takeoverStatus === 'failed'),
+    takeoverLabel: snapshot.takeoverStatus === 'failed' ? '重新接管' : '接管编辑权',
   };
 }
 
@@ -1267,6 +1421,18 @@ function positiveSize(value: number | undefined, fallback: number): number {
 
 function relativeCameraZoomPercent(zoom: number, fitZoom: number): number {
   return Math.round((zoom / fitZoom) * 100);
+}
+
+function takeoverErrorMessage(error: unknown): string {
+  if (typeof error === 'object' && error !== null && 'code' in error) {
+    if (error.code === 'request_timeout') {
+      return '另一页面未响应接管请求，请结束正在进行的操作后重试。';
+    }
+    if (error.code === 'disposed') {
+      return '接管请求已取消。';
+    }
+  }
+  return errorMessage(error);
 }
 
 function errorMessage(error: unknown): string {

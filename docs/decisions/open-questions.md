@@ -141,6 +141,8 @@
 - 没有 Web Locks 或 request 失败时返回 `readonly/unsupported`，不以 BroadcastChannel、localStorage 或定时 lease 猜测单写者。
 - IndexedDB expected revision 是最终事务护栏；S9 并发写 fixture 恒为一个成功、一个 `revision_conflict`，不发生 silent last-write-wins。
 - 本机 Chrome 150 中初次获取、释放后接管、关闭标签页后接管分别为 0.4/0.3/0.2ms；这些时延不替代跨设备 capability probe。
+- Phase 1B 显式接管以 BroadcastChannel 传递 cooperative request/released/rejected，但消息不代表 lease；writer flush 成功并释放 Web Lock 后才回执，新页面收到回执后整页重载、重新获取真实 lease 并从 verified stable revision 构造新 Engine。
+- 活动指针手势、文本输入、保存失败或 pending revision 未追平时拒绝让权；成功让权的旧 writer 进入 `readonly/taken_over`，不再接受 Document action。并发接管只允许一个成功回执。
 
 ### D-22 Diagram Operation V1 原子事务
 
@@ -252,7 +254,7 @@
 - **理由**：共同编辑会提前引入本地同步、合并和冲突语义，接近被明确排除的协作复杂度。
 - **影响**：文档锁、冲突 UI 和恢复测试。
 - **决策时点**：Phase 1B 前。
-- **当前状态**：已确认推荐方向。Phase 1A 提供第二标签页只读与“关闭其他页面后刷新”；显式“接管”延后到 Phase 1B，详见 D-25。
+- **当前状态**：已确认推荐方向。Phase 1A 提供第二标签页只读；Phase 1B 已完成同 origin 显式接管、writer 保存/让权、发起页 verified reload 与旧页只读降级，详见 D-21 和 [phase1b-lease-takeover.md](../planning/phase1b-lease-takeover.md)。
 
 ### P-04 删除与回收站
 
