@@ -50,7 +50,7 @@ describe('protocol V1 with schema V4 documents', () => {
 
   it('creates a blank document with explicit versions', () => {
     expect(createBlankDocument('doc-1')).toEqual({
-      schemaVersion: 5,
+      schemaVersion: 6,
       documentId: 'doc-1',
       revision: 0,
       renderProfile: { kind: 'clean', version: 1 },
@@ -229,7 +229,7 @@ describe('protocol V1 with schema V4 documents', () => {
     const stroke = lineShapeElementFixture('stroke', 'stroke-1');
     const text = textElementFixture();
     const document = {
-      schemaVersion: 5 as const,
+      schemaVersion: 6 as const,
       documentId: 'all-leaves',
       revision: 0,
       renderProfile: { kind: 'clean' as const, version: 1 as const },
@@ -258,6 +258,22 @@ describe('protocol V1 with schema V4 documents', () => {
     expect(parseNodeInkDocument(JSON.stringify(document))).toEqual(document);
   });
 
+  it('parses one quadratic curve on a two-point line or arrow', () => {
+    for (const kind of ['line', 'arrow'] as const) {
+      const element = {
+        ...lineShapeElementFixture(kind, `${kind}-1`),
+        curve: { kind: 'quadratic' as const, control: { x: 50, y: 80 } },
+      };
+      const document = {
+        ...createBlankDocument(`curved-${kind}`),
+        rootOrder: [element.id],
+        elements: { [element.id]: element },
+      };
+
+      expect(parseNodeInkDocument(JSON.stringify(document))).toEqual(document);
+    }
+  });
+
   it.each([
     [
       'line with more than two points',
@@ -274,6 +290,17 @@ describe('protocol V1 with schema V4 documents', () => {
         { x: 0, y: 0 },
         { x: 0, y: 0 },
       ]),
+    ],
+    [
+      'multi-point arrow with a quadratic curve',
+      {
+        ...lineShapeElementFixture('arrow', 'arrow-1', [
+          { x: 0, y: 0 },
+          { x: 10, y: 10 },
+          { x: 20, y: 0 },
+        ]),
+        curve: { kind: 'quadratic', control: { x: 10, y: 20 } },
+      },
     ],
   ])('rejects a %s', (_label, element) => {
     const document = {
@@ -446,6 +473,16 @@ describe('protocol V1 with schema V4 documents', () => {
         { x: 40, y: 0 },
       ],
     },
+    {
+      type: 'update_path_curve',
+      elementId: 'arrow-1',
+      curve: { kind: 'quadratic', control: { x: 20, y: 40 } },
+    },
+    {
+      type: 'update_path_curve',
+      elementId: 'line-1',
+      curve: null,
+    },
     { type: 'delete_elements', elementIds: ['rect-1'] },
   ])('strictly parses the %s command', (command) => {
     const envelope = commandEnvelopeFixture(command);
@@ -567,6 +604,16 @@ describe('protocol V1 with schema V4 documents', () => {
         { x: 0, y: 0 },
         { x: 0, y: 0 },
       ],
+    }),
+    commandEnvelopeFixture({
+      type: 'update_path_curve',
+      elementId: 'line-1',
+      curve: { kind: 'quadratic', control: { x: Number.NaN, y: 24 } },
+    }),
+    commandEnvelopeFixture({
+      type: 'update_path_curve',
+      elementId: 'line-1',
+      curve: { kind: 'cubic', control: { x: 12, y: 24 } },
     }),
     { ...commandEnvelopeFixture({ type: 'ungroup_elements', groupId: 'group-1' }), extra: true },
   ])('rejects an invalid command envelope %#', (envelope) => {
@@ -940,6 +987,9 @@ describe('protocol V1 with schema V4 documents', () => {
     },
     { id: 'vertex', kind: 'vertex', position: { x: 0, y: 0 }, vertexIndex: 0 },
     { id: 'vertex', kind: 'resize', position: { x: 0, y: 0 } },
+    { id: 'curve', kind: 'curve', position: { x: 0, y: 0 }, extra: true },
+    { id: 'curve', kind: 'resize', position: { x: 0, y: 0 } },
+    { id: 'north', kind: 'curve', position: { x: 0, y: 0 } },
   ])('rejects each malformed selection handle boundary %o', (handle) => {
     const selection = { ...selectedRectangleFixture(), handles: [handle] };
     expect(() => parseEngineUpdate(JSON.stringify({ ...updateFixture(), selection }))).toThrow(
@@ -975,6 +1025,31 @@ describe('protocol V1 with schema V4 documents', () => {
         vertexIndex: 1,
         selected: true,
       },
+    ];
+    const selection = { ...selectedRectangleFixture(), handles };
+
+    expect(parseEngineUpdate(JSON.stringify({ ...updateFixture(), selection })).selection).toEqual(
+      selection,
+    );
+  });
+
+  it('accepts one curve handle alongside path endpoint handles', () => {
+    const handles = [
+      {
+        id: 'vertex',
+        kind: 'vertex',
+        position: { x: 0, y: 0 },
+        vertexIndex: 0,
+        selected: false,
+      },
+      {
+        id: 'vertex',
+        kind: 'vertex',
+        position: { x: 100, y: 0 },
+        vertexIndex: 1,
+        selected: false,
+      },
+      { id: 'curve', kind: 'curve', position: { x: 50, y: 30 } },
     ];
     const selection = { ...selectedRectangleFixture(), handles };
 
@@ -1223,7 +1298,7 @@ describe('protocol V1 with schema V4 documents', () => {
     const success = {
       result: {
         sourceSchemaVersion: 0,
-        targetSchemaVersion: 5,
+        targetSchemaVersion: 6,
         migrated: true,
         document: createBlankDocument('doc-1'),
         canonicalPayload: '{}',
@@ -1236,7 +1311,7 @@ describe('protocol V1 with schema V4 documents', () => {
         stage: 'schema',
         code: 'unknown_schema',
         sourceSchemaVersion: 99,
-        targetSchemaVersion: 5,
+        targetSchemaVersion: 6,
         message: 'unsupported',
         recovery: 'try_next_snapshot_then_readonly_diagnostic',
       },
@@ -1409,7 +1484,7 @@ function textSelectionStyle() {
 
 function styledDocumentFixture() {
   return {
-    schemaVersion: 5 as const,
+    schemaVersion: 6 as const,
     documentId: 'doc-1',
     revision: 3,
     renderProfile: {
@@ -1429,7 +1504,7 @@ function styledDocumentFixture() {
 
 function groupedDocumentFixture() {
   return {
-    schemaVersion: 5 as const,
+    schemaVersion: 6 as const,
     documentId: 'doc-groups',
     revision: 1,
     renderProfile: { kind: 'clean' as const, version: 1 as const },
@@ -1495,6 +1570,7 @@ function lineShapeElementFixture(
     id,
     transform: identity(),
     points,
+    ...(kind === 'line' || kind === 'arrow' ? { curve: null } : {}),
     size: 'm' as const,
     stroke: '#0f172a',
   };

@@ -468,6 +468,7 @@ fn drag_preview(
                     id: element_id.to_string(),
                     transform: Affine2D::identity(),
                     points,
+                    curve: None,
                     stroke: DEFAULT_INK_COLOR.to_string(),
                     size: DEFAULT_ELEMENT_SIZE,
                 })
@@ -476,6 +477,7 @@ fn drag_preview(
                     id: element_id.to_string(),
                     transform: Affine2D::identity(),
                     points,
+                    curve: None,
                     stroke: DEFAULT_INK_COLOR.to_string(),
                     size: DEFAULT_ELEMENT_SIZE,
                 })

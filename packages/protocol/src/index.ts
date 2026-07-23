@@ -1,10 +1,10 @@
 export const protocolVersion = 1 as const;
-export const schemaVersion = 5 as const;
+export const schemaVersion = 6 as const;
 export const canvasFontFamily = 'Noto Sans SC Variable' as const;
 export const nodeInkClipboardMime = 'application/x-nodeink-elements+json' as const;
 
 export interface NodeInkDocumentV1 {
-  schemaVersion: 5;
+  schemaVersion: 6;
   documentId: string;
   revision: number;
   renderProfile: RenderProfileV1;
@@ -82,6 +82,7 @@ export interface LineElementV1 {
   id: string;
   transform: Affine2D;
   points: Vec2[];
+  curve: PathCurveV1 | null;
   stroke: string;
   size: ElementSizeV1;
 }
@@ -100,6 +101,7 @@ export interface ArrowElementV1 {
   id: string;
   transform: Affine2D;
   points: Vec2[];
+  curve: PathCurveV1 | null;
   stroke: string;
   size: ElementSizeV1;
 }
@@ -141,6 +143,8 @@ export interface Vec2 {
   y: number;
 }
 
+export type PathCurveV1 = { kind: 'quadratic'; control: Vec2 };
+
 export const minCameraZoom = 0.1;
 export const maxCameraZoom = 8;
 
@@ -181,6 +185,7 @@ export type CommandV1 =
   | { type: 'update_text'; elementId: string; patch: TextPatchV1 }
   | { type: 'update_rectangle'; elementId: string; patch: RectanglePatchV1 }
   | { type: 'update_path_points'; elementId: string; points: Vec2[] }
+  | { type: 'update_path_curve'; elementId: string; curve: PathCurveV1 | null }
   | { type: 'update_element_style'; elementId: string; patch: ElementStylePatchV1 }
   | { type: 'set_render_profile'; renderProfile: RenderProfileV1 }
   | { type: 'transform_elements'; elementIds: string[]; transform: Affine2D }
@@ -368,10 +373,11 @@ export type SelectionHandleIdV1 =
   | 'south_west'
   | 'west'
   | 'rotate'
-  | 'vertex';
+  | 'vertex'
+  | 'curve';
 
 export interface SelectionTransformHandleV1 {
-  id: Exclude<SelectionHandleIdV1, 'vertex'>;
+  id: Exclude<SelectionHandleIdV1, 'vertex' | 'curve'>;
   kind: 'resize' | 'rotate';
   position: Vec2;
 }
@@ -384,7 +390,16 @@ export interface SelectionVertexHandleV1 {
   selected: boolean;
 }
 
-export type SelectionHandleV1 = SelectionTransformHandleV1 | SelectionVertexHandleV1;
+export interface SelectionCurveHandleV1 {
+  id: 'curve';
+  kind: 'curve';
+  position: Vec2;
+}
+
+export type SelectionHandleV1 =
+  | SelectionTransformHandleV1
+  | SelectionVertexHandleV1
+  | SelectionCurveHandleV1;
 
 export interface SelectionMarqueeV1 {
   bounds: SelectionBoundsV1;
@@ -1132,6 +1147,12 @@ function isCommand(value: unknown): value is CommandV1 {
             point.y !== (points[index - 1] as Vec2).y,
         )
       );
+    case 'update_path_curve':
+      return (
+        hasOnlyKeys(value, ['type', 'elementId', 'curve']) &&
+        isNonEmptyString(value.elementId) &&
+        (value.curve === null || isPathCurve(value.curve))
+      );
     case 'update_element_style':
       return (
         hasOnlyKeys(value, ['type', 'elementId', 'patch']) &&
@@ -1472,8 +1493,14 @@ function isLineShapeElement(
     return false;
   }
   const points = value.points;
+  const supportsCurve = kind === 'line' || kind === 'arrow';
   return (
-    hasOnlyKeys(value, ['kind', 'id', 'transform', 'points', 'size', 'stroke']) &&
+    hasOnlyKeys(
+      value,
+      supportsCurve
+        ? ['kind', 'id', 'transform', 'points', 'curve', 'size', 'stroke']
+        : ['kind', 'id', 'transform', 'points', 'size', 'stroke'],
+    ) &&
     value.kind === kind &&
     isNonEmptyString(value.id) &&
     isAffine2D(value.transform) &&
@@ -1486,8 +1513,18 @@ function isLineShapeElement(
         point.x !== (points[index - 1] as Vec2).x ||
         point.y !== (points[index - 1] as Vec2).y,
     ) &&
+    (!supportsCurve || value.curve === null || (points.length === 2 && isPathCurve(value.curve))) &&
     isElementSize(value.size) &&
     isCanonicalColor(value.stroke)
+  );
+}
+
+function isPathCurve(value: unknown): value is PathCurveV1 {
+  return (
+    isRecord(value) &&
+    hasOnlyKeys(value, ['kind', 'control']) &&
+    value.kind === 'quadratic' &&
+    isVec2(value.control)
   );
 }
 
@@ -1832,6 +1869,9 @@ function isSelectionHandle(value: unknown): value is SelectionHandleV1 {
       typeof value.selected === 'boolean'
     );
   }
+  if (value.kind === 'curve') {
+    return hasOnlyKeys(value, ['id', 'kind', 'position']) && value.id === 'curve';
+  }
   if (
     !hasOnlyKeys(value, ['id', 'kind', 'position']) ||
     !isSelectionHandleId(value.id) ||
@@ -1840,7 +1880,7 @@ function isSelectionHandle(value: unknown): value is SelectionHandleV1 {
   ) {
     return false;
   }
-  return (value.id === 'rotate') === (value.kind === 'rotate');
+  return value.id !== 'curve' && (value.id === 'rotate') === (value.kind === 'rotate');
 }
 
 function isSelectionHandleId(value: unknown): value is SelectionHandleIdV1 {
@@ -1854,7 +1894,8 @@ function isSelectionHandleId(value: unknown): value is SelectionHandleIdV1 {
     value === 'south_west' ||
     value === 'west' ||
     value === 'rotate' ||
-    value === 'vertex'
+    value === 'vertex' ||
+    value === 'curve'
   );
 }
 

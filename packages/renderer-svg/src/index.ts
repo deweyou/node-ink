@@ -53,10 +53,13 @@ export class SvgRenderer implements RendererV1 {
     if (overlay.marquee) {
       group.append(createMarquee(overlay.marquee));
     }
-    const isVertexSelection =
+    const isPathEditingSelection =
       overlay.selectionHandles.length > 0 &&
-      overlay.selectionHandles.every((handle) => handle.kind === 'vertex');
-    const outline = isVertexSelection
+      overlay.selectionHandles.some((handle) => handle.kind === 'vertex') &&
+      overlay.selectionHandles.every(
+        (handle) => handle.kind === 'vertex' || handle.kind === 'curve',
+      );
+    const outline = isPathEditingSelection
       ? null
       : overlay.selectionOrientedBounds
         ? createOrientedSelectionRectangle(
@@ -335,7 +338,7 @@ function createSelectionHandle(
   handle: EditorOverlayV1['selectionHandles'][number],
   worldPerScreenPixel: number,
 ): SVGElement {
-  if (handle.kind === 'rotate') {
+  if (handle.kind === 'rotate' || handle.kind === 'curve') {
     const circle = document.createElementNS(svgNamespace, 'circle');
     circle.setAttribute('cx', String(handle.position.x));
     circle.setAttribute('cy', String(handle.position.y));
@@ -363,7 +366,9 @@ function applyHandlePaint(
     'fill',
     handle.kind === 'vertex' && handle.selected
       ? selectionColor
-      : 'var(--nodeink-selection-handle-fill, #ffffff)',
+      : handle.kind === 'curve'
+        ? 'var(--nodeink-selection-curve-fill, #dbeafe)'
+        : 'var(--nodeink-selection-handle-fill, #ffffff)',
   );
   element.setAttribute('stroke', selectionColor);
   element.setAttribute('stroke-width', '1.5');

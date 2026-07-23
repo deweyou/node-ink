@@ -1,5 +1,5 @@
 use crate::{
-    ElementSizeV1, Vec2,
+    ElementSizeV1, PathCurveV1, Vec2,
     selection_geometry::VisualAabb,
     transform::{Affine2D, Point2D},
 };
@@ -62,9 +62,26 @@ pub(crate) fn line_path_data(points: &[Vec2]) -> String {
     path
 }
 
-pub(crate) fn arrow_path_data(points: &[Vec2], size: ElementSizeV1) -> String {
-    let mut path = line_path_data(points);
-    if let Some([left, tip, right]) = arrowhead_points(points, size) {
+pub(crate) fn line_path_data_with_curve(points: &[Vec2], curve: Option<PathCurveV1>) -> String {
+    match (points, curve) {
+        ([start, end], Some(curve)) => {
+            let control = curve.control();
+            format!(
+                "M {} {} Q {} {} {} {}",
+                start.x, start.y, control.x, control.y, end.x, end.y
+            )
+        }
+        _ => line_path_data(points),
+    }
+}
+
+pub(crate) fn arrow_path_data(
+    points: &[Vec2],
+    curve: Option<PathCurveV1>,
+    size: ElementSizeV1,
+) -> String {
+    let mut path = line_path_data_with_curve(points, curve);
+    if let Some([left, tip, right]) = arrowhead_points(points, curve, size) {
         path.push_str(&format!(
             " M {} {} L {} {} L {} {}",
             left.x, left.y, tip.x, tip.y, right.x, right.y
@@ -75,20 +92,26 @@ pub(crate) fn arrow_path_data(points: &[Vec2], size: ElementSizeV1) -> String {
 
 pub(crate) fn resolved_arrow_path_data(
     points: &[Vec2],
+    curve: Option<PathCurveV1>,
     size: ElementSizeV1,
     world_transform: Affine2D,
 ) -> String {
-    resolved_path_points(points, world_transform)
-        .map_or_else(String::new, |points| arrow_path_data(&points, size))
+    let Some(points) = resolved_path_points(points, world_transform) else {
+        return String::new();
+    };
+    let curve = resolved_curve(curve, world_transform);
+    arrow_path_data(&points, curve, size)
 }
 
 pub(crate) fn resolved_arrow_visual_bounds(
     points: &[Vec2],
+    curve: Option<PathCurveV1>,
     size: ElementSizeV1,
     world_transform: Affine2D,
 ) -> Option<VisualAabb> {
     let points = resolved_path_points(points, world_transform)?;
-    path_visual_bounds(&points, size.stroke_width(), Some(size))
+    let curve = resolved_curve(curve, world_transform);
+    path_visual_bounds_with_curve(&points, curve, size.stroke_width(), Some(size))
 }
 
 pub(crate) fn path_visual_bounds(
@@ -96,12 +119,18 @@ pub(crate) fn path_visual_bounds(
     stroke_width: f64,
     arrow_size: Option<ElementSizeV1>,
 ) -> Option<VisualAabb> {
-    let mut painted_points = points
-        .iter()
-        .map(|point| Point2D::new(point.x, point.y))
-        .collect::<Vec<_>>();
+    path_visual_bounds_with_curve(points, None, stroke_width, arrow_size)
+}
+
+pub(crate) fn path_visual_bounds_with_curve(
+    points: &[Vec2],
+    curve: Option<PathCurveV1>,
+    stroke_width: f64,
+    arrow_size: Option<ElementSizeV1>,
+) -> Option<VisualAabb> {
+    let mut painted_points = path_bounds_points(points, curve)?;
     if let Some(size) = arrow_size
-        && let Some([left, tip, right]) = arrowhead_points(points, size)
+        && let Some([left, tip, right]) = arrowhead_points(points, curve, size)
     {
         painted_points.extend([left, tip, right]);
     }
@@ -141,66 +170,101 @@ pub(crate) fn hit_test_path(
     point: Vec2,
     tolerance: f64,
 ) -> bool {
-    let mut segments = points
+    hit_test_path_with_curve(
+        points,
+        None,
+        stroke_width,
+        arrow_size,
+        world_transform,
+        point,
+        tolerance,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn hit_test_path_with_curve(
+    points: &[Vec2],
+    curve: Option<PathCurveV1>,
+    stroke_width: f64,
+    arrow_size: Option<ElementSizeV1>,
+    world_transform: Affine2D,
+    point: Vec2,
+    tolerance: f64,
+) -> bool {
+    let Some(resolved_points) = resolved_path_points(points, world_transform) else {
+        return false;
+    };
+    let resolved_curve = resolved_curve(curve, world_transform);
+    let radius = stroke_width / 2.0 + tolerance;
+    let flattened = flattened_path_points(&resolved_points, resolved_curve, radius / 4.0);
+    let mut segments = flattened
         .windows(2)
-        .map(|segment| {
-            (
-                Point2D::new(segment[0].x, segment[0].y),
-                Point2D::new(segment[1].x, segment[1].y),
-            )
-        })
+        .map(|segment| (segment[0], segment[1]))
         .collect::<Vec<_>>();
     if let Some(size) = arrow_size
-        && let Some([left, tip, right]) = arrowhead_points(points, size)
+        && let Some([left, tip, right]) = arrowhead_points(&resolved_points, resolved_curve, size)
     {
         segments.extend([(left, tip), (tip, right)]);
     }
-    let radius = stroke_width / 2.0 + tolerance;
     segments.into_iter().any(|(start, end)| {
-        let Ok(world_start) = world_transform.apply(start) else {
-            return false;
-        };
-        let Ok(world_end) = world_transform.apply(end) else {
-            return false;
-        };
-        point_segment_distance_squared(Point2D::new(point.x, point.y), world_start, world_end)
+        point_segment_distance_squared(Point2D::new(point.x, point.y), start, end)
             <= radius * radius
     })
 }
 
 pub(crate) fn hit_test_resolved_arrow(
     points: &[Vec2],
+    curve: Option<PathCurveV1>,
     size: ElementSizeV1,
     world_transform: Affine2D,
     point: Vec2,
     tolerance: f64,
 ) -> bool {
-    let Some(points) = resolved_path_points(points, world_transform) else {
-        return false;
-    };
-    hit_test_path(
-        &points,
+    hit_test_path_with_curve(
+        points,
+        curve,
         size.stroke_width(),
         Some(size),
-        Affine2D::IDENTITY,
+        world_transform,
         point,
         tolerance,
     )
 }
 
-fn arrowhead_points(points: &[Vec2], size: ElementSizeV1) -> Option<[Point2D; 3]> {
+fn arrowhead_points(
+    points: &[Vec2],
+    curve: Option<PathCurveV1>,
+    size: ElementSizeV1,
+) -> Option<[Point2D; 3]> {
     let [.., previous, end] = points else {
         return None;
     };
-    let delta_x = end.x - previous.x;
-    let delta_y = end.y - previous.y;
-    let segment_length = delta_x.hypot(delta_y);
-    if !segment_length.is_finite() || segment_length <= f64::EPSILON {
+    let direction_anchor = if points.len() == 2 {
+        curve.map_or(*previous, PathCurveV1::control)
+    } else {
+        *previous
+    };
+    let mut delta_x = end.x - direction_anchor.x;
+    let mut delta_y = end.y - direction_anchor.y;
+    if delta_x.hypot(delta_y) <= f64::EPSILON {
+        delta_x = end.x - points[0].x;
+        delta_y = end.y - points[0].y;
+    }
+    let direction_length = delta_x.hypot(delta_y);
+    if !direction_length.is_finite() || direction_length <= f64::EPSILON {
         return None;
     }
-    let direction_x = delta_x / segment_length;
-    let direction_y = delta_y / segment_length;
-    let length = size.arrowhead_length().min(segment_length * 0.45);
+    let direction_x = delta_x / direction_length;
+    let direction_y = delta_y / direction_length;
+    let available_length = if points.len() == 2 {
+        (end.x - points[0].x).hypot(end.y - points[0].y)
+    } else {
+        direction_length
+    };
+    if !available_length.is_finite() || available_length <= f64::EPSILON {
+        return None;
+    }
+    let length = size.arrowhead_length().min(available_length * 0.45);
     let half_width = size.arrowhead_opening_width().min(length * 0.9) / 2.0;
     let base_x = end.x - direction_x * length;
     let base_y = end.y - direction_y * length;
@@ -217,6 +281,139 @@ fn arrowhead_points(points: &[Vec2], size: ElementSizeV1) -> Option<[Point2D; 3]
             base_y - perpendicular_y * half_width,
         ),
     ])
+}
+
+pub(crate) fn curve_midpoint(points: &[Vec2], curve: Option<PathCurveV1>) -> Option<Vec2> {
+    let [start, end] = points else {
+        return None;
+    };
+    let chord_midpoint = Vec2 {
+        x: (start.x + end.x) / 2.0,
+        y: (start.y + end.y) / 2.0,
+    };
+    let Some(curve) = curve else {
+        return Some(chord_midpoint);
+    };
+    let control = curve.control();
+    Some(Vec2 {
+        x: (start.x + 2.0 * control.x + end.x) / 4.0,
+        y: (start.y + 2.0 * control.y + end.y) / 4.0,
+    })
+}
+
+pub(crate) fn curve_from_midpoint(points: &[Vec2], midpoint: Vec2) -> Option<PathCurveV1> {
+    let [start, end] = points else {
+        return None;
+    };
+    let chord_midpoint = Vec2 {
+        x: (start.x + end.x) / 2.0,
+        y: (start.y + end.y) / 2.0,
+    };
+    let control = Vec2 {
+        x: 2.0 * midpoint.x - chord_midpoint.x,
+        y: 2.0 * midpoint.y - chord_midpoint.y,
+    };
+    if squared_distance(
+        Point2D::new(control.x, control.y),
+        Point2D::new(chord_midpoint.x, chord_midpoint.y),
+    ) <= f64::EPSILON
+    {
+        None
+    } else {
+        Some(PathCurveV1::Quadratic { control })
+    }
+}
+
+fn resolved_curve(curve: Option<PathCurveV1>, transform: Affine2D) -> Option<PathCurveV1> {
+    let control = curve?.control();
+    let resolved = transform.apply(Point2D::new(control.x, control.y)).ok()?;
+    Some(PathCurveV1::Quadratic {
+        control: Vec2 {
+            x: resolved.x,
+            y: resolved.y,
+        },
+    })
+}
+
+fn path_bounds_points(points: &[Vec2], curve: Option<PathCurveV1>) -> Option<Vec<Point2D>> {
+    if let ([start, end], Some(curve)) = (points, curve) {
+        let control = curve.control();
+        let mut result = vec![Point2D::new(start.x, start.y), Point2D::new(end.x, end.y)];
+        for (start_value, control_value, end_value) in
+            [(start.x, control.x, end.x), (start.y, control.y, end.y)]
+        {
+            let denominator = start_value - 2.0 * control_value + end_value;
+            if denominator.abs() <= f64::EPSILON {
+                continue;
+            }
+            let ratio = (start_value - control_value) / denominator;
+            if ratio > 0.0 && ratio < 1.0 {
+                result.push(quadratic_point(*start, control, *end, ratio));
+            }
+        }
+        return Some(result);
+    }
+    (!points.is_empty()).then(|| {
+        points
+            .iter()
+            .map(|point| Point2D::new(point.x, point.y))
+            .collect()
+    })
+}
+
+fn flattened_path_points(
+    points: &[Vec2],
+    curve: Option<PathCurveV1>,
+    flatness: f64,
+) -> Vec<Point2D> {
+    if let ([start, end], Some(curve)) = (points, curve) {
+        let mut flattened = vec![Point2D::new(start.x, start.y)];
+        flatten_quadratic(
+            Point2D::new(start.x, start.y),
+            Point2D::new(curve.control().x, curve.control().y),
+            Point2D::new(end.x, end.y),
+            flatness.max(0.05),
+            0,
+            &mut flattened,
+        );
+        return flattened;
+    }
+    points
+        .iter()
+        .map(|point| Point2D::new(point.x, point.y))
+        .collect()
+}
+
+fn flatten_quadratic(
+    start: Point2D,
+    control: Point2D,
+    end: Point2D,
+    flatness: f64,
+    depth: u8,
+    output: &mut Vec<Point2D>,
+) {
+    let distance = point_segment_distance_squared(control, start, end).sqrt();
+    if distance <= flatness || depth >= 12 {
+        output.push(end);
+        return;
+    }
+    let start_control = midpoint(start, control);
+    let control_end = midpoint(control, end);
+    let split = midpoint(start_control, control_end);
+    flatten_quadratic(start, start_control, split, flatness, depth + 1, output);
+    flatten_quadratic(split, control_end, end, flatness, depth + 1, output);
+}
+
+fn quadratic_point(start: Vec2, control: Vec2, end: Vec2, ratio: f64) -> Point2D {
+    let inverse = 1.0 - ratio;
+    Point2D::new(
+        inverse * inverse * start.x + 2.0 * inverse * ratio * control.x + ratio * ratio * end.x,
+        inverse * inverse * start.y + 2.0 * inverse * ratio * control.y + ratio * ratio * end.y,
+    )
+}
+
+fn midpoint(first: Point2D, second: Point2D) -> Point2D {
+    Point2D::new((first.x + second.x) / 2.0, (first.y + second.y) / 2.0)
 }
 
 fn resolved_path_points(points: &[Vec2], world_transform: Affine2D) -> Option<Vec<Vec2>> {
@@ -302,6 +499,7 @@ mod tests {
         assert_eq!(
             arrow_path_data(
                 &[Vec2 { x: 0.0, y: 0.0 }, Vec2 { x: 100.0, y: 0.0 }],
+                None,
                 ElementSizeV1::S,
             ),
             "M 0 0 L 100 0 M 72 12.6 L 100 0 L 72 -12.6"
@@ -352,7 +550,7 @@ mod tests {
         for points in [&horizontal[..], &diagonal[..]] {
             let resolved = resolved_path_points(points, transform).expect("points resolve");
             let [left, tip, right] =
-                arrowhead_points(&resolved, ElementSizeV1::S).expect("arrowhead resolves");
+                arrowhead_points(&resolved, None, ElementSizeV1::S).expect("arrowhead resolves");
             let base = Point2D::new((left.x + right.x) / 2.0, (left.y + right.y) / 2.0);
 
             assert_close(distance(base, tip), 28.0);
@@ -361,15 +559,16 @@ mod tests {
         }
 
         assert_eq!(
-            resolved_arrow_path_data(&horizontal, ElementSizeV1::S, transform),
+            resolved_arrow_path_data(&horizontal, None, ElementSizeV1::S, transform),
             "M 0 0 L 200 0 M 172 12.6 L 200 0 L 172 -12.6"
         );
-        let bounds = resolved_arrow_visual_bounds(&horizontal, ElementSizeV1::S, transform)
+        let bounds = resolved_arrow_visual_bounds(&horizontal, None, ElementSizeV1::S, transform)
             .expect("resolved arrow bounds");
         assert_close(bounds.min_y(), -13.6);
         assert_close(bounds.max_y(), 13.6);
         assert!(hit_test_resolved_arrow(
             &horizontal,
+            None,
             ElementSizeV1::S,
             transform,
             Vec2 { x: 186.0, y: 6.3 },
@@ -377,11 +576,72 @@ mod tests {
         ));
         assert!(!hit_test_resolved_arrow(
             &horizontal,
+            None,
             ElementSizeV1::S,
             transform,
             Vec2 { x: 160.0, y: 20.0 },
             0.25,
         ));
+    }
+
+    #[test]
+    fn quadratic_curves_share_path_midpoint_bounds_hit_testing_and_arrow_tangent() {
+        let points = [Vec2 { x: 0.0, y: 0.0 }, Vec2 { x: 100.0, y: 0.0 }];
+        let curve = Some(PathCurveV1::Quadratic {
+            control: Vec2 { x: 50.0, y: 100.0 },
+        });
+
+        assert_eq!(
+            line_path_data_with_curve(&points, curve),
+            "M 0 0 Q 50 100 100 0"
+        );
+        assert_eq!(
+            curve_midpoint(&points, curve),
+            Some(Vec2 { x: 50.0, y: 50.0 })
+        );
+        assert_eq!(
+            curve_from_midpoint(&points, Vec2 { x: 50.0, y: 50.0 }),
+            curve
+        );
+        let bounds =
+            path_visual_bounds_with_curve(&points, curve, 4.0, None).expect("curve bounds resolve");
+        assert_close(bounds.min_y(), -2.0);
+        assert_close(bounds.max_y(), 52.0);
+        assert!(hit_test_path_with_curve(
+            &points,
+            curve,
+            4.0,
+            None,
+            Affine2D::IDENTITY,
+            Vec2 { x: 50.0, y: 50.0 },
+            1.0,
+        ));
+        assert!(!hit_test_path_with_curve(
+            &points,
+            curve,
+            4.0,
+            None,
+            Affine2D::IDENTITY,
+            Vec2 { x: 50.0, y: 20.0 },
+            1.0,
+        ));
+
+        let [left, tip, right] =
+            arrowhead_points(&points, curve, ElementSizeV1::S).expect("arrowhead resolves");
+        let base = Point2D::new((left.x + right.x) / 2.0, (left.y + right.y) / 2.0);
+        assert_eq!(tip, Point2D::new(100.0, 0.0));
+        assert!(base.y > 20.0);
+        assert_close(distance(base, tip), 28.0);
+        assert_close(distance(left, tip), distance(right, tip));
+
+        let near_endpoint_curve = Some(PathCurveV1::Quadratic {
+            control: Vec2 { x: 99.0, y: 1.0 },
+        });
+        let [left, tip, right] = arrowhead_points(&points, near_endpoint_curve, ElementSizeV1::S)
+            .expect("curved arrowhead resolves near its endpoint");
+        let base = Point2D::new((left.x + right.x) / 2.0, (left.y + right.y) / 2.0);
+        assert_close(distance(base, tip), 28.0);
+        assert_close(distance(left, right), 25.2);
     }
 
     fn distance(first: Point2D, second: Point2D) -> f64 {

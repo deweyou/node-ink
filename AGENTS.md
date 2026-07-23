@@ -18,6 +18,7 @@ NodeInk is a local-first, desktop Web canvas whose persistent semantics live in 
 | [docs/planning/phase1b-basic-shapes.md](docs/planning/phase1b-basic-shapes.md)                 | Schema V4 basic shapes, Scene paths, and shared host controls    |
 | [docs/planning/phase1b-shape-creation.md](docs/planning/phase1b-shape-creation.md)             | Rust-owned drag/click shape creation and transient previews      |
 | [docs/planning/phase1b-shape-vertex-editing.md](docs/planning/phase1b-shape-vertex-editing.md) | Rust-owned path vertex handles, previews, and transactions       |
+| [docs/planning/phase1b-curved-path-editing.md](docs/planning/phase1b-curved-path-editing.md)   | Persistent Line/Arrow curves and midpoint bend editing           |
 | [docs/.state.md](docs/.state.md)                                                               | Last memory review and active risks                              |
 | [docs/.todo.md](docs/.todo.md)                                                                 | Prioritized repository-memory follow-ups                         |
 

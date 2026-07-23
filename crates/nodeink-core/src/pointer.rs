@@ -1,8 +1,9 @@
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    Affine2D, ElementId, OrientedSelectionBoundsV1, SelectionBoundsV1, SelectionHandleIdV1,
-    SelectionMarqueeModeV1, Vec2, transform::Point2D,
+    Affine2D, ElementId, OrientedSelectionBoundsV1, PathCurveV1, SelectionBoundsV1,
+    SelectionHandleIdV1, SelectionMarqueeModeV1, Vec2, shape_geometry::curve_from_midpoint,
+    transform::Point2D,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -48,6 +49,7 @@ pub(crate) struct TargetedPointerEvent {
     pub selected_element_ids: Vec<ElementId>,
     pub target_handle: Option<SelectionHandleIdV1>,
     pub target_vertex: Option<TargetedVertexHandle>,
+    pub target_curve: Option<TargetedCurveHandle>,
     pub oriented_bounds: Option<OrientedSelectionBoundsV1>,
 }
 
@@ -56,6 +58,14 @@ pub(crate) struct TargetedVertexHandle {
     pub element_id: ElementId,
     pub vertex_index: usize,
     pub points: Vec<Vec2>,
+    pub world_to_local: Affine2D,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct TargetedCurveHandle {
+    pub element_id: ElementId,
+    pub points: Vec<Vec2>,
+    pub curve: Option<PathCurveV1>,
     pub world_to_local: Affine2D,
 }
 
@@ -78,6 +88,7 @@ pub(crate) struct PointerTransformPreview {
 pub(crate) enum PointerPreview {
     Transform(PointerTransformPreview),
     Vertex(PointerVertexPreview),
+    Curve(PointerCurvePreview),
     Marquee {
         bounds: SelectionBoundsV1,
         mode: SelectionMarqueeModeV1,
@@ -89,6 +100,12 @@ pub(crate) struct PointerVertexPreview {
     pub element_id: ElementId,
     pub vertex_index: usize,
     pub points: Vec<Vec2>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct PointerCurvePreview {
+    pub element_id: ElementId,
+    pub curve: Option<PathCurveV1>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -107,6 +124,10 @@ pub(crate) enum PointerTransition {
     Commit(PointerCommit),
     VertexCommit {
         preview: PointerVertexPreview,
+        expected_revision: u64,
+    },
+    CurveCommit {
+        preview: PointerCurvePreview,
         expected_revision: u64,
     },
     MarqueeCommit {
@@ -157,6 +178,15 @@ enum PointerState {
         element_id: ElementId,
         vertex_index: usize,
         points: Vec<Vec2>,
+        world_to_local: Affine2D,
+        last_sequence: u64,
+        expected_revision: u64,
+    },
+    EditingCurve {
+        pointer_id: u32,
+        element_id: ElementId,
+        points: Vec<Vec2>,
+        curve: Option<PathCurveV1>,
         world_to_local: Affine2D,
         last_sequence: u64,
         expected_revision: u64,
@@ -245,6 +275,7 @@ impl PointerMachine {
             selected_element_ids,
             target_handle,
             target_vertex,
+            target_curve,
             oriented_bounds,
         } = event;
         if !valid_input(&input) {
@@ -272,6 +303,18 @@ impl PointerMachine {
                             vertex_index: target_vertex.vertex_index,
                         }),
                     );
+                }
+                if let Some(target_curve) = target_curve {
+                    self.state = PointerState::EditingCurve {
+                        pointer_id: input.pointer_id,
+                        element_id: target_curve.element_id,
+                        points: target_curve.points,
+                        curve: target_curve.curve,
+                        world_to_local: target_curve.world_to_local,
+                        last_sequence: input.sequence,
+                        expected_revision,
+                    };
+                    return EventOutcome::accepted(PointerTransition::None, None);
                 }
                 if let (Some(handle), Some(bounds)) = (target_handle, oriented_bounds) {
                     if !selected_element_ids.is_empty() {
@@ -529,6 +572,61 @@ impl PointerMachine {
                 };
                 EventOutcome::accepted(transition, None)
             }
+            PointerState::EditingCurve {
+                pointer_id,
+                element_id,
+                points,
+                curve,
+                world_to_local,
+                last_sequence,
+                expected_revision,
+            } => {
+                if input.pointer_id != *pointer_id || input.sequence <= *last_sequence {
+                    return EventOutcome::Ignored;
+                }
+                *last_sequence = input.sequence;
+                let transition = match input.phase {
+                    PointerPhaseV1::Move | PointerPhaseV1::Up => {
+                        let Ok(local) =
+                            world_to_local.apply(Point2D::new(input.point.x, input.point.y))
+                        else {
+                            return EventOutcome::Ignored;
+                        };
+                        let next_curve = curve_from_midpoint(
+                            points,
+                            Vec2 {
+                                x: local.x,
+                                y: local.y,
+                            },
+                        );
+                        let preview = PointerCurvePreview {
+                            element_id: element_id.clone(),
+                            curve: next_curve,
+                        };
+                        if input.phase == PointerPhaseV1::Up {
+                            let expected_revision = *expected_revision;
+                            let did_change = preview.curve != *curve;
+                            self.state = PointerState::Idle;
+                            if did_change {
+                                PointerTransition::CurveCommit {
+                                    preview,
+                                    expected_revision,
+                                }
+                            } else {
+                                PointerTransition::None
+                            }
+                        } else {
+                            PointerTransition::Preview(PointerPreview::Curve(preview))
+                        }
+                    }
+                    PointerPhaseV1::Cancel => {
+                        self.state = PointerState::Idle;
+                        PointerTransition::Cancelled
+                    }
+                    PointerPhaseV1::Down => return EventOutcome::Ignored,
+                };
+                EventOutcome::accepted(transition, None)
+            }
             PointerState::Marquee {
                 pointer_id,
                 origin,
@@ -771,7 +869,9 @@ fn opposite_local(
         SelectionHandleIdV1::South => Point2D::new(0.0, -half_height),
         SelectionHandleIdV1::SouthWest => Point2D::new(half_width, -half_height),
         SelectionHandleIdV1::West => Point2D::new(half_width, 0.0),
-        SelectionHandleIdV1::Rotate | SelectionHandleIdV1::Vertex => return None,
+        SelectionHandleIdV1::Rotate | SelectionHandleIdV1::Vertex | SelectionHandleIdV1::Curve => {
+            return None;
+        }
     })
 }
 
@@ -810,6 +910,7 @@ mod tests {
             selected_element_ids: vec!["rect".to_string()],
             target_handle: None,
             target_vertex: None,
+            target_curve: None,
             oriented_bounds: None,
         };
         machine.process_batch(
@@ -847,6 +948,7 @@ mod tests {
                 selected_element_ids: vec!["rect".to_string()],
                 target_handle: None,
                 target_vertex: None,
+                target_curve: None,
                 oriented_bounds: None,
             }
         };
@@ -967,6 +1069,7 @@ mod tests {
             selected_element_ids: Vec::new(),
             target_handle: None,
             target_vertex: None,
+            target_curve: None,
             oriented_bounds: None,
         };
         machine.process_batch(
@@ -1107,6 +1210,7 @@ mod tests {
                 points,
                 world_to_local: Affine2D::identity(),
             }),
+            target_curve: None,
             oriented_bounds: None,
         };
         let down_outcome = machine.process_batch(4, vec![down]);
@@ -1128,6 +1232,7 @@ mod tests {
                 selected_element_ids: vec!["line".to_string()],
                 target_handle: None,
                 target_vertex: None,
+                target_curve: None,
                 oriented_bounds: None,
             }],
         );
@@ -1146,6 +1251,7 @@ mod tests {
                 selected_element_ids: vec!["line".to_string()],
                 target_handle: None,
                 target_vertex: None,
+                target_curve: None,
                 oriented_bounds: None,
             }],
         );
@@ -1158,5 +1264,77 @@ mod tests {
         };
         assert_eq!(expected_revision, 4);
         assert!((preview.points[1].x - preview.points[1].y).abs() < 1e-10);
+    }
+
+    #[test]
+    fn curve_handle_drag_previews_and_commits_one_quadratic_control() {
+        let mut machine = PointerMachine::default();
+        let points = vec![Vec2 { x: 0.0, y: 0.0 }, Vec2 { x: 10.0, y: 0.0 }];
+        machine.process_batch(
+            8,
+            vec![TargetedPointerEvent {
+                input: event(PointerPhaseV1::Down, 1, Vec2 { x: 5.0, y: 0.0 }),
+                target_element_id: None,
+                selected_element_ids: vec!["line".to_string()],
+                target_handle: None,
+                target_vertex: None,
+                target_curve: Some(TargetedCurveHandle {
+                    element_id: "line".to_string(),
+                    points,
+                    curve: None,
+                    world_to_local: Affine2D::identity(),
+                }),
+                oriented_bounds: None,
+            }],
+        );
+
+        let moved = machine.process_batch(
+            8,
+            vec![TargetedPointerEvent {
+                input: event(PointerPhaseV1::Move, 2, Vec2 { x: 5.0, y: 5.0 }),
+                target_element_id: None,
+                selected_element_ids: vec!["line".to_string()],
+                target_handle: None,
+                target_vertex: None,
+                target_curve: None,
+                oriented_bounds: None,
+            }],
+        );
+        let PointerTransition::Preview(PointerPreview::Curve(preview)) = moved.transition else {
+            panic!("curve drag must preview");
+        };
+        assert_eq!(
+            preview.curve,
+            Some(PathCurveV1::Quadratic {
+                control: Vec2 { x: 5.0, y: 10.0 },
+            })
+        );
+
+        let committed = machine.process_batch(
+            8,
+            vec![TargetedPointerEvent {
+                input: event(PointerPhaseV1::Up, 3, Vec2 { x: 5.0, y: 5.0 }),
+                target_element_id: None,
+                selected_element_ids: vec!["line".to_string()],
+                target_handle: None,
+                target_vertex: None,
+                target_curve: None,
+                oriented_bounds: None,
+            }],
+        );
+        let PointerTransition::CurveCommit {
+            preview,
+            expected_revision,
+        } = committed.transition
+        else {
+            panic!("curve pointer up must commit");
+        };
+        assert_eq!(expected_revision, 8);
+        assert_eq!(
+            preview.curve,
+            Some(PathCurveV1::Quadratic {
+                control: Vec2 { x: 5.0, y: 10.0 },
+            })
+        );
     }
 }

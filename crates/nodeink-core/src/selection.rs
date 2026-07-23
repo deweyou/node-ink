@@ -3,13 +3,14 @@ use std::collections::{BTreeMap, BTreeSet};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    Affine2D, ElementId, ElementRecordV1, EngineErrorV1, NodeInkDocumentV1, SelectionStyleV1,
-    TextElementV1, Vec2, aligned_text_x,
+    Affine2D, ElementId, ElementRecordV1, EngineErrorV1, NodeInkDocumentV1, PathCurveV1,
+    SelectionStyleV1, TextElementV1, Vec2, aligned_text_x,
     hierarchy::Hierarchy,
     selection_geometry::{OrientedCorners, SelectionGeometry, SelectionHandleKind, VisualAabb},
     shape_geometry::{
-        BoxShapeKind, hit_test_box_shape, hit_test_path, hit_test_resolved_arrow,
-        path_visual_bounds, resolved_arrow_visual_bounds,
+        BoxShapeKind, curve_midpoint, hit_test_box_shape, hit_test_path, hit_test_path_with_curve,
+        hit_test_resolved_arrow, path_visual_bounds, path_visual_bounds_with_curve,
+        resolved_arrow_visual_bounds,
     },
     stroke_geometry::{flattened_world_points, stroke_visual_bounds},
     text::TextMetricsCache,
@@ -87,6 +88,7 @@ pub enum SelectionHandleIdV1 {
     West,
     Rotate,
     Vertex,
+    Curve,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -95,6 +97,7 @@ pub enum SelectionHandleTypeV1 {
     Resize,
     Rotate,
     Vertex,
+    Curve,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -439,6 +442,7 @@ impl SelectionModel {
         document: &NodeInkDocumentV1,
         preview: Option<(&[ElementId], Affine2D)>,
         vertex_preview: Option<(&str, usize, &[Vec2])>,
+        curve_preview: Option<(&str, Option<PathCurveV1>)>,
         text_metrics: &TextMetricsCache,
         camera_zoom: f64,
     ) -> SelectionStateV1 {
@@ -465,10 +469,26 @@ impl SelectionModel {
         } else {
             SCREEN_SELECTION_GAP
         };
-        let mut geometry = vertex_preview
-            .filter(|(element_id, _, _)| self.selected_element_ids.as_slice() == [*element_id])
-            .and_then(|(element_id, _, points)| {
-                path_selection_geometry(document, element_id, points, rotate_offset)
+        let mut geometry = curve_preview
+            .filter(|(element_id, _)| self.selected_element_ids.as_slice() == [*element_id])
+            .and_then(|(element_id, curve)| {
+                let points = document.elements.get(element_id).and_then(path_points)?;
+                path_selection_geometry(document, element_id, points, curve, rotate_offset)
+            })
+            .or_else(|| {
+                vertex_preview
+                    .filter(|(element_id, _, _)| {
+                        self.selected_element_ids.as_slice() == [*element_id]
+                    })
+                    .and_then(|(element_id, _, points)| {
+                        path_selection_geometry(
+                            document,
+                            element_id,
+                            points,
+                            document.elements.get(element_id).and_then(path_curve),
+                            rotate_offset,
+                        )
+                    })
             })
             .or_else(|| {
                 selection_geometry(
@@ -502,14 +522,35 @@ impl SelectionModel {
                     .first()
                     .filter(|_| self.selected_element_ids.len() == 1)
                     .and_then(|element_id| {
-                        let points = vertex_preview
-                            .filter(|(preview_id, _, _)| *preview_id == element_id.as_str())
-                            .map(|(_, _, points)| points)
-                            .or_else(|| document.elements.get(element_id).and_then(path_points))?;
+                        let (points, curve) = curve_preview
+                            .filter(|(preview_id, _)| *preview_id == element_id.as_str())
+                            .and_then(|(_, curve)| {
+                                document
+                                    .elements
+                                    .get(element_id)
+                                    .and_then(path_points)
+                                    .map(|points| (points, curve))
+                            })
+                            .or_else(|| {
+                                vertex_preview
+                                    .filter(|(preview_id, _, _)| *preview_id == element_id.as_str())
+                                    .map(|(_, _, points)| {
+                                        (
+                                            points,
+                                            document.elements.get(element_id).and_then(path_curve),
+                                        )
+                                    })
+                            })
+                            .or_else(|| {
+                                document.elements.get(element_id).and_then(|element| {
+                                    path_points(element).map(|points| (points, path_curve(element)))
+                                })
+                            })?;
                         vertex_handles(
                             document,
                             element_id,
                             points,
+                            curve,
                             self.selected_vertex_index,
                             preview
                                 .filter(|(preview_ids, _)| {
@@ -589,6 +630,7 @@ fn path_selection_geometry(
     document: &NodeInkDocumentV1,
     element_id: &str,
     points: &[Vec2],
+    curve: Option<PathCurveV1>,
     rotate_offset: f64,
 ) -> Option<SelectionGeometry> {
     let element = document.elements.get(element_id)?;
@@ -598,7 +640,7 @@ fn path_selection_geometry(
         .copied()?;
     match element {
         ElementRecordV1::Line(line) => SelectionGeometry::resolve(
-            path_visual_bounds(points, line.size.stroke_width(), None)?,
+            path_visual_bounds_with_curve(points, curve, line.size.stroke_width(), None)?,
             world_transform,
             rotate_offset,
         )
@@ -610,7 +652,7 @@ fn path_selection_geometry(
         )
         .ok(),
         ElementRecordV1::Arrow(arrow) => SelectionGeometry::resolve(
-            resolved_arrow_visual_bounds(points, arrow.size, world_transform)?,
+            resolved_arrow_visual_bounds(points, curve, arrow.size, world_transform)?,
             Affine2D::IDENTITY,
             rotate_offset,
         )
@@ -623,6 +665,7 @@ fn vertex_handles(
     document: &NodeInkDocumentV1,
     element_id: &str,
     points: &[Vec2],
+    curve: Option<PathCurveV1>,
     selected_vertex_index: Option<usize>,
     preview_transform: Option<Affine2D>,
 ) -> Option<Vec<SelectionHandleV1>> {
@@ -630,7 +673,8 @@ fn vertex_handles(
         .ok()?
         .get(element_id)
         .copied()?;
-    let vertex_indices = match document.elements.get(element_id)? {
+    let element = document.elements.get(element_id)?;
+    let vertex_indices = match element {
         ElementRecordV1::Line(_) | ElementRecordV1::Arrow(_) => {
             let last = points.len().checked_sub(1)?;
             if last == 0 { vec![0] } else { vec![0, last] }
@@ -638,7 +682,7 @@ fn vertex_handles(
         ElementRecordV1::Polyline(_) => (0..points.len()).collect(),
         _ => return None,
     };
-    vertex_indices
+    let mut handles = vertex_indices
         .into_iter()
         .map(|vertex_index| {
             let point = points.get(vertex_index)?;
@@ -657,7 +701,30 @@ fn vertex_handles(
                 selected: Some(selected_vertex_index == Some(vertex_index)),
             })
         })
-        .collect()
+        .collect::<Option<Vec<_>>>()?;
+    if matches!(
+        element,
+        ElementRecordV1::Line(_) | ElementRecordV1::Arrow(_)
+    ) && let Some(midpoint) = curve_midpoint(points, curve)
+    {
+        let mut world = world_transform
+            .apply(Point2D::new(midpoint.x, midpoint.y))
+            .ok()?;
+        if let Some(preview_transform) = preview_transform {
+            world = preview_transform.apply(world).ok()?;
+        }
+        handles.push(SelectionHandleV1 {
+            id: SelectionHandleIdV1::Curve,
+            kind: SelectionHandleTypeV1::Curve,
+            position: Vec2 {
+                x: world.x,
+                y: world.y,
+            },
+            vertex_index: None,
+            selected: None,
+        });
+    }
+    Some(handles)
 }
 
 /// Phase 1A-compatible normal hit test. Group-aware pointer code can use
@@ -752,8 +819,9 @@ fn hit_test_element(
             world_transform,
             point,
         ),
-        ElementRecordV1::Line(line) => hit_test_path(
+        ElementRecordV1::Line(line) => hit_test_path_with_curve(
             &line.points,
+            line.curve,
             line.size.stroke_width(),
             None,
             world_transform,
@@ -768,9 +836,14 @@ fn hit_test_element(
             point,
             tolerance,
         ),
-        ElementRecordV1::Arrow(arrow) => {
-            hit_test_resolved_arrow(&arrow.points, arrow.size, world_transform, point, tolerance)
-        }
+        ElementRecordV1::Arrow(arrow) => hit_test_resolved_arrow(
+            &arrow.points,
+            arrow.curve,
+            arrow.size,
+            world_transform,
+            point,
+            tolerance,
+        ),
         ElementRecordV1::Stroke(stroke) => {
             let radius = stroke.size.stroke_width() / 2.0 + tolerance;
             flattened_world_points(&stroke.points, world_transform, tolerance).is_some_and(
@@ -953,6 +1026,14 @@ fn path_points(element: &ElementRecordV1) -> Option<&[Vec2]> {
     }
 }
 
+fn path_curve(element: &ElementRecordV1) -> Option<PathCurveV1> {
+    match element {
+        ElementRecordV1::Line(line) => line.curve,
+        ElementRecordV1::Arrow(arrow) => arrow.curve,
+        _ => None,
+    }
+}
+
 fn element_local_visual_bounds(
     element: &ElementRecordV1,
     text_metrics: &TextMetricsCache,
@@ -984,14 +1065,17 @@ fn element_local_visual_bounds(
             diamond.size.stroke_width(),
         ),
         ElementRecordV1::Line(line) => {
-            path_visual_bounds(&line.points, line.size.stroke_width(), None)
+            path_visual_bounds_with_curve(&line.points, line.curve, line.size.stroke_width(), None)
         }
         ElementRecordV1::Polyline(polyline) => {
             path_visual_bounds(&polyline.points, polyline.size.stroke_width(), None)
         }
-        ElementRecordV1::Arrow(arrow) => {
-            path_visual_bounds(&arrow.points, arrow.size.stroke_width(), Some(arrow.size))
-        }
+        ElementRecordV1::Arrow(arrow) => path_visual_bounds_with_curve(
+            &arrow.points,
+            arrow.curve,
+            arrow.size.stroke_width(),
+            Some(arrow.size),
+        ),
         ElementRecordV1::Stroke(stroke) => {
             stroke_visual_bounds(&stroke.points, stroke.size.stroke_width())
         }
@@ -1030,7 +1114,12 @@ fn element_bounds_in_parent(
 ) -> Option<VisualAabb> {
     let element = document.elements.get(element_id)?;
     if let ElementRecordV1::Arrow(arrow) = element {
-        return resolved_arrow_visual_bounds(&arrow.points, arrow.size, element_transform(element));
+        return resolved_arrow_visual_bounds(
+            &arrow.points,
+            arrow.curve,
+            arrow.size,
+            element_transform(element),
+        );
     }
     let local_bounds = match element {
         ElementRecordV1::Group(_) => group_local_visual_bounds(document, element_id, text_metrics)?,
@@ -1062,7 +1151,7 @@ fn element_selection_geometry(
     let world_transform = *world_transforms.get(element_id)?;
     if let ElementRecordV1::Arrow(arrow) = element {
         return SelectionGeometry::resolve(
-            resolved_arrow_visual_bounds(&arrow.points, arrow.size, world_transform)?,
+            resolved_arrow_visual_bounds(&arrow.points, arrow.curve, arrow.size, world_transform)?,
             Affine2D::IDENTITY,
             rotate_offset,
         )
@@ -1339,8 +1428,14 @@ mod tests {
         selection
             .set_single(&document, Some("stroke".to_string()))
             .expect("stroke selection is valid");
-        let snapshot =
-            selection.snapshot(&document, None, None, &TextMetricsCache::default(), 100.0);
+        let snapshot = selection.snapshot(
+            &document,
+            None,
+            None,
+            None,
+            &TextMetricsCache::default(),
+            100.0,
+        );
 
         assert_eq!(
             snapshot.visual_bounds,
@@ -1513,7 +1608,14 @@ mod tests {
             )
             .expect("multi selection is valid");
 
-        let snapshot = selection.snapshot(&document, None, None, &TextMetricsCache::default(), 1.0);
+        let snapshot = selection.snapshot(
+            &document,
+            None,
+            None,
+            None,
+            &TextMetricsCache::default(),
+            1.0,
+        );
 
         assert_eq!(snapshot.selected_element_ids, ["left", "right"]);
         assert_eq!(selection.primary_element_id(), Some("right"));
@@ -1569,6 +1671,7 @@ mod tests {
             &document,
             Some((&preview_ids, preview)),
             None,
+            None,
             &TextMetricsCache::default(),
             2.0,
         );
@@ -1622,6 +1725,7 @@ mod tests {
             &document,
             Some((&preview_ids, preview)),
             None,
+            None,
             &TextMetricsCache::default(),
             1.0,
         );
@@ -1649,6 +1753,7 @@ mod tests {
                 id: "line".to_string(),
                 transform: Affine2D::identity(),
                 points: vec![Vec2 { x: 10.0, y: 20.0 }, Vec2 { x: 70.0, y: 50.0 }],
+                curve: None,
                 stroke: "#0f172a".to_string(),
                 size: ElementSizeV1::S,
             }),
@@ -1664,13 +1769,16 @@ mod tests {
             &document,
             Some((&preview_ids, preview)),
             None,
+            None,
             &TextMetricsCache::default(),
             1.0,
         );
 
-        assert_eq!(snapshot.handles.len(), 2);
+        assert_eq!(snapshot.handles.len(), 3);
         assert_eq!(snapshot.handles[0].kind, SelectionHandleTypeV1::Vertex);
         assert_eq!(snapshot.handles[0].position, Vec2 { x: 25.0, y: 15.0 });
+        assert_eq!(snapshot.handles[2].kind, SelectionHandleTypeV1::Curve);
+        assert_eq!(snapshot.handles[2].position, Vec2 { x: 55.0, y: 30.0 });
         assert_eq!(snapshot.handles[1].position, Vec2 { x: 85.0, y: 45.0 });
     }
 
@@ -1719,7 +1827,7 @@ mod tests {
             .set_single(&document, Some("text".to_string()))
             .expect("selection is valid");
 
-        let snapshot = selection.snapshot(&document, None, None, &metrics, 1.0);
+        let snapshot = selection.snapshot(&document, None, None, None, &metrics, 1.0);
 
         assert_eq!(snapshot.handles.len(), 7);
         assert!(!snapshot.handles.iter().any(|handle| matches!(
@@ -1760,6 +1868,7 @@ mod tests {
                 id: "line".to_string(),
                 transform: Affine2D::identity(),
                 points: vec![Vec2 { x: 10.0, y: 20.0 }, Vec2 { x: 70.0, y: 50.0 }],
+                curve: None,
                 stroke: "#0f172a".to_string(),
                 size: ElementSizeV1::S,
             }),
@@ -1770,6 +1879,7 @@ mod tests {
             .expect("selection is valid");
         let value = serde_json::to_value(selection.snapshot(
             &document,
+            None,
             None,
             None,
             &TextMetricsCache::default(),
