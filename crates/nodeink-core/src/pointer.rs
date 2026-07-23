@@ -2,8 +2,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     Affine2D, ElementId, OrientedSelectionBoundsV1, PathCurveV1, SelectionBoundsV1,
-    SelectionHandleIdV1, SelectionMarqueeModeV1, Vec2, shape_geometry::curve_from_midpoint,
-    transform::Point2D,
+    SelectionHandleIdV1, SelectionMarqueeModeV1, TextAlignV1, Vec2,
+    shape_geometry::curve_from_midpoint, transform::Point2D,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -50,6 +50,7 @@ pub(crate) struct TargetedPointerEvent {
     pub target_handle: Option<SelectionHandleIdV1>,
     pub target_vertex: Option<TargetedVertexHandle>,
     pub target_curve: Option<TargetedCurveHandle>,
+    pub target_text_resize: Option<TargetedTextResize>,
     pub oriented_bounds: Option<OrientedSelectionBoundsV1>,
 }
 
@@ -67,6 +68,20 @@ pub(crate) struct TargetedCurveHandle {
     pub points: Vec<Vec2>,
     pub curve: Option<PathCurveV1>,
     pub world_to_local: Affine2D,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct TargetedTextResize {
+    pub element_id: ElementId,
+    pub handle: SelectionHandleIdV1,
+    pub world_to_local: Affine2D,
+    pub x: f64,
+    pub y: f64,
+    pub font_size: f64,
+    pub max_width: Option<f64>,
+    pub text_align: TextAlignV1,
+    pub measured_width: f64,
+    pub measured_height: f64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -87,12 +102,22 @@ pub(crate) struct PointerTransformPreview {
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum PointerPreview {
     Transform(PointerTransformPreview),
+    TextResize(PointerTextResizePreview),
     Vertex(PointerVertexPreview),
     Curve(PointerCurvePreview),
     Marquee {
         bounds: SelectionBoundsV1,
         mode: SelectionMarqueeModeV1,
     },
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct PointerTextResizePreview {
+    pub element_id: ElementId,
+    pub x: f64,
+    pub y: f64,
+    pub font_size: f64,
+    pub max_width: Option<f64>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -122,6 +147,10 @@ pub(crate) enum PointerTransition {
     None,
     Preview(PointerPreview),
     Commit(PointerCommit),
+    TextResizeCommit {
+        preview: PointerTextResizePreview,
+        expected_revision: u64,
+    },
     VertexCommit {
         preview: PointerVertexPreview,
         expected_revision: u64,
@@ -159,6 +188,7 @@ pub(crate) struct PointerBatchOutcome {
 #[derive(Debug, Clone, Default)]
 pub(crate) struct PointerMachine {
     state: PointerState,
+    preview: Option<PointerPreview>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -172,6 +202,13 @@ enum PointerState {
         last_sequence: u64,
         expected_revision: u64,
         gesture: TransformGesture,
+    },
+    ResizingText {
+        pointer_id: u32,
+        origin: Vec2,
+        target: TargetedTextResize,
+        last_sequence: u64,
+        expected_revision: u64,
     },
     EditingVertex {
         pointer_id: u32,
@@ -248,6 +285,17 @@ impl PointerMachine {
             }
         }
 
+        match &transition {
+            PointerTransition::Preview(preview) => self.preview = Some(preview.clone()),
+            PointerTransition::Commit(_)
+            | PointerTransition::TextResizeCommit { .. }
+            | PointerTransition::VertexCommit { .. }
+            | PointerTransition::CurveCommit { .. }
+            | PointerTransition::MarqueeCommit { .. }
+            | PointerTransition::Cancelled => self.preview = None,
+            PointerTransition::None => {}
+        }
+
         PointerBatchOutcome {
             processed_event_count,
             ignored_event_count,
@@ -258,10 +306,15 @@ impl PointerMachine {
 
     pub fn cancel(&mut self) {
         self.state = PointerState::Idle;
+        self.preview = None;
     }
 
     pub fn is_active(&self) -> bool {
         !matches!(self.state, PointerState::Idle)
+    }
+
+    pub fn preview(&self) -> Option<&PointerPreview> {
+        self.preview.as_ref()
     }
 
     fn process_event(
@@ -276,6 +329,7 @@ impl PointerMachine {
             target_handle,
             target_vertex,
             target_curve,
+            target_text_resize,
             oriented_bounds,
         } = event;
         if !valid_input(&input) {
@@ -311,6 +365,16 @@ impl PointerMachine {
                         points: target_curve.points,
                         curve: target_curve.curve,
                         world_to_local: target_curve.world_to_local,
+                        last_sequence: input.sequence,
+                        expected_revision,
+                    };
+                    return EventOutcome::accepted(PointerTransition::None, None);
+                }
+                if let Some(target) = target_text_resize {
+                    self.state = PointerState::ResizingText {
+                        pointer_id: input.pointer_id,
+                        origin: input.point,
+                        target,
                         last_sequence: input.sequence,
                         expected_revision,
                     };
@@ -512,6 +576,49 @@ impl PointerMachine {
                 };
                 EventOutcome::accepted(transition, None)
             }
+            PointerState::ResizingText {
+                pointer_id,
+                origin,
+                target,
+                last_sequence,
+                expected_revision,
+            } => {
+                if input.pointer_id != *pointer_id || input.sequence <= *last_sequence {
+                    return EventOutcome::Ignored;
+                }
+                *last_sequence = input.sequence;
+                let Some(preview) = resize_text(target, *origin, input.point, input.modifiers.alt)
+                else {
+                    return EventOutcome::Ignored;
+                };
+                let transition = match input.phase {
+                    PointerPhaseV1::Move => {
+                        PointerTransition::Preview(PointerPreview::TextResize(preview))
+                    }
+                    PointerPhaseV1::Up => {
+                        let expected_revision = *expected_revision;
+                        let did_change = preview.x != target.x
+                            || preview.y != target.y
+                            || preview.font_size != target.font_size
+                            || preview.max_width != target.max_width;
+                        self.state = PointerState::Idle;
+                        if did_change {
+                            PointerTransition::TextResizeCommit {
+                                preview,
+                                expected_revision,
+                            }
+                        } else {
+                            PointerTransition::None
+                        }
+                    }
+                    PointerPhaseV1::Cancel => {
+                        self.state = PointerState::Idle;
+                        PointerTransition::Cancelled
+                    }
+                    PointerPhaseV1::Down => return EventOutcome::Ignored,
+                };
+                EventOutcome::accepted(transition, None)
+            }
             PointerState::EditingVertex {
                 pointer_id,
                 element_id,
@@ -658,6 +765,133 @@ impl PointerMachine {
                 EventOutcome::accepted(transition, None)
             }
         }
+    }
+}
+
+fn resize_text(
+    target: &TargetedTextResize,
+    origin: Vec2,
+    point: Vec2,
+    from_center: bool,
+) -> Option<PointerTextResizePreview> {
+    let origin = target
+        .world_to_local
+        .apply(Point2D::new(origin.x, origin.y))
+        .ok()?;
+    let point = target
+        .world_to_local
+        .apply(Point2D::new(point.x, point.y))
+        .ok()?;
+    let delta = Point2D::new(point.x - origin.x, point.y - origin.y);
+    if matches!(
+        target.handle,
+        SelectionHandleIdV1::East | SelectionHandleIdV1::West
+    ) {
+        return resize_text_width(target, delta.x, from_center);
+    }
+    resize_text_proportionally(target, delta, from_center)
+}
+
+fn resize_text_width(
+    target: &TargetedTextResize,
+    delta_x: f64,
+    from_center: bool,
+) -> Option<PointerTextResizePreview> {
+    let direction = if target.handle == SelectionHandleIdV1::East {
+        1.0
+    } else {
+        -1.0
+    };
+    let width_delta = direction * delta_x * if from_center { 2.0 } else { 1.0 };
+    let width = (target.measured_width + width_delta).max(target.font_size);
+    if !width.is_finite() {
+        return None;
+    }
+    let left = aligned_left(target.x, target.measured_width, target.text_align);
+    let next_left = if from_center {
+        left + (target.measured_width - width) / 2.0
+    } else if target.handle == SelectionHandleIdV1::West {
+        left + target.measured_width - width
+    } else {
+        left
+    };
+    Some(PointerTextResizePreview {
+        element_id: target.element_id.clone(),
+        x: aligned_anchor(next_left, width, target.text_align),
+        y: target.y,
+        font_size: target.font_size,
+        max_width: Some(width),
+    })
+}
+
+fn resize_text_proportionally(
+    target: &TargetedTextResize,
+    delta: Point2D,
+    from_center: bool,
+) -> Option<PointerTextResizePreview> {
+    let horizontal = match target.handle {
+        SelectionHandleIdV1::NorthEast | SelectionHandleIdV1::SouthEast => 1.0,
+        SelectionHandleIdV1::NorthWest | SelectionHandleIdV1::SouthWest => -1.0,
+        _ => return None,
+    };
+    let vertical = match target.handle {
+        SelectionHandleIdV1::SouthEast | SelectionHandleIdV1::SouthWest => 1.0,
+        SelectionHandleIdV1::NorthEast | SelectionHandleIdV1::NorthWest => -1.0,
+        _ => return None,
+    };
+    let pivot_fraction = if from_center { 0.5 } else { 1.0 };
+    let handle_vector = Point2D::new(
+        horizontal * target.measured_width * pivot_fraction,
+        vertical * target.measured_height * pivot_fraction,
+    );
+    let target_vector = Point2D::new(handle_vector.x + delta.x, handle_vector.y + delta.y);
+    let scale_denominator = handle_vector.x * handle_vector.x + handle_vector.y * handle_vector.y;
+    if !scale_denominator.is_finite() || scale_denominator <= f64::EPSILON {
+        return None;
+    }
+    let requested_scale =
+        (target_vector.x * handle_vector.x + target_vector.y * handle_vector.y) / scale_denominator;
+    let font_size = (target.font_size * requested_scale).clamp(1.0, 512.0);
+    let scale = font_size / target.font_size;
+    if !scale.is_finite() || scale <= 0.0 {
+        return None;
+    }
+    let left = aligned_left(target.x, target.measured_width, target.text_align);
+    let right = left + target.measured_width;
+    let bottom = target.y + target.measured_height;
+    let pivot = if from_center {
+        Point2D::new(
+            left + target.measured_width / 2.0,
+            target.y + target.measured_height / 2.0,
+        )
+    } else {
+        Point2D::new(
+            if horizontal > 0.0 { left } else { right },
+            if vertical > 0.0 { target.y } else { bottom },
+        )
+    };
+    Some(PointerTextResizePreview {
+        element_id: target.element_id.clone(),
+        x: pivot.x + (target.x - pivot.x) * scale,
+        y: pivot.y + (target.y - pivot.y) * scale,
+        font_size,
+        max_width: target.max_width.map(|width| width * scale),
+    })
+}
+
+fn aligned_left(anchor: f64, width: f64, align: TextAlignV1) -> f64 {
+    match align {
+        TextAlignV1::Start => anchor,
+        TextAlignV1::Center => anchor - width / 2.0,
+        TextAlignV1::End => anchor - width,
+    }
+}
+
+fn aligned_anchor(left: f64, width: f64, align: TextAlignV1) -> f64 {
+    match align {
+        TextAlignV1::Start => left,
+        TextAlignV1::Center => left + width / 2.0,
+        TextAlignV1::End => left + width,
     }
 }
 
@@ -911,6 +1145,7 @@ mod tests {
             target_handle: None,
             target_vertex: None,
             target_curve: None,
+            target_text_resize: None,
             oriented_bounds: None,
         };
         machine.process_batch(
@@ -949,6 +1184,7 @@ mod tests {
                 target_handle: None,
                 target_vertex: None,
                 target_curve: None,
+                target_text_resize: None,
                 oriented_bounds: None,
             }
         };
@@ -1070,6 +1306,7 @@ mod tests {
             target_handle: None,
             target_vertex: None,
             target_curve: None,
+            target_text_resize: None,
             oriented_bounds: None,
         };
         machine.process_batch(
@@ -1196,6 +1433,79 @@ mod tests {
     }
 
     #[test]
+    fn text_resize_helpers_preserve_alignment_and_auto_width_semantics() {
+        let centered = TargetedTextResize {
+            element_id: "text".to_string(),
+            handle: SelectionHandleIdV1::West,
+            world_to_local: Affine2D::identity(),
+            x: 100.0,
+            y: 20.0,
+            font_size: 24.0,
+            max_width: None,
+            text_align: TextAlignV1::Center,
+            measured_width: 80.0,
+            measured_height: 40.0,
+        };
+        let width = resize_text_width(&centered, -20.0, false).unwrap();
+        assert_eq!(width.x, 90.0);
+        assert_eq!(width.font_size, 24.0);
+        assert_eq!(width.max_width, Some(100.0));
+
+        let corner = TargetedTextResize {
+            handle: SelectionHandleIdV1::SouthWest,
+            measured_width: 100.0,
+            measured_height: 50.0,
+            ..centered
+        };
+        let scaled = resize_text_proportionally(&corner, Point2D::new(-50.0, 25.0), false).unwrap();
+        assert_eq!(scaled.x, 75.0);
+        assert_eq!(scaled.y, 20.0);
+        assert_eq!(scaled.font_size, 36.0);
+        assert_eq!(scaled.max_width, None);
+    }
+
+    #[test]
+    fn text_corner_resize_uses_the_closest_proportional_position_to_the_pointer() {
+        let target = TargetedTextResize {
+            element_id: "text".to_string(),
+            handle: SelectionHandleIdV1::SouthEast,
+            world_to_local: Affine2D::identity(),
+            x: 0.0,
+            y: 0.0,
+            font_size: 24.0,
+            max_width: Some(200.0),
+            text_align: TextAlignV1::Start,
+            measured_width: 200.0,
+            measured_height: 30.0,
+        };
+        let pointer_delta = Point2D::new(20.0, 20.0);
+        let preview = resize_text_proportionally(&target, pointer_delta, false).unwrap();
+        let expected_scale = (220.0 * 200.0 + 50.0 * 30.0) / (200.0_f64.powi(2) + 30.0_f64.powi(2));
+        let actual_scale = preview.font_size / target.font_size;
+        assert!((actual_scale - expected_scale).abs() < 1e-10);
+        assert!(
+            (preview.max_width.unwrap() - target.measured_width * expected_scale).abs() < 1e-10
+        );
+
+        let preview_corner = Point2D::new(
+            preview.x + target.measured_width * actual_scale,
+            preview.y + target.measured_height * actual_scale,
+        );
+        let desired_corner = Point2D::new(
+            target.measured_width + pointer_delta.x,
+            target.measured_height + pointer_delta.y,
+        );
+        let residual = Point2D::new(
+            desired_corner.x - preview_corner.x,
+            desired_corner.y - preview_corner.y,
+        );
+        assert!(
+            (residual.x * target.measured_width + residual.y * target.measured_height).abs()
+                < 1e-10
+        );
+    }
+
+    #[test]
     fn vertex_drag_previews_local_points_and_shift_snaps_the_adjacent_segment() {
         let mut machine = PointerMachine::default();
         let points = vec![Vec2 { x: 0.0, y: 0.0 }, Vec2 { x: 10.0, y: 0.0 }];
@@ -1211,6 +1521,7 @@ mod tests {
                 world_to_local: Affine2D::identity(),
             }),
             target_curve: None,
+            target_text_resize: None,
             oriented_bounds: None,
         };
         let down_outcome = machine.process_batch(4, vec![down]);
@@ -1233,6 +1544,7 @@ mod tests {
                 target_handle: None,
                 target_vertex: None,
                 target_curve: None,
+                target_text_resize: None,
                 oriented_bounds: None,
             }],
         );
@@ -1252,6 +1564,7 @@ mod tests {
                 target_handle: None,
                 target_vertex: None,
                 target_curve: None,
+                target_text_resize: None,
                 oriented_bounds: None,
             }],
         );
@@ -1284,6 +1597,7 @@ mod tests {
                     curve: None,
                     world_to_local: Affine2D::identity(),
                 }),
+                target_text_resize: None,
                 oriented_bounds: None,
             }],
         );
@@ -1297,6 +1611,7 @@ mod tests {
                 target_handle: None,
                 target_vertex: None,
                 target_curve: None,
+                target_text_resize: None,
                 oriented_bounds: None,
             }],
         );
@@ -1319,6 +1634,7 @@ mod tests {
                 target_handle: None,
                 target_vertex: None,
                 target_curve: None,
+                target_text_resize: None,
                 oriented_bounds: None,
             }],
         );

@@ -38,6 +38,7 @@ import {
 
 import { attachPointerInput } from './pointer-input';
 import { attachEditorShortcutsV2, type EditorShortcutActionV2 } from './keyboard-input';
+import { attachSelectionHandleKeyboard } from './selection-handle-keyboard';
 import {
   defaultClipboardPort,
   type ClipboardPayloadV1 as BrowserClipboardPayloadV1,
@@ -268,6 +269,7 @@ export class EditorWebController implements EditorWebControllerV1 {
   #detachPointerInput: (() => void) | null = null;
   #cameraInput: CameraInputBindingV1 | null = null;
   #detachEditorShortcuts: (() => void) | null = null;
+  #detachSelectionHandleKeyboard: (() => void) | null = null;
   #detachVisibilityFlush: (() => void) | null = null;
   #detachPersistence: (() => void) | null = null;
   #detachResize: (() => void) | null = null;
@@ -351,6 +353,21 @@ export class EditorWebController implements EditorWebControllerV1 {
     this.ensureActive();
     this.#renderer.mount(target);
     this.#cameraTarget = target;
+    this.#detachSelectionHandleKeyboard?.();
+    this.#detachSelectionHandleKeyboard =
+      this.#snapshot.documentAccess === 'writer'
+        ? attachSelectionHandleKeyboard({
+            target,
+            getHandles: () => this.#snapshot.selectionHandles,
+            getCamera: () => this.#snapshot.camera,
+            dispatch: async (events) => {
+              const result = await this.dispatch({ type: 'pointer_events', events });
+              if (!result.ok) {
+                throw new Error(result.snapshot.errorMessage ?? 'Handle adjustment failed');
+              }
+            },
+          })
+        : null;
     this.#cameraInput?.detach();
     this.#cameraInput = attachCameraInput(target, (action) => {
       void this.dispatch({ type: 'camera_action', action });
@@ -472,6 +489,8 @@ export class EditorWebController implements EditorWebControllerV1 {
     this.#cameraInput = null;
     this.#detachEditorShortcuts?.();
     this.#detachEditorShortcuts = null;
+    this.#detachSelectionHandleKeyboard?.();
+    this.#detachSelectionHandleKeyboard = null;
     this.#detachVisibilityFlush?.();
     this.#detachVisibilityFlush = null;
     this.#detachPersistence?.();

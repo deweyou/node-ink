@@ -3,6 +3,13 @@
 > 状态：Proposal v0.1
 > 本文区分已经确认的方向和仍需产品负责人确认的行为，不把方案作者的默认值当作产品决定。
 
+```mermaid
+flowchart LR
+    A[产品或架构问题] --> B{是否已确认}
+    B -->|是| C[进入对应阶段实现]
+    B -->|否| D[保留问题并等待确认]
+```
+
 ## 已确认决策
 
 以下决定由产品负责人在 2026-07-21 的连续方案讨论中确认：
@@ -249,6 +256,8 @@
 
 - Line 与恰好两个 points 的 Arrow 增加 `curve: { kind: 'quadratic'; control: Vec2 } | null`；`null` 是规范直线。Polyline 和旧多点 Arrow 不支持 curve，也不把现有折线隐式重解释为曲线。
 - 单选两点 Line/Arrow 时显示两个方形 endpoint handle 与一个圆形 midpoint bend handle，不显示矩形 bounds ring。圆点代表 quadratic 在 `t=0.5` 的实际曲线中点；拖回 chord midpoint 时持久值规范化为 `null`。
+- 单选 Text 的左右手柄只改持久 `maxWidth` 并触发实时重排；角手柄始终按比例修改持久 `fontSize`，固定宽度随比例变化而 auto-width 保持 auto。Text 不显示上/下手柄，且 resize 不写入非等比 affine。混合多选与 Group 仍使用通用 affine。
+- Selection handles 必须可 Tab 聚焦并提供名称、焦点态和读屏说明。Enter/Space 开始及提交一次共享 Pointer gesture，Arrow 为 1 screen px，Shift+Arrow 为 10 screen px 并保留现有 Rust constraint，Escape 显式取消；同一 grab session 最多产生一个 Undo entry。
 - Rust 持有 world/local 换算、control 推导、preview、curve extrema bounds、自适应 hit-test 与 Arrow endpoint tangent。PointerUp 提交一个 `update_path_curve` Transaction；no-op、preview 与取消不增加 revision/history，Undo/Redo 恢复完整曲线语义。
 - Arrow head 使用最终 world-space endpoint tangent 定向，但 Size 的 head length/opening 不因 control 靠近 endpoint 而缩水。Scene、selection bounds 与 hit-test 使用同一解析结果。
 - Schema V5 copy-on-write 只给 Line/Arrow 增加 `curve: null` 并将 revision 增加 1，源 payload 不修改；V0–V4 继续通过 Rust migration 直达 V6。普通曲线 Arrow 仍不是 Connector；binding、ports、routing 和多控制点编辑继续独立设计。
@@ -339,4 +348,4 @@
 P-01 已确认，Phase 0 可以实施。进入相应产品功能前必须确认其余问题；未到决策时点的问题可以保留待确认，但不能由实现者自行选择用户可见行为。
 
 ---
-*Last updated: 2026-07-23 | Reason: confirm the Schema V6 midpoint curve-editing contract*
+*Last updated: 2026-07-23 | Reason: confirm semantic Text resize and accessible-handle boundaries*

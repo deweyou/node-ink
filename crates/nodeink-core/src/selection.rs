@@ -13,7 +13,7 @@ use crate::{
         resolved_arrow_visual_bounds,
     },
     stroke_geometry::{flattened_world_points, stroke_visual_bounds},
-    text::TextMetricsCache,
+    text::{TextMetricsCache, text_layout_width},
     transform::Point2D,
 };
 
@@ -885,9 +885,10 @@ fn hit_test_text(
     if !local_tolerance.is_finite() {
         return false;
     }
-    let x = aligned_text_x(text.x, metric.width, text.text_align);
+    let width = text_layout_width(text, metric);
+    let x = aligned_text_x(text.x, width, text.text_align);
     local.x >= x - local_tolerance
-        && local.x <= x + metric.width + local_tolerance
+        && local.x <= x + width + local_tolerance
         && local.y >= text.y - local_tolerance
         && local.y <= text.y + metric.height + local_tolerance
 }
@@ -1080,10 +1081,11 @@ fn element_local_visual_bounds(
             stroke_visual_bounds(&stroke.points, stroke.size.stroke_width())
         }
         ElementRecordV1::Text(text) => text_metrics.metric_for(text).and_then(|metric| {
+            let width = text_layout_width(text, metric);
             VisualAabb::new(
-                aligned_text_x(text.x, metric.width, text.text_align),
+                aligned_text_x(text.x, width, text.text_align),
                 text.y,
-                metric.width,
+                width,
                 metric.height,
             )
             .ok()

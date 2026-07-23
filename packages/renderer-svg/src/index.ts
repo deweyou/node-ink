@@ -29,13 +29,15 @@ export class SvgRenderer implements RendererV1 {
     this.unmount();
     const svg = document.createElementNS(svgNamespace, 'svg');
     svg.setAttribute('viewBox', '0 0 960 640');
-    svg.setAttribute('role', 'img');
+    svg.setAttribute('role', 'group');
     svg.setAttribute('aria-label', 'NodeInk canvas');
+    svg.setAttribute('aria-roledescription', 'canvas');
     svg.setAttribute('data-nodeink-canvas', 'true');
     const overlay = document.createElementNS(svgNamespace, 'g');
     overlay.dataset.nodeinkOverlay = 'true';
     overlay.setAttribute('pointer-events', 'none');
-    overlay.setAttribute('aria-hidden', 'true');
+    overlay.setAttribute('role', 'group');
+    overlay.setAttribute('aria-label', 'Selection controls');
     svg.append(overlay);
     target.replaceChildren(svg);
     this.#svg = svg;
@@ -46,12 +48,22 @@ export class SvgRenderer implements RendererV1 {
   setOverlay(overlay: EditorOverlayV1): void {
     validateOverlay(overlay);
     const group = this.requireOverlay();
+    const activeElement =
+      group.querySelector<SVGElement>('[data-nodeink-selection-handle-focused="true"]') ??
+      group.ownerDocument.activeElement;
+    const focusedHandle =
+      activeElement instanceof Element && group.contains(activeElement)
+        ? activeElement.getAttribute('data-nodeink-selection-handle')
+        : null;
+    const grabbedHandle = group
+      .querySelector<SVGElement>('[data-nodeink-selection-handle][aria-pressed="true"]')
+      ?.getAttribute('data-nodeink-selection-handle');
     group.replaceChildren();
     for (const guide of overlay.guides) {
-      group.append(createAlignmentGuide(guide));
+      group.append(hideFromAccessibility(createAlignmentGuide(guide)));
     }
     if (overlay.marquee) {
-      group.append(createMarquee(overlay.marquee));
+      group.append(hideFromAccessibility(createMarquee(overlay.marquee)));
     }
     const isPathEditingSelection =
       overlay.selectionHandles.length > 0 &&
@@ -73,17 +85,19 @@ export class SvgRenderer implements RendererV1 {
       outline.dataset.nodeinkSelectionOutline = 'true';
       outline.setAttribute('stroke', selectionColor);
       outline.setAttribute('stroke-width', '2');
-      group.append(outline);
+      group.append(hideFromAccessibility(outline));
     }
     const worldPerScreenPixel =
       overlay.selectionPaddingWorld > 0 ? overlay.selectionPaddingWorld / selectionGapPx : 1;
     const rotateHandle = overlay.selectionHandles.find((handle) => handle.kind === 'rotate');
     if (rotateHandle) {
       group.append(
-        createRotateConnector(
-          overlay.selectionOrientedBounds,
-          rotateHandle.position,
-          overlay.selectionPaddingWorld,
+        hideFromAccessibility(
+          createRotateConnector(
+            overlay.selectionOrientedBounds,
+            rotateHandle.position,
+            overlay.selectionPaddingWorld,
+          ),
         ),
       );
     }
@@ -91,6 +105,21 @@ export class SvgRenderer implements RendererV1 {
       group.append(createSelectionHandle(handle, worldPerScreenPixel));
     }
     this.requireSvg().append(group);
+    if (focusedHandle) {
+      const nextHandle = [
+        ...group.querySelectorAll<SVGElement>('[data-nodeink-selection-handle]'),
+      ].find((element) => element.dataset.nodeinkSelectionHandle === focusedHandle);
+      if (nextHandle) {
+        if (grabbedHandle === focusedHandle) {
+          nextHandle.setAttribute('aria-pressed', 'true');
+        }
+        nextHandle.focus();
+        if (nextHandle.dataset.nodeinkSelectionHandleFocused !== 'true') {
+          nextHandle.dataset.nodeinkSelectionHandleFocused = 'true';
+          nextHandle.setAttribute('stroke-width', '3');
+        }
+      }
+    }
   }
 
   setViewport(viewport: ViewportV1): RenderViewportResultV1 {
@@ -362,6 +391,15 @@ function applyHandlePaint(
 ): void {
   element.dataset.nodeinkSelectionHandle =
     handle.kind === 'vertex' ? `vertex:${handle.vertexIndex}` : handle.id;
+  element.setAttribute('role', 'button');
+  element.setAttribute('tabindex', '0');
+  element.setAttribute('focusable', 'true');
+  element.setAttribute('aria-label', selectionHandleLabel(handle));
+  element.setAttribute(
+    'aria-keyshortcuts',
+    'Enter Space ArrowUp ArrowDown ArrowLeft ArrowRight Escape',
+  );
+  element.setAttribute('aria-pressed', 'false');
   element.setAttribute(
     'fill',
     handle.kind === 'vertex' && handle.selected
@@ -373,6 +411,40 @@ function applyHandlePaint(
   element.setAttribute('stroke', selectionColor);
   element.setAttribute('stroke-width', '1.5');
   element.setAttribute('vector-effect', 'non-scaling-stroke');
+  element.addEventListener('focus', () => {
+    element.dataset.nodeinkSelectionHandleFocused = 'true';
+    element.setAttribute('stroke-width', '3');
+  });
+  element.addEventListener('blur', () => {
+    delete element.dataset.nodeinkSelectionHandleFocused;
+    element.setAttribute('stroke-width', '1.5');
+  });
+}
+
+function selectionHandleLabel(handle: EditorOverlayV1['selectionHandles'][number]): string {
+  if (handle.kind === 'vertex') {
+    return `Vertex ${handle.vertexIndex + 1}`;
+  }
+  if (handle.kind === 'curve') {
+    return 'Curve handle';
+  }
+  const labels: Record<typeof handle.id, string> = {
+    north_west: 'Top left resize handle',
+    north: 'Top resize handle',
+    north_east: 'Top right resize handle',
+    east: 'Right resize handle',
+    south_east: 'Bottom right resize handle',
+    south: 'Bottom resize handle',
+    south_west: 'Bottom left resize handle',
+    west: 'Left resize handle',
+    rotate: 'Rotate handle',
+  };
+  return labels[handle.id];
+}
+
+function hideFromAccessibility<T extends SVGElement>(element: T): T {
+  element.setAttribute('aria-hidden', 'true');
+  return element;
 }
 
 function createRotateConnector(

@@ -73,6 +73,10 @@ pub(crate) struct TextMetricsCache {
     metrics: BTreeMap<(String, String), TextMetricsV1>,
 }
 
+pub(crate) fn text_layout_width(element: &TextElementV1, metrics: &TextMetricsV1) -> f64 {
+    element.max_width.unwrap_or(metrics.width)
+}
+
 impl TextMetricsCache {
     pub(crate) fn metric_for(&self, element: &TextElementV1) -> Option<&TextMetricsV1> {
         let run = text_run(element);

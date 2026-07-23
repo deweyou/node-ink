@@ -508,6 +508,10 @@ Shape/Polyline 创建状态同样由 Rust 持有。Host 只规范化 Pointer/Key
 
 两点 Line/Arrow 的圆形 midpoint bend handle 也由同一 Selection/Pointer Machine 持有。拖动时 Rust 把 world pointer 逆变换为 local curve midpoint，生成 transient quadratic Scene；PointerUp 只提交一个 `update_path_curve` Command。Renderer 只区分圆形 curve handle 与方形 vertex handle，不重算控制点、bounds、hit-test 或 Arrow tangent。
 
+单选 Text 的 resize 同样由 Rust Selection/Pointer Machine 特化。左右手柄生成 transient `maxWidth`，角手柄生成 proportional `fontSize` 与可选 `maxWidth`；角缩放把指针目标向量投影到初始 corner-to-pivot 对角轴，使用该最近等比位置计算 scale，避免宽而矮的 Text 被短边比例瞬间放大。预览值应用到瞬态 Document clone，再复用 Text Measure Request/Result 完成 live reflow。浏览器 Text Metrics Adapter 根据固定字体测量显式换行与软换行位置，连续数字、Latin、CJK 和 emoji 即使没有空格也不会越过固定宽度；Rust 使用返回的 `lineBreaks` 解析 Scene TextRun 和选择框高度。PointerUp 只提交一个 `resize_text` Command，Text 自身与祖先 affine 不参与字形拉伸。多选、Group 与 mixed selection 继续走通用 `transform_elements`。
+
+`renderer-svg` 将 resolved selection handles 暴露为可聚焦、具名的 SVG controls；`editor-web` 的 framework-neutral keyboard adapter 把 Enter/Space、Arrow、Shift 与 Escape 转换为同一 Normalized Pointer stream。React、Vue、Vanilla 不维护独立的 resize 或 accessibility 状态。
+
 ### 10.2 输入协议
 
 ```ts
@@ -1246,4 +1250,4 @@ vp build apps/playground ──→ production web bundle
 | Web 工具链 | Vite+ 统一入口，Cargo 保持 Rust 真相源 | Phase 0 起 | 低—中 |
 
 ---
-*Last updated: 2026-07-22 | Reason: record Rust-owned fit-content bounds and fit-relative Camera presentation*
+*Last updated: 2026-07-23 | Reason: record Rust-owned semantic Text resizing and framework-neutral accessible handles*
