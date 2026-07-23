@@ -188,8 +188,8 @@ TypeScript 负责平台能力和用户体验集成：
 type DocumentId = string;
 type ElementId = string;
 
-interface NodeInkDocumentV3 {
-  schemaVersion: 3;
+interface NodeInkDocumentV4 {
+  schemaVersion: 4;
   documentId: DocumentId;
   revision: number;
   renderProfile: RenderProfileV1;
@@ -209,11 +209,11 @@ type RenderProfileV1 =
     };
 ```
 
-Schema V3 是当前持久格式。V0/V1 先补齐原视觉默认值与 Clean Profile，V2 再为每个元素补 identity affine；两条路径都由 Rust copy-on-write migration 完成且不修改源 payload。`rootOrder` 只包含根元素，Group 的 `childOrder` 持有直接子节点顺序；每个非根元素必须恰好出现一次，层级必须无环。
+Schema V4 是当前持久格式。V0/V1 补齐原视觉默认值与 Clean Profile，V2 为每个旧元素补 identity affine，V3 以 copy-on-write 方式升级并开放基础图形 kind；所有迁移都由 Rust 完成且不修改源 payload。`rootOrder` 只包含根元素，Group 的 `childOrder` 持有直接子节点顺序；每个非根元素必须恰好出现一次，层级必须无环。
 
 ### 8.2 元素公共字段（当前实现）
 
-Schema V3 的 Rect、Stroke、Text 与 Group 都持有同一种 affine matrix。元素自身的几何字段保持在 local space；Rust 组合祖先与自身 transform，Scene 只输出最终 world transform。当前仍只持久化有限样式：Rect 的 fill/stroke/strokeWidth、Stroke 的 stroke/strokeWidth、Text 的 color/fontSize/fontWeight/textAlign。
+Schema V4 的 Rect、Ellipse、Diamond、Line、Polyline、Arrow、Stroke、Text 与 Group 都持有同一种 affine matrix。元素自身的几何字段保持在 local space；Rust 组合祖先与自身 transform，Scene 只输出最终 world transform。封闭图形持久化 fill/stroke/strokeWidth，线类图形与 Stroke 持久化 stroke/strokeWidth，Text 持久化 color/fontSize/fontWeight/textAlign。
 
 ```ts
 interface ElementBaseV1 {
@@ -231,11 +231,14 @@ interface Affine2D {
   f: number;
 }
 
-interface ShapeStyleV1 {
-  stroke: Paint;
-  fill: Paint;
+interface ClosedShapeFieldsV1 {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  fill: FillV1;
+  stroke: string;
   strokeWidth: number;
-  dash: 'solid' | 'dashed' | 'dotted';
 }
 ```
 
@@ -255,17 +258,44 @@ type ElementRecordV1 =
   | TextElementV1
   | GroupElementV1;
 
-interface RectElementV1 extends ElementBaseV1 {
+interface RectElementV1 extends ElementBaseV1, ClosedShapeFieldsV1 {
   kind: 'rect';
-  size: { width: number; height: number };
-  cornerRadius: number;
-  style: ShapeStyleV1;
+}
+
+interface EllipseElementV1 extends ElementBaseV1, ClosedShapeFieldsV1 {
+  kind: 'ellipse';
+}
+
+interface DiamondElementV1 extends ElementBaseV1, ClosedShapeFieldsV1 {
+  kind: 'diamond';
+}
+
+interface LineElementV1 extends ElementBaseV1 {
+  kind: 'line';
+  points: [Vec2, Vec2];
+  stroke: string;
+  strokeWidth: number;
+}
+
+interface PolylineElementV1 extends ElementBaseV1 {
+  kind: 'polyline';
+  points: [Vec2, Vec2, Vec2, ...Vec2[]];
+  stroke: string;
+  strokeWidth: number;
+}
+
+interface ArrowElementV1 extends ElementBaseV1 {
+  kind: 'arrow';
+  points: [Vec2, Vec2, ...Vec2[]];
+  stroke: string;
+  strokeWidth: number;
 }
 
 interface StrokeElementV1 extends ElementBaseV1 {
   kind: 'stroke';
-  points: Array<{ x: number; y: number; pressure?: number }>;
-  style: Pick<ShapeStyleV1, 'stroke' | 'strokeWidth'>;
+  points: Vec2[];
+  stroke: string;
+  strokeWidth: number;
 }
 
 interface TextElementV1 extends ElementBaseV1 {
@@ -287,7 +317,7 @@ interface GroupElementV1 extends ElementBaseV1 {
 }
 ```
 
-`Ellipse`、`Diamond` 和线类元素使用相同公共字段但保持独立 kind，避免 Renderer 反推用户语义。普通 `Arrow` 是自由几何；未来 `Connector` 有 source/target binding、port 和 route，是不同领域对象。
+`Ellipse`、`Diamond` 和线类元素保持独立 kind，避免 Renderer 从 path 反推用户语义。它们由 Rust 解析为通用 `ScenePathV1`，SVG Renderer 只消费已解析几何。普通 `Arrow` 是自由几何；未来 `Connector` 有 source/target binding、port 和 route，是不同领域对象。
 
 ### 8.4 语义扩展策略
 

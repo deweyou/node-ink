@@ -24,7 +24,7 @@ import {
 
 const fixtureFontFingerprint = 'noto-sans-sc-v40-fontsource-5.3.0';
 
-describe('protocol V1 with schema V3 documents', () => {
+describe('protocol V1 with schema V4 documents', () => {
   it('parses finite Camera state within the supported zoom range', () => {
     expect(parseCamera('{"x":-12,"y":24,"zoom":1.5}')).toEqual({
       x: -12,
@@ -49,7 +49,7 @@ describe('protocol V1 with schema V3 documents', () => {
 
   it('creates a blank document with explicit versions', () => {
     expect(createBlankDocument('doc-1')).toEqual({
-      schemaVersion: 3,
+      schemaVersion: 4,
       documentId: 'doc-1',
       revision: 0,
       renderProfile: { kind: 'clean', version: 1 },
@@ -163,7 +163,7 @@ describe('protocol V1 with schema V3 documents', () => {
     });
   });
 
-  it('does not synthesize required schema V3 scene or selection fields', () => {
+  it('does not synthesize required schema V4 scene or selection fields', () => {
     const missingProfile = updateFixture();
     delete (missingProfile.scene as { renderProfile?: unknown }).renderProfile;
     expect(() => parseEngineUpdate(JSON.stringify(missingProfile))).toThrow('protocol V1');
@@ -173,7 +173,7 @@ describe('protocol V1 with schema V3 documents', () => {
     expect(() => parseEngineUpdate(JSON.stringify(missingStyle))).toThrow('protocol V1');
   });
 
-  it('strictly parses schema V3 document paint, profile, transform, and finite style values', () => {
+  it('strictly parses schema V4 document paint, profile, transform, and finite style values', () => {
     const document = styledDocumentFixture();
     expect(parseNodeInkDocument(JSON.stringify(document))).toEqual(document);
 
@@ -216,28 +216,72 @@ describe('protocol V1 with schema V3 documents', () => {
 
   it('parses every current leaf element kind with identity transforms', () => {
     const rectangle = rectangleElementFixture('rect-1');
-    const stroke = {
-      kind: 'stroke' as const,
-      id: 'stroke-1',
-      transform: identity(),
-      points: [
-        { x: 0, y: 0 },
-        { x: 10, y: 10 },
-      ],
-      strokeWidth: 2,
-      stroke: '#0f172a',
-    };
+    const ellipse = closedShapeElementFixture('ellipse', 'ellipse-1');
+    const diamond = closedShapeElementFixture('diamond', 'diamond-1');
+    const line = lineShapeElementFixture('line', 'line-1');
+    const polyline = lineShapeElementFixture('polyline', 'polyline-1', [
+      { x: 0, y: 20 },
+      { x: 10, y: 0 },
+      { x: 20, y: 20 },
+    ]);
+    const arrow = lineShapeElementFixture('arrow', 'arrow-1');
+    const stroke = lineShapeElementFixture('stroke', 'stroke-1');
     const text = textElementFixture();
     const document = {
-      schemaVersion: 3 as const,
+      schemaVersion: 4 as const,
       documentId: 'all-leaves',
       revision: 0,
       renderProfile: { kind: 'clean' as const, version: 1 as const },
-      rootOrder: [rectangle.id, stroke.id, text.id],
-      elements: { [rectangle.id]: rectangle, [stroke.id]: stroke, [text.id]: text },
+      rootOrder: [
+        rectangle.id,
+        ellipse.id,
+        diamond.id,
+        line.id,
+        polyline.id,
+        arrow.id,
+        stroke.id,
+        text.id,
+      ],
+      elements: {
+        [rectangle.id]: rectangle,
+        [ellipse.id]: ellipse,
+        [diamond.id]: diamond,
+        [line.id]: line,
+        [polyline.id]: polyline,
+        [arrow.id]: arrow,
+        [stroke.id]: stroke,
+        [text.id]: text,
+      },
     };
 
     expect(parseNodeInkDocument(JSON.stringify(document))).toEqual(document);
+  });
+
+  it.each([
+    [
+      'line with more than two points',
+      lineShapeElementFixture('line', 'line-1', [
+        { x: 0, y: 0 },
+        { x: 10, y: 10 },
+        { x: 20, y: 0 },
+      ]),
+    ],
+    ['polyline with fewer than three points', lineShapeElementFixture('polyline', 'polyline-1')],
+    [
+      'arrow with duplicate consecutive points',
+      lineShapeElementFixture('arrow', 'arrow-1', [
+        { x: 0, y: 0 },
+        { x: 0, y: 0 },
+      ]),
+    ],
+  ])('rejects a %s', (_label, element) => {
+    const document = {
+      ...createBlankDocument('invalid-shape'),
+      rootOrder: [element.id],
+      elements: { [element.id]: element },
+    };
+
+    expect(() => parseNodeInkDocument(JSON.stringify(document))).toThrow('serialized Document');
   });
 
   it.each([
@@ -294,12 +338,36 @@ describe('protocol V1 with schema V3 documents', () => {
         return document;
       })(),
     ],
-  ])('rejects a schema V3 document with %s', (_label, document) => {
+  ])('rejects a schema V4 document with %s', (_label, document) => {
     expect(() => parseNodeInkDocument(JSON.stringify(document))).toThrow('serialized Document');
   });
 
   it.each([
     { type: 'create_rectangle', rectangle: rectangleElementFixture('rect-1') },
+    {
+      type: 'create_ellipse',
+      ellipse: closedShapeElementFixture('ellipse', 'ellipse-1'),
+    },
+    {
+      type: 'create_diamond',
+      diamond: closedShapeElementFixture('diamond', 'diamond-1'),
+    },
+    {
+      type: 'create_line',
+      line: lineShapeElementFixture('line', 'line-1'),
+    },
+    {
+      type: 'create_polyline',
+      polyline: lineShapeElementFixture('polyline', 'polyline-1', [
+        { x: 0, y: 20 },
+        { x: 10, y: 0 },
+        { x: 20, y: 20 },
+      ]),
+    },
+    {
+      type: 'create_arrow',
+      arrow: lineShapeElementFixture('arrow', 'arrow-1'),
+    },
     {
       type: 'create_stroke',
       stroke: {
@@ -322,6 +390,31 @@ describe('protocol V1 with schema V3 documents', () => {
       type: 'update_element_style',
       elementId: 'rect-1',
       patch: { kind: 'rect', stroke: '#0f172a' },
+    },
+    {
+      type: 'update_element_style',
+      elementId: 'ellipse-1',
+      patch: { kind: 'ellipse', fill: { kind: 'none' } },
+    },
+    {
+      type: 'update_element_style',
+      elementId: 'diamond-1',
+      patch: { kind: 'diamond', strokeWidth: 4 },
+    },
+    {
+      type: 'update_element_style',
+      elementId: 'line-1',
+      patch: { kind: 'line', stroke: '#2563eb' },
+    },
+    {
+      type: 'update_element_style',
+      elementId: 'polyline-1',
+      patch: { kind: 'polyline', strokeWidth: 4 },
+    },
+    {
+      type: 'update_element_style',
+      elementId: 'arrow-1',
+      patch: { kind: 'arrow', stroke: '#dc2626', strokeWidth: 4 },
     },
     { type: 'set_render_profile', renderProfile: { kind: 'clean', version: 1 } },
     { type: 'transform_elements', elementIds: ['rect-1'], transform: identity() },
@@ -1058,7 +1151,7 @@ describe('protocol V1 with schema V3 documents', () => {
     const success = {
       result: {
         sourceSchemaVersion: 0,
-        targetSchemaVersion: 3,
+        targetSchemaVersion: 4,
         migrated: true,
         document: createBlankDocument('doc-1'),
         canonicalPayload: '{}',
@@ -1071,7 +1164,7 @@ describe('protocol V1 with schema V3 documents', () => {
         stage: 'schema',
         code: 'unknown_schema',
         sourceSchemaVersion: 99,
-        targetSchemaVersion: 3,
+        targetSchemaVersion: 4,
         message: 'unsupported',
         recovery: 'try_next_snapshot_then_readonly_diagnostic',
       },
@@ -1244,7 +1337,7 @@ function textSelectionStyle() {
 
 function styledDocumentFixture() {
   return {
-    schemaVersion: 3 as const,
+    schemaVersion: 4 as const,
     documentId: 'doc-1',
     revision: 3,
     renderProfile: {
@@ -1264,7 +1357,7 @@ function styledDocumentFixture() {
 
 function groupedDocumentFixture() {
   return {
-    schemaVersion: 3 as const,
+    schemaVersion: 4 as const,
     documentId: 'doc-groups',
     revision: 1,
     renderProfile: { kind: 'clean' as const, version: 1 as const },
@@ -1299,6 +1392,39 @@ function rectangleElementFixture(id: string) {
     y: 24,
     width: 160,
     height: 96,
+  };
+}
+
+function closedShapeElementFixture(kind: 'ellipse' | 'diamond', id: string) {
+  return {
+    kind,
+    id,
+    transform: identity(),
+    x: 12,
+    y: 24,
+    width: 160,
+    height: 96,
+    fill: { kind: 'solid' as const, color: '#d1fae5' },
+    stroke: '#047857',
+    strokeWidth: 2,
+  };
+}
+
+function lineShapeElementFixture(
+  kind: 'line' | 'polyline' | 'arrow' | 'stroke',
+  id: string,
+  points = [
+    { x: 0, y: 0 },
+    { x: 10, y: 10 },
+  ],
+) {
+  return {
+    kind,
+    id,
+    transform: identity(),
+    points,
+    strokeWidth: 2,
+    stroke: '#0f172a',
   };
 }
 

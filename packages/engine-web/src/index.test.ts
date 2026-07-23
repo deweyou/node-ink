@@ -673,7 +673,7 @@ function migrationAttempt(): string {
   return JSON.stringify({
     result: {
       sourceSchemaVersion: 0,
-      targetSchemaVersion: 3,
+      targetSchemaVersion: 4,
       migrated: true,
       document: createBlankDocument('doc-1'),
       canonicalPayload: JSON.stringify(createBlankDocument('doc-1')),

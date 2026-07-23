@@ -47,6 +47,11 @@ export const NODEINK_DEFAULT_STROKE_STYLE = {
   strokeWidth: 3,
 } as const;
 
+export const NODEINK_DEFAULT_LINE_STYLE = {
+  stroke: '#0f172a',
+  strokeWidth: 2,
+} as const;
+
 export const NODEINK_DEFAULT_TEXT_STYLE = {
   color: '#0f172a',
   textAlign: 'start',

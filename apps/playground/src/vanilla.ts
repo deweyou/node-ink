@@ -50,6 +50,11 @@ rootElement.innerHTML = `
       <button type="button" data-action="set_tool_freehand" data-tool="freehand" title="Freehand tool (P)">Draw</button>
       <button type="button" data-action="set_tool_text" data-tool="text" title="Text tool (T)">Text</button>
       <button type="button" data-action="create_rectangle">Rectangle</button>
+      <button type="button" data-action="create_ellipse">Ellipse</button>
+      <button type="button" data-action="create_diamond">Diamond</button>
+      <button type="button" data-action="create_line">Line</button>
+      <button type="button" data-action="create_polyline">Polyline</button>
+      <button type="button" data-action="create_arrow">Arrow</button>
       <button type="button" data-action="move_active">Move</button>
       <button type="button" data-action="delete_selection" data-danger="true">Delete</button>
       <button type="button" data-action="undo">Undo</button>
@@ -189,6 +194,14 @@ rootElement.addEventListener('click', (event) => {
   const action = button.dataset.action;
   if (action === 'create_rectangle') {
     void controller.dispatch({ type: 'create_rectangle' });
+  } else if (
+    action === 'create_ellipse' ||
+    action === 'create_diamond' ||
+    action === 'create_line' ||
+    action === 'create_polyline' ||
+    action === 'create_arrow'
+  ) {
+    void controller.dispatch({ type: action });
   } else if (action === 'set_tool_select') {
     void controller.dispatch({ type: 'set_tool', tool: 'select' });
   } else if (action === 'set_tool_freehand') {
@@ -324,6 +337,11 @@ function renderSnapshot(
   setPressed(root, 'freehand', snapshot.activeTool === 'freehand');
   setPressed(root, 'text', snapshot.activeTool === 'text');
   setDisabled(root, 'create_rectangle', !isEditable);
+  setDisabled(root, 'create_ellipse', !isEditable);
+  setDisabled(root, 'create_diamond', !isEditable);
+  setDisabled(root, 'create_line', !isEditable);
+  setDisabled(root, 'create_polyline', !isEditable);
+  setDisabled(root, 'create_arrow', !isEditable);
   setDisabled(root, 'move_active', !isEditable || selectionCount === 0);
   setDisabled(root, 'delete_selection', !isEditable || selectionCount === 0);
   setDisabled(root, 'paste', !isEditable);
@@ -355,45 +373,45 @@ function renderStylePanel(panel: HTMLElement, style: SelectionStyleV1 | null): v
     panel.replaceChildren();
     return;
   }
-  const kindLabel =
-    style.kind === 'rect' ? 'Rectangle' : style.kind === 'stroke' ? 'Stroke' : 'Text';
-  const groups =
-    style.kind === 'rect'
-      ? [
+  const kindLabel = selectionStyleKindLabel(style.kind);
+  const isClosedShape =
+    style.kind === 'rect' || style.kind === 'ellipse' || style.kind === 'diamond';
+  const groups = isClosedShape
+    ? [
+        styleGroupMarkup(
+          'Fill',
+          NODEINK_FILL_PRESETS.map((preset) =>
+            swatchMarkup(
+              `Fill ${preset.label}`,
+              preset.value,
+              fillPresetMatches(style.fill, preset.value),
+              'fill',
+              preset.id,
+            ),
+          ).join(''),
+        ),
+        colorGroupMarkup('Stroke', style.stroke, 'stroke'),
+        widthGroupMarkup(style.strokeWidth),
+      ]
+    : style.kind !== 'text'
+      ? [colorGroupMarkup('Color', style.stroke, 'stroke'), widthGroupMarkup(style.strokeWidth)]
+      : [
+          colorGroupMarkup('Color', style.color, 'color'),
           styleGroupMarkup(
-            'Fill',
-            NODEINK_FILL_PRESETS.map((preset) =>
-              swatchMarkup(
-                `Fill ${preset.label}`,
-                preset.value,
-                fillPresetMatches(style.fill, preset.value),
-                'fill',
-                preset.id,
-              ),
+            'Size',
+            NODEINK_TEXT_SIZE_PRESETS.map(
+              (fontSize) =>
+                `<button type="button" data-action="update_selection_style" data-style-property="fontSize" data-style-value="${fontSize}" aria-pressed="${String(style.fontSize === fontSize)}">${fontSize}</button>`,
             ).join(''),
           ),
-          colorGroupMarkup('Stroke', style.stroke, 'stroke'),
-          widthGroupMarkup(style.strokeWidth),
-        ]
-      : style.kind === 'stroke'
-        ? [colorGroupMarkup('Color', style.stroke, 'stroke'), widthGroupMarkup(style.strokeWidth)]
-        : [
-            colorGroupMarkup('Color', style.color, 'color'),
-            styleGroupMarkup(
-              'Size',
-              NODEINK_TEXT_SIZE_PRESETS.map(
-                (fontSize) =>
-                  `<button type="button" data-action="update_selection_style" data-style-property="fontSize" data-style-value="${fontSize}" aria-pressed="${String(style.fontSize === fontSize)}">${fontSize}</button>`,
-              ).join(''),
-            ),
-            styleGroupMarkup(
-              'Align',
-              NODEINK_TEXT_ALIGN_PRESETS.map(
-                (preset) =>
-                  `<button type="button" data-action="update_selection_style" data-style-property="textAlign" data-style-value="${preset.value}" aria-pressed="${String(style.textAlign === preset.value)}">${preset.label}</button>`,
-              ).join(''),
-            ),
-          ];
+          styleGroupMarkup(
+            'Align',
+            NODEINK_TEXT_ALIGN_PRESETS.map(
+              (preset) =>
+                `<button type="button" data-action="update_selection_style" data-style-property="textAlign" data-style-value="${preset.value}" aria-pressed="${String(style.textAlign === preset.value)}">${preset.label}</button>`,
+            ).join(''),
+          ),
+        ];
   panel.innerHTML = `<h2 class="nodeink-style-title">Style <span>${kindLabel}</span></h2>${groups.join('')}`;
 }
 
@@ -450,18 +468,20 @@ function stylePatchFromButton(
   if (!property || !value) {
     return null;
   }
-  if (style.kind === 'rect' && property === 'fill') {
+  const isClosedShape =
+    style.kind === 'rect' || style.kind === 'ellipse' || style.kind === 'diamond';
+  if (isClosedShape && property === 'fill') {
     const fill = NODEINK_FILL_PRESETS.find((preset) => preset.id === value)?.value;
-    return fill ? { kind: 'rect', fill } : null;
+    return fill ? closedShapeStylePatch(style.kind, { fill }) : null;
   }
-  if ((style.kind === 'rect' || style.kind === 'stroke') && property === 'stroke') {
+  if (style.kind !== 'text' && property === 'stroke') {
     const stroke = NODEINK_COLOR_PRESETS.find((preset) => preset.id === value)?.value;
-    return stroke ? { kind: style.kind, stroke } : null;
+    return stroke ? lineOrClosedShapeStylePatch(style.kind, { stroke }) : null;
   }
-  if ((style.kind === 'rect' || style.kind === 'stroke') && property === 'strokeWidth') {
+  if (style.kind !== 'text' && property === 'strokeWidth') {
     const strokeWidth = Number(value);
     return NODEINK_STROKE_WIDTH_PRESETS.includes(strokeWidth as 1 | 2 | 4)
-      ? { kind: style.kind, strokeWidth }
+      ? lineOrClosedShapeStylePatch(style.kind, { strokeWidth })
       : null;
   }
   if (style.kind === 'text' && property === 'color') {
@@ -479,6 +499,37 @@ function stylePatchFromButton(
     return textAlign ? { kind: 'text', textAlign } : null;
   }
   return null;
+}
+
+type ClosedShapeStyleKind = 'rect' | 'ellipse' | 'diamond';
+type DrawableStyleKind = Exclude<SelectionStyleV1['kind'], 'text'>;
+
+function closedShapeStylePatch(
+  kind: ClosedShapeStyleKind,
+  patch: Omit<Extract<ElementStylePatchV1, { kind: ClosedShapeStyleKind }>, 'kind'>,
+): ElementStylePatchV1 {
+  return { kind, ...patch } as ElementStylePatchV1;
+}
+
+function lineOrClosedShapeStylePatch(
+  kind: DrawableStyleKind,
+  patch: { stroke?: string; strokeWidth?: number },
+): ElementStylePatchV1 {
+  return { kind, ...patch } as ElementStylePatchV1;
+}
+
+function selectionStyleKindLabel(kind: SelectionStyleV1['kind']): string {
+  const labels: Record<SelectionStyleV1['kind'], string> = {
+    rect: 'Rectangle',
+    ellipse: 'Ellipse',
+    diamond: 'Diamond',
+    line: 'Line',
+    polyline: 'Polyline',
+    arrow: 'Arrow',
+    stroke: 'Stroke',
+    text: 'Text',
+  };
+  return labels[kind];
 }
 
 function setPressed(root: HTMLElement, tool: string, pressed: boolean): void {

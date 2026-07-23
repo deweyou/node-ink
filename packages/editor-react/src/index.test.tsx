@@ -38,6 +38,11 @@ describe('NodeInkEditor', () => {
     expect(button(target, 'Draw').ariaPressed).toBe('false');
     expect(button(target, 'Text').ariaPressed).toBe('false');
     expect(button(target, 'Rectangle').disabled).toBe(false);
+    expect(button(target, 'Ellipse').disabled).toBe(false);
+    expect(button(target, 'Diamond').disabled).toBe(false);
+    expect(button(target, 'Line').disabled).toBe(false);
+    expect(button(target, 'Polyline').disabled).toBe(false);
+    expect(button(target, 'Arrow').disabled).toBe(false);
     expect(button(target, 'Move').disabled).toBe(true);
     expect(button(target, 'Delete').disabled).toBe(true);
     expect(target.querySelector('[aria-label="Rendering profile"]')).toBeNull();
@@ -60,6 +65,11 @@ describe('NodeInkEditor', () => {
       'Draw',
       'Text',
       'Rectangle',
+      'Ellipse',
+      'Diamond',
+      'Line',
+      'Polyline',
+      'Arrow',
       'Move',
       'Delete',
       'Undo',
@@ -76,6 +86,11 @@ describe('NodeInkEditor', () => {
       'set_tool',
       'set_tool',
       'create_rectangle',
+      'create_ellipse',
+      'create_diamond',
+      'create_line',
+      'create_polyline',
+      'create_arrow',
       'move_active',
       'delete_selection',
       'undo',
@@ -227,6 +242,43 @@ describe('NodeInkEditor', () => {
         patch: { kind: 'rect', strokeWidth: 4 },
       },
     ]);
+
+    await act(async () => {
+      controller.setSnapshot({
+        ...controller.getSnapshot(),
+        activeElementId: 'ellipse-1',
+        selectionStyle: {
+          kind: 'ellipse',
+          fill: { kind: 'solid', color: '#d1fae5' },
+          stroke: '#047857',
+          strokeWidth: 2,
+        },
+      });
+    });
+    expect(target.querySelector('.nodeink-style-title')?.textContent).toContain('Ellipse');
+    await act(async () => labelledButton(target, 'Fill Blue').click());
+    expect(controller.actions.at(-1)).toEqual({
+      type: 'update_selection_style',
+      patch: { kind: 'ellipse', fill: { kind: 'solid', color: '#dbeafe' } },
+    });
+
+    await act(async () => {
+      controller.setSnapshot({
+        ...controller.getSnapshot(),
+        activeElementId: 'arrow-1',
+        selectionStyle: {
+          kind: 'arrow',
+          stroke: '#0f172a',
+          strokeWidth: 2,
+        },
+      });
+    });
+    expect(target.querySelector('.nodeink-style-title')?.textContent).toContain('Arrow');
+    await act(async () => labelledButton(target, 'Color Blue').click());
+    expect(controller.actions.at(-1)).toEqual({
+      type: 'update_selection_style',
+      patch: { kind: 'arrow', stroke: '#2563eb' },
+    });
 
     await act(async () => {
       controller.setSnapshot({

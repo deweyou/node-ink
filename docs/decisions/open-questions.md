@@ -225,6 +225,15 @@
 - Clipboard 是 Rust 生成/校验、TS 仅暂存的内部版本化 opaque payload；Copy 无 revision，Cut/Paste 各一个 Undo entry，Paste 全量 remap ID 并按 24px screen-space 级联偏移。
 - 本期只做六种 Align，不做 Distribute。Snap 只对未选元素 edges/centers，阈值 6px screen-space，`Cmd/Ctrl` 临时关闭；tie-break 为最小修正量、绘制顺序、稳定 ID，Guide 只在实际 snap 时展示。
 
+### D-32 Phase 1B 基础图形与 Schema V4
+
+- 基础图形新增 `Ellipse`、`Diamond`、`Line`、`Polyline` 与 `Arrow` 五种持久语义 kind；它们不是 Renderer 根据 path 猜出的展示别名。普通 `Arrow` 是自由几何，不含节点绑定、端口或自动路由，也不替代未来的 `Connector`。
+- 本期延续现有 Rectangle 的轻量创建模型：点击工具栏立即在默认位置创建并进入 Select，而不是引入一套只对部分图形生效的拖拽创建状态机。创建后统一复用选择、移动、缩放、旋转、Group、层级、剪贴板、对齐、吸附与 Undo/Redo。
+- `Ellipse` 与 `Diamond` 使用 fill/stroke/strokeWidth；`Line`、`Polyline` 与 `Arrow` 只使用 stroke/strokeWidth。Line 固定两个点，Polyline 至少三个点，Arrow 至少两个点，连续重复点在 Rust Command 和协议边界被拒绝。
+- Rust Document/Command/Transaction 持有几何与样式真相，并把五种图形确定性解析为通用 `ScenePathV1`。Renderer 不复制椭圆、菱形或箭头算法；React、Vue 与 Vanilla 只通过同一个 framework-neutral Controller 触发显式创建和样式 Command。
+- Schema V4 以 copy-on-write 方式接收 V3 文档，迁移只提升 schemaVersion 与 revision，不改写既有元素语义，也不修改源 payload。协议版本仍为内部 V1；当前 private package 不借此承诺公共 SDK 稳定性。
+- 当前产品仍以 Clean 为唯一验收视觉。基础图形不会套用已退役的 Sketch v1 随机几何；统一风格系统与 Sketch v2 留到核心编辑能力成熟后整体设计。
+
 ## 22. 需要产品负责人决策的问题
 
 以下问题不阻碍继续评审文档，但会阻碍对应功能进入实现。

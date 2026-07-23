@@ -159,6 +159,11 @@ export const NodeInkEditor = defineComponent({
             },
             'Rectangle',
           ),
+          shapeButton('Ellipse', 'create_ellipse', isEditable, dispatch),
+          shapeButton('Diamond', 'create_diamond', isEditable, dispatch),
+          shapeButton('Line', 'create_line', isEditable, dispatch),
+          shapeButton('Polyline', 'create_polyline', isEditable, dispatch),
+          shapeButton('Arrow', 'create_arrow', isEditable, dispatch),
           h(
             'button',
             {
@@ -368,69 +373,134 @@ function renderSelectionStylePanel(
   style: SelectionStyleV1,
   dispatch: (patch: ElementStylePatchV1) => void,
 ) {
-  const groups =
-    style.kind === 'rect'
+  const isClosedShape =
+    style.kind === 'rect' || style.kind === 'ellipse' || style.kind === 'diamond';
+  const groups = isClosedShape
+    ? [
+        styleGroup(
+          'Fill',
+          NODEINK_FILL_PRESETS.map((preset) =>
+            swatchButton(
+              `Fill ${preset.label}`,
+              preset.value.kind === 'solid' ? preset.value.color : null,
+              fillPresetMatches(style.fill, preset.value),
+              () => dispatch(closedShapeStylePatch(style.kind, { fill: preset.value })),
+            ),
+          ),
+        ),
+        colorGroup('Stroke', style.stroke, (stroke) =>
+          dispatch(closedShapeStylePatch(style.kind, { stroke })),
+        ),
+        widthGroup(style.strokeWidth, (strokeWidth) =>
+          dispatch(closedShapeStylePatch(style.kind, { strokeWidth })),
+        ),
+      ]
+    : style.kind !== 'text'
       ? [
+          colorGroup('Color', style.stroke, (stroke) =>
+            dispatch(lineStylePatch(style.kind, { stroke })),
+          ),
+          widthGroup(style.strokeWidth, (strokeWidth) =>
+            dispatch(lineStylePatch(style.kind, { strokeWidth })),
+          ),
+        ]
+      : [
+          colorGroup('Color', style.color, (color) => dispatch({ kind: 'text', color })),
           styleGroup(
-            'Fill',
-            NODEINK_FILL_PRESETS.map((preset) =>
-              swatchButton(
-                `Fill ${preset.label}`,
-                preset.value.kind === 'solid' ? preset.value.color : null,
-                fillPresetMatches(style.fill, preset.value),
-                () => dispatch({ kind: 'rect', fill: preset.value }),
+            'Size',
+            NODEINK_TEXT_SIZE_PRESETS.map((fontSize) =>
+              h(
+                'button',
+                {
+                  type: 'button',
+                  'aria-pressed': style.fontSize === fontSize,
+                  onClick: () => dispatch({ kind: 'text', fontSize }),
+                },
+                String(fontSize),
               ),
             ),
           ),
-          colorGroup('Stroke', style.stroke, (stroke) => dispatch({ kind: 'rect', stroke })),
-          widthGroup(style.strokeWidth, (strokeWidth) => dispatch({ kind: 'rect', strokeWidth })),
-        ]
-      : style.kind === 'stroke'
-        ? [
-            colorGroup('Color', style.stroke, (stroke) => dispatch({ kind: 'stroke', stroke })),
-            widthGroup(style.strokeWidth, (strokeWidth) =>
-              dispatch({ kind: 'stroke', strokeWidth }),
-            ),
-          ]
-        : [
-            colorGroup('Color', style.color, (color) => dispatch({ kind: 'text', color })),
-            styleGroup(
-              'Size',
-              NODEINK_TEXT_SIZE_PRESETS.map((fontSize) =>
-                h(
-                  'button',
-                  {
-                    type: 'button',
-                    'aria-pressed': style.fontSize === fontSize,
-                    onClick: () => dispatch({ kind: 'text', fontSize }),
-                  },
-                  String(fontSize),
-                ),
+          styleGroup(
+            'Align',
+            NODEINK_TEXT_ALIGN_PRESETS.map((preset) =>
+              h(
+                'button',
+                {
+                  type: 'button',
+                  'aria-pressed': style.textAlign === preset.value,
+                  onClick: () => dispatch({ kind: 'text', textAlign: preset.value }),
+                },
+                preset.label,
               ),
             ),
-            styleGroup(
-              'Align',
-              NODEINK_TEXT_ALIGN_PRESETS.map((preset) =>
-                h(
-                  'button',
-                  {
-                    type: 'button',
-                    'aria-pressed': style.textAlign === preset.value,
-                    onClick: () => dispatch({ kind: 'text', textAlign: preset.value }),
-                  },
-                  preset.label,
-                ),
-              ),
-            ),
-          ];
+          ),
+        ];
 
   return h('aside', { class: 'nodeink-style-panel', 'aria-label': 'Selection style' }, [
     h('h2', { class: 'nodeink-style-title' }, [
       'Style',
-      h('span', style.kind === 'rect' ? 'Rectangle' : style.kind === 'stroke' ? 'Stroke' : 'Text'),
+      h('span', selectionStyleKindLabel(style.kind)),
     ]),
     ...groups,
   ]);
+}
+
+type ClosedShapeStyleKind = 'rect' | 'ellipse' | 'diamond';
+type LineStyleKind = 'line' | 'polyline' | 'arrow' | 'stroke';
+
+function closedShapeStylePatch(
+  kind: ClosedShapeStyleKind,
+  patch: Omit<Extract<ElementStylePatchV1, { kind: ClosedShapeStyleKind }>, 'kind'>,
+): ElementStylePatchV1 {
+  return { kind, ...patch } as ElementStylePatchV1;
+}
+
+function lineStylePatch(
+  kind: LineStyleKind,
+  patch: Omit<Extract<ElementStylePatchV1, { kind: LineStyleKind }>, 'kind'>,
+): ElementStylePatchV1 {
+  return { kind, ...patch } as ElementStylePatchV1;
+}
+
+function selectionStyleKindLabel(kind: SelectionStyleV1['kind']): string {
+  const labels: Record<SelectionStyleV1['kind'], string> = {
+    rect: 'Rectangle',
+    ellipse: 'Ellipse',
+    diamond: 'Diamond',
+    line: 'Line',
+    polyline: 'Polyline',
+    arrow: 'Arrow',
+    stroke: 'Stroke',
+    text: 'Text',
+  };
+  return labels[kind];
+}
+
+function shapeButton(
+  label: string,
+  action: Extract<
+    EditorActionV1,
+    {
+      type:
+        | 'create_ellipse'
+        | 'create_diamond'
+        | 'create_line'
+        | 'create_polyline'
+        | 'create_arrow';
+    }
+  >['type'],
+  isEditable: boolean,
+  dispatch: (action: EditorActionV1) => void,
+) {
+  return h(
+    'button',
+    {
+      type: 'button',
+      disabled: !isEditable,
+      onClick: () => dispatch({ type: action }),
+    },
+    label,
+  );
 }
 
 function colorGroup(label: string, value: string, onChange: (color: string) => void) {
