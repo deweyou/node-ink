@@ -138,7 +138,7 @@ describe('openLocalDocumentV1', () => {
       recovery: 'migrated_head',
       persistedRevision: 5,
       document: {
-        schemaVersion: 5,
+        schemaVersion: 6,
         revision: 5,
         renderProfile: { kind: 'clean', version: 1 },
         elements: {
@@ -157,7 +157,7 @@ describe('openLocalDocumentV1', () => {
         documentId: 'doc-1',
         revision: 5,
         expectedPreviousRevision: 4,
-        schemaVersion: 5,
+        schemaVersion: 6,
         engineAlgorithmVersion: 'nodeink-scene-v2',
       }),
     );
@@ -403,7 +403,8 @@ function migrationPort() {
         sourceSchemaVersion !== 2 &&
         sourceSchemaVersion !== 3 &&
         sourceSchemaVersion !== 4 &&
-        sourceSchemaVersion !== 5
+        sourceSchemaVersion !== 5 &&
+        sourceSchemaVersion !== 6
       ) {
         return {
           result: null,
@@ -411,20 +412,20 @@ function migrationPort() {
             stage: 'schema',
             code: 'unknown_schema',
             sourceSchemaVersion,
-            targetSchemaVersion: 5,
+            targetSchemaVersion: 6,
             message: 'unsupported schema',
             recovery: 'try_next_snapshot_then_readonly_diagnostic',
           },
         };
       }
-      const migrated = sourceSchemaVersion !== 5;
+      const migrated = sourceSchemaVersion !== 6;
       const document: NodeInkDocumentV1 = migrated
         ? migrateLegacyDocument(parsed as LegacyDocumentFixture)
         : (parsed as NodeInkDocumentV1);
       return {
         result: {
           sourceSchemaVersion,
-          targetSchemaVersion: 5,
+          targetSchemaVersion: 6,
           migrated,
           document,
           canonicalPayload: JSON.stringify(document),
@@ -491,7 +492,7 @@ type LegacyElementFixture =
 
 function migrateLegacyDocument(legacy: LegacyDocumentFixture): NodeInkDocumentV1 {
   return {
-    schemaVersion: 5,
+    schemaVersion: 6,
     documentId: legacy.documentId,
     revision: legacy.revision + 1,
     renderProfile: { kind: 'clean', version: 1 },

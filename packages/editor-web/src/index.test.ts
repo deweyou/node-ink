@@ -2214,10 +2214,10 @@ class StubEngine implements EnginePortV1 {
     return {
       result: {
         sourceSchemaVersion: 1,
-        targetSchemaVersion: 5,
+        targetSchemaVersion: 6,
         migrated: true,
         document: {
-          schemaVersion: 5 as const,
+          schemaVersion: 6 as const,
           documentId: 'doc-1',
           revision: 0,
           renderProfile: { kind: 'clean' as const, version: 1 as const },
@@ -2255,7 +2255,7 @@ class StubEngine implements EnginePortV1 {
       ...(text ? { [text.id]: text } : {}),
     };
     const document = {
-      schemaVersion: 5 as const,
+      schemaVersion: 6 as const,
       documentId: 'doc-1',
       revision: this.#revision,
       renderProfile: this.#renderProfile,

@@ -39,7 +39,8 @@ pub use operation::{
 pub use pointer::{NormalizedPointerEventV1, PointerModifiersV1, PointerPhaseV1};
 use pointer::{
     PointerMachine, PointerPreview, PointerSelectionChange, PointerTransformKind,
-    PointerTransformPreview, PointerTransition, TargetedPointerEvent, TargetedVertexHandle,
+    PointerTransformPreview, PointerTransition, TargetedCurveHandle, TargetedPointerEvent,
+    TargetedVertexHandle,
 };
 pub use scene_patch::{ScenePatchV1, benchmark_scene_patch, benchmark_scene_snapshot, diff_scene};
 pub use selection::{
@@ -51,8 +52,9 @@ use selection::{HitTestMode, SelectionModel, hit_test_document, hit_test_documen
 use selection_geometry::VisualAabb;
 use shape_creation::{ShapeCreationMachine, ShapeCreationTransition};
 use shape_geometry::{
-    BoxShapeKind, boxed_shape_path_data, line_path_data, path_visual_bounds,
-    resolved_arrow_path_data, resolved_arrow_visual_bounds,
+    BoxShapeKind, boxed_shape_path_data, line_path_data, line_path_data_with_curve,
+    path_visual_bounds, path_visual_bounds_with_curve, resolved_arrow_path_data,
+    resolved_arrow_visual_bounds,
 };
 pub use sketch::{ENGINE_ALGORITHM_VERSION, RenderProfileV1, SketchFillStyleV1};
 use sketch::{sketch_rectangle, sketch_stroke};
@@ -77,7 +79,7 @@ pub use transform::Affine2D;
 use transform::Point2D;
 
 pub const PROTOCOL_VERSION: u32 = 1;
-pub const SCHEMA_VERSION: u32 = 5;
+pub const SCHEMA_VERSION: u32 = 6;
 
 pub type DocumentId = String;
 pub type ElementId = String;
@@ -227,6 +229,7 @@ pub struct LineElementV1 {
     pub id: ElementId,
     pub transform: Affine2D,
     pub points: Vec<Vec2>,
+    pub curve: Option<PathCurveV1>,
     pub stroke: String,
     pub size: ElementSizeV1,
 }
@@ -247,6 +250,7 @@ pub struct ArrowElementV1 {
     pub id: ElementId,
     pub transform: Affine2D,
     pub points: Vec<Vec2>,
+    pub curve: Option<PathCurveV1>,
     pub stroke: String,
     pub size: ElementSizeV1,
 }
@@ -330,6 +334,24 @@ pub struct Vec2 {
     pub y: f64,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(
+    tag = "kind",
+    rename_all = "snake_case",
+    rename_all_fields = "camelCase"
+)]
+pub enum PathCurveV1 {
+    Quadratic { control: Vec2 },
+}
+
+impl PathCurveV1 {
+    pub(crate) fn control(self) -> Vec2 {
+        match self {
+            Self::Quadratic { control } => control,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CommandEnvelopeV1 {
@@ -386,6 +408,10 @@ pub enum CommandV1 {
     UpdatePathPoints {
         element_id: ElementId,
         points: Vec<Vec2>,
+    },
+    UpdatePathCurve {
+        element_id: ElementId,
+        curve: Option<PathCurveV1>,
     },
     UpdateElementStyle {
         element_id: ElementId,
@@ -858,6 +884,7 @@ impl Engine {
             &self.document,
             None,
             None,
+            None,
             &self.text_metrics,
             self.camera.zoom,
         );
@@ -870,14 +897,26 @@ impl Engine {
                     .flatten();
                 let target_handle = match &hit_handle {
                     Some(HitSelectionHandle::Transform(handle)) => Some(*handle),
-                    Some(HitSelectionHandle::Vertex { .. }) | None => None,
+                    Some(HitSelectionHandle::Vertex { .. })
+                    | Some(HitSelectionHandle::Curve { .. })
+                    | None => None,
                 };
                 let target_vertex = match &hit_handle {
                     Some(HitSelectionHandle::Vertex {
                         element_id,
                         vertex_index,
                     }) => targeted_vertex_handle(&self.document, element_id, *vertex_index),
-                    Some(HitSelectionHandle::Transform(_)) | None => None,
+                    Some(HitSelectionHandle::Transform(_))
+                    | Some(HitSelectionHandle::Curve { .. })
+                    | None => None,
+                };
+                let target_curve = match &hit_handle {
+                    Some(HitSelectionHandle::Curve { element_id }) => {
+                        targeted_curve_handle(&self.document, element_id)
+                    }
+                    Some(HitSelectionHandle::Transform(_))
+                    | Some(HitSelectionHandle::Vertex { .. })
+                    | None => None,
                 };
                 let target_element_id = (is_down && hit_handle.is_none())
                     .then(|| {
@@ -900,6 +939,7 @@ impl Engine {
                     selected_element_ids: selection_state.selected_element_ids.clone(),
                     target_handle,
                     target_vertex,
+                    target_curve,
                     oriented_bounds: selection_state.oriented_bounds,
                 }
             })
@@ -953,6 +993,14 @@ impl Engine {
                 self.scene_revision += 1;
                 (
                     self.update_with_preview(Some(&PointerPreview::Vertex(preview))),
+                    false,
+                )
+            }
+            PointerTransition::Preview(PointerPreview::Curve(preview)) => {
+                self.selection.clear_guides();
+                self.scene_revision += 1;
+                (
+                    self.update_with_preview(Some(&PointerPreview::Curve(preview))),
                     false,
                 )
             }
@@ -1040,6 +1088,29 @@ impl Engine {
                         true,
                     )
                 }
+            }
+            PointerTransition::CurveCommit {
+                preview,
+                expected_revision,
+            } => {
+                self.selection.clear_guides();
+                let envelope = CommandEnvelopeV1 {
+                    protocol_version: PROTOCOL_VERSION,
+                    command_id,
+                    document_id: self.document.document_id.clone(),
+                    expected_revision,
+                    command: CommandV1::UpdatePathCurve {
+                        element_id: preview.element_id,
+                        curve: preview.curve,
+                    },
+                };
+                (
+                    self.execute_command_without_pointer_reset(
+                        envelope,
+                        SelectionAfterCommand::Preserve,
+                    )?,
+                    true,
+                )
             }
         };
 
@@ -1489,6 +1560,7 @@ impl Engine {
             &self.document,
             None,
             None,
+            None,
             &self.text_metrics,
             self.camera.zoom,
         );
@@ -1542,6 +1614,7 @@ impl Engine {
             .set_vertex(&self.document, element_id, next_vertex_index)?;
         update.selection = self.selection.snapshot(
             &self.document,
+            None,
             None,
             None,
             &self.text_metrics,
@@ -1733,7 +1806,9 @@ impl Engine {
             PointerPreview::Transform(preview) => {
                 Some((preview.element_ids.as_slice(), preview.transform))
             }
-            PointerPreview::Vertex(_) | PointerPreview::Marquee { .. } => None,
+            PointerPreview::Vertex(_)
+            | PointerPreview::Curve(_)
+            | PointerPreview::Marquee { .. } => None,
         });
         let vertex_preview = pointer_preview.and_then(|preview| match preview {
             PointerPreview::Vertex(preview) => Some((
@@ -1741,7 +1816,15 @@ impl Engine {
                 preview.vertex_index,
                 preview.points.as_slice(),
             )),
-            PointerPreview::Transform(_) | PointerPreview::Marquee { .. } => None,
+            PointerPreview::Transform(_)
+            | PointerPreview::Curve(_)
+            | PointerPreview::Marquee { .. } => None,
+        });
+        let curve_preview = pointer_preview.and_then(|preview| match preview {
+            PointerPreview::Curve(preview) => Some((preview.element_id.as_str(), preview.curve)),
+            PointerPreview::Transform(_)
+            | PointerPreview::Vertex(_)
+            | PointerPreview::Marquee { .. } => None,
         });
         EngineUpdateV1 {
             operation,
@@ -1762,6 +1845,7 @@ impl Engine {
                 &self.document,
                 transform_preview,
                 vertex_preview,
+                curve_preview,
                 &self.text_metrics,
                 self.camera.zoom,
             ),
@@ -1844,7 +1928,9 @@ fn selection_after_command(
         CommandV1::UpdateRectangle { element_id, .. } => {
             SelectionAfterCommand::Set(vec![element_id.clone()], Some(element_id.clone()))
         }
-        CommandV1::UpdatePathPoints { .. } => SelectionAfterCommand::Preserve,
+        CommandV1::UpdatePathPoints { .. } | CommandV1::UpdatePathCurve { .. } => {
+            SelectionAfterCommand::Preserve
+        }
         CommandV1::UpdateElementStyle { element_id, .. } => {
             SelectionAfterCommand::Set(vec![element_id.clone()], Some(element_id.clone()))
         }
@@ -1944,6 +2030,7 @@ fn apply_command(
         }
         CommandV1::CreateLine { line } => {
             validate_line_shape(&line.id, &line.points, &line.stroke, 2, 2)?;
+            validate_path_curve(&line.id, &line.points, line.curve)?;
             insert_element(document, ElementRecordV1::Line(line))
         }
         CommandV1::CreatePolyline { polyline } => {
@@ -1958,6 +2045,7 @@ fn apply_command(
         }
         CommandV1::CreateArrow { arrow } => {
             validate_line_shape(&arrow.id, &arrow.points, &arrow.stroke, 2, usize::MAX)?;
+            validate_path_curve(&arrow.id, &arrow.points, arrow.curve)?;
             insert_element(document, ElementRecordV1::Arrow(arrow))
         }
         CommandV1::MoveElements { element_ids, delta } => {
@@ -2055,6 +2143,7 @@ fn apply_command(
             let did_change = match element {
                 ElementRecordV1::Line(line) => {
                     validate_line_shape(&line.id, &points, &line.stroke, 2, 2)?;
+                    validate_path_curve(&line.id, &points, line.curve)?;
                     if line.points == points {
                         false
                     } else {
@@ -2073,10 +2162,44 @@ fn apply_command(
                 }
                 ElementRecordV1::Arrow(arrow) => {
                     validate_line_shape(&arrow.id, &points, &arrow.stroke, 2, usize::MAX)?;
+                    validate_path_curve(&arrow.id, &points, arrow.curve)?;
                     if arrow.points == points {
                         false
                     } else {
                         arrow.points = points;
+                        true
+                    }
+                }
+                _ => return Err(EngineErrorV1::ElementNotPath { element_id }),
+            };
+            Ok(if did_change {
+                CommandEffect::changed(vec![element_id])
+            } else {
+                CommandEffect::unchanged()
+            })
+        }
+        CommandV1::UpdatePathCurve { element_id, curve } => {
+            let element = document.elements.get_mut(&element_id).ok_or_else(|| {
+                EngineErrorV1::ElementNotFound {
+                    element_id: element_id.clone(),
+                }
+            })?;
+            let did_change = match element {
+                ElementRecordV1::Line(line) => {
+                    validate_path_curve(&line.id, &line.points, curve)?;
+                    if line.curve == curve {
+                        false
+                    } else {
+                        line.curve = curve;
+                        true
+                    }
+                }
+                ElementRecordV1::Arrow(arrow) => {
+                    validate_path_curve(&arrow.id, &arrow.points, curve)?;
+                    if arrow.curve == curve {
+                        false
+                    } else {
+                        arrow.curve = curve;
                         true
                     }
                 }
@@ -2855,7 +2978,8 @@ fn validate_document(document: &NodeInkDocumentV1) -> Result<(), EngineErrorV1> 
                 validate_closed_shape(ClosedShapeValidation::diamond(diamond))?
             }
             ElementRecordV1::Line(line) => {
-                validate_line_shape(&line.id, &line.points, &line.stroke, 2, 2)?
+                validate_line_shape(&line.id, &line.points, &line.stroke, 2, 2)?;
+                validate_path_curve(&line.id, &line.points, line.curve)?;
             }
             ElementRecordV1::Polyline(polyline) => validate_line_shape(
                 &polyline.id,
@@ -2865,7 +2989,8 @@ fn validate_document(document: &NodeInkDocumentV1) -> Result<(), EngineErrorV1> 
                 usize::MAX,
             )?,
             ElementRecordV1::Arrow(arrow) => {
-                validate_line_shape(&arrow.id, &arrow.points, &arrow.stroke, 2, usize::MAX)?
+                validate_line_shape(&arrow.id, &arrow.points, &arrow.stroke, 2, usize::MAX)?;
+                validate_path_curve(&arrow.id, &arrow.points, arrow.curve)?;
             }
             ElementRecordV1::Stroke(stroke) => validate_stroke(stroke)?,
             ElementRecordV1::Text(text) => validate_text(text)?,
@@ -2949,14 +3074,17 @@ fn element_local_visual_bounds(
             diamond.size.stroke_width(),
         ),
         ElementRecordV1::Line(line) => {
-            path_visual_bounds(&line.points, line.size.stroke_width(), None)
+            path_visual_bounds_with_curve(&line.points, line.curve, line.size.stroke_width(), None)
         }
         ElementRecordV1::Polyline(polyline) => {
             path_visual_bounds(&polyline.points, polyline.size.stroke_width(), None)
         }
-        ElementRecordV1::Arrow(arrow) => {
-            path_visual_bounds(&arrow.points, arrow.size.stroke_width(), Some(arrow.size))
-        }
+        ElementRecordV1::Arrow(arrow) => path_visual_bounds_with_curve(
+            &arrow.points,
+            arrow.curve,
+            arrow.size.stroke_width(),
+            Some(arrow.size),
+        ),
         ElementRecordV1::Stroke(stroke) => {
             stroke_visual_bounds(&stroke.points, stroke.size.stroke_width())
         }
@@ -2990,6 +3118,7 @@ fn element_world_bounds(
             .reduce(union_visual_bounds),
         ElementRecordV1::Arrow(arrow) => resolved_arrow_visual_bounds(
             &arrow.points,
+            arrow.curve,
             arrow.size,
             *world_transforms.get(element_id)?,
         ),
@@ -3164,6 +3293,26 @@ fn validate_line_shape(
     Ok(())
 }
 
+fn validate_path_curve(
+    element_id: &str,
+    points: &[Vec2],
+    curve: Option<PathCurveV1>,
+) -> Result<(), EngineErrorV1> {
+    let is_valid = match curve {
+        None => true,
+        Some(curve) => {
+            let control = curve.control();
+            points.len() == 2 && control.x.is_finite() && control.y.is_finite()
+        }
+    };
+    if !is_valid {
+        return Err(EngineErrorV1::InvalidLine {
+            element_id: element_id.to_string(),
+        });
+    }
+    Ok(())
+}
+
 fn insert_element(
     document: &mut NodeInkDocumentV1,
     element: ElementRecordV1,
@@ -3262,6 +3411,9 @@ enum HitSelectionHandle {
         element_id: ElementId,
         vertex_index: usize,
     },
+    Curve {
+        element_id: ElementId,
+    },
 }
 
 fn hit_selection_handle(
@@ -3283,10 +3435,40 @@ fn hit_selection_handle(
             element_id: selection.primary_element_id.clone()?,
             vertex_index: handle.vertex_index?,
         }),
+        SelectionHandleTypeV1::Curve => Some(HitSelectionHandle::Curve {
+            element_id: selection.primary_element_id.clone()?,
+        }),
         SelectionHandleTypeV1::Resize | SelectionHandleTypeV1::Rotate => {
             Some(HitSelectionHandle::Transform(handle.id))
         }
     }
+}
+
+fn targeted_curve_handle(
+    document: &NodeInkDocumentV1,
+    element_id: &str,
+) -> Option<TargetedCurveHandle> {
+    let element = document.elements.get(element_id)?;
+    let (points, curve) = match element {
+        ElementRecordV1::Line(line) => (&line.points, line.curve),
+        ElementRecordV1::Arrow(arrow) => (&arrow.points, arrow.curve),
+        _ => return None,
+    };
+    if points.len() != 2 {
+        return None;
+    }
+    let world_to_local = resolved_world_transforms(document, None)
+        .ok()?
+        .get(element_id)
+        .copied()?
+        .inverse()
+        .ok()?;
+    Some(TargetedCurveHandle {
+        element_id: element_id.to_string(),
+        points: points.clone(),
+        curve,
+        world_to_local,
+    })
 }
 
 fn targeted_vertex_handle(
@@ -3559,12 +3741,13 @@ fn resolve_scene(
             }
             ElementRecordV1::Line(line) => {
                 let points = preview_path_points(pointer_preview, &line.id).unwrap_or(&line.points);
+                let curve = preview_path_curve(pointer_preview, &line.id, line.curve);
                 insert_line_scene_node(
                     &mut root_node_ids,
                     &mut nodes,
                     &line.id,
                     world_transform,
-                    line_path_data(points),
+                    line_path_data_with_curve(points, curve),
                     &line.stroke,
                     line.size.stroke_width(),
                 );
@@ -3585,12 +3768,13 @@ fn resolve_scene(
             ElementRecordV1::Arrow(arrow) => {
                 let points =
                     preview_path_points(pointer_preview, &arrow.id).unwrap_or(&arrow.points);
+                let curve = preview_path_curve(pointer_preview, &arrow.id, arrow.curve);
                 insert_line_scene_node(
                     &mut root_node_ids,
                     &mut nodes,
                     &arrow.id,
                     Affine2D::IDENTITY,
-                    resolved_arrow_path_data(points, arrow.size, world_transform),
+                    resolved_arrow_path_data(points, curve, arrow.size, world_transform),
                     &arrow.stroke,
                     arrow.size.stroke_width(),
                 );
@@ -3656,6 +3840,21 @@ fn preview_path_points<'a>(
         return None;
     };
     (preview.element_id == element_id).then_some(preview.points.as_slice())
+}
+
+fn preview_path_curve(
+    pointer_preview: Option<&PointerPreview>,
+    element_id: &str,
+    current_curve: Option<PathCurveV1>,
+) -> Option<PathCurveV1> {
+    let Some(PointerPreview::Curve(preview)) = pointer_preview else {
+        return current_curve;
+    };
+    if preview.element_id == element_id {
+        preview.curve
+    } else {
+        current_curve
+    }
 }
 
 fn insert_shape_creation_scene_node(
@@ -3724,7 +3923,7 @@ fn insert_shape_creation_scene_node(
             nodes,
             &line.id,
             line.transform,
-            line_path_data(&line.points),
+            line_path_data_with_curve(&line.points, line.curve),
             &line.stroke,
             line.size.stroke_width(),
         ),
@@ -3742,7 +3941,7 @@ fn insert_shape_creation_scene_node(
             nodes,
             &arrow.id,
             Affine2D::IDENTITY,
-            resolved_arrow_path_data(&arrow.points, arrow.size, arrow.transform),
+            resolved_arrow_path_data(&arrow.points, arrow.curve, arrow.size, arrow.transform),
             &arrow.stroke,
             arrow.size.stroke_width(),
         ),
@@ -4117,6 +4316,7 @@ mod tests {
                     y: 136.0,
                 },
             ],
+            curve: None,
             stroke: DEFAULT_INK_COLOR.to_string(),
             size: DEFAULT_ELEMENT_SIZE,
         }
@@ -4153,6 +4353,7 @@ mod tests {
                     y: 40.0,
                 },
             ],
+            curve: None,
             stroke: DEFAULT_INK_COLOR.to_string(),
             size: DEFAULT_ELEMENT_SIZE,
         }
@@ -4663,13 +4864,19 @@ mod tests {
         let selected = engine
             .set_selection(vec!["line-1".to_string()], Some("line-1".to_string()))
             .unwrap();
-        assert_eq!(selected.selection.handles.len(), 2);
-        assert!(
+        assert_eq!(selected.selection.handles.len(), 3);
+        assert_eq!(
             selected
                 .selection
                 .handles
                 .iter()
-                .all(|handle| handle.kind == SelectionHandleTypeV1::Vertex)
+                .map(|handle| handle.kind)
+                .collect::<Vec<_>>(),
+            [
+                SelectionHandleTypeV1::Vertex,
+                SelectionHandleTypeV1::Vertex,
+                SelectionHandleTypeV1::Curve,
+            ]
         );
 
         engine
@@ -4719,6 +4926,92 @@ mod tests {
         assert_eq!(
             editable_path_points(engine.document().elements.get("line-1").unwrap()).unwrap()[0],
             Vec2 { x: 40.0, y: 80.0 }
+        );
+    }
+
+    #[test]
+    fn line_curve_handle_previews_and_commits_one_undoable_quadratic_curve() {
+        let line = line("line-1", 0.0);
+        let mut document = NodeInkDocumentV1::blank("curve-line");
+        document.root_order.push(line.id.clone());
+        document
+            .elements
+            .insert(line.id.clone(), ElementRecordV1::Line(line));
+        let mut engine = Engine::open(document).unwrap();
+        let selected = engine
+            .set_selection(vec!["line-1".to_string()], Some("line-1".to_string()))
+            .unwrap();
+        let curve_handle = selected
+            .selection
+            .handles
+            .iter()
+            .find(|handle| handle.kind == SelectionHandleTypeV1::Curve)
+            .expect("two-point line exposes a curve handle");
+        assert_eq!(curve_handle.position, Vec2 { x: 80.0, y: 88.0 });
+
+        engine
+            .handle_pointer_events(
+                "curve-down".to_string(),
+                vec![pointer_event_at(PointerPhaseV1::Down, 1, 80.0, 88.0)],
+            )
+            .unwrap();
+        let preview = engine
+            .handle_pointer_events(
+                "curve-move".to_string(),
+                vec![pointer_event_at(PointerPhaseV1::Move, 2, 80.0, 40.0)],
+            )
+            .unwrap();
+        assert!(!preview.did_commit);
+        assert_eq!(engine.document().revision, 0);
+        let SceneNodeV1::Path(preview_path) = &preview.update.scene.nodes["line-1:path"] else {
+            panic!("line preview remains a Scene path");
+        };
+        assert_eq!(preview_path.path_data, "M 0 40 Q 80 -8 160 136");
+        assert_eq!(
+            preview
+                .update
+                .selection
+                .handles
+                .iter()
+                .find(|handle| handle.kind == SelectionHandleTypeV1::Curve)
+                .expect("curve preview keeps its handle")
+                .position,
+            Vec2 { x: 80.0, y: 40.0 }
+        );
+
+        let committed = engine
+            .handle_pointer_events(
+                "curve-up".to_string(),
+                vec![pointer_event_at(PointerPhaseV1::Up, 3, 80.0, 40.0)],
+            )
+            .unwrap();
+        assert!(committed.did_commit);
+        assert_eq!(engine.document().revision, 1);
+        let ElementRecordV1::Line(line) = &engine.document().elements["line-1"] else {
+            panic!("line remains semantic");
+        };
+        assert_eq!(
+            line.curve,
+            Some(PathCurveV1::Quadratic {
+                control: Vec2 { x: 80.0, y: -8.0 },
+            })
+        );
+        assert!(committed.update.history.can_undo);
+
+        engine.undo().unwrap();
+        let ElementRecordV1::Line(line) = &engine.document().elements["line-1"] else {
+            panic!("line remains semantic after undo");
+        };
+        assert!(line.curve.is_none());
+        engine.redo().unwrap();
+        let ElementRecordV1::Line(line) = &engine.document().elements["line-1"] else {
+            panic!("line remains semantic after redo");
+        };
+        assert_eq!(
+            line.curve,
+            Some(PathCurveV1::Quadratic {
+                control: Vec2 { x: 80.0, y: -8.0 },
+            })
         );
     }
 
@@ -5266,10 +5559,10 @@ mod tests {
     #[test]
     fn opening_invalid_documents_reports_the_broken_invariant() {
         let mut unsupported_schema = NodeInkDocumentV1::blank("doc-1");
-        unsupported_schema.schema_version = 6;
+        unsupported_schema.schema_version = 7;
         assert_eq!(
             Engine::open(unsupported_schema).unwrap_err(),
-            EngineErrorV1::UnsupportedSchema { actual: 6 }
+            EngineErrorV1::UnsupportedSchema { actual: 7 }
         );
 
         assert_eq!(
@@ -5341,7 +5634,7 @@ mod tests {
         assert_eq!(engine.current_update().active_tool, EditorToolV1::Select);
         assert_eq!(
             engine.serialize_document().unwrap(),
-            r#"{"schemaVersion":5,"documentId":"doc-1","revision":0,"renderProfile":{"kind":"clean","version":1},"rootOrder":[],"elements":{}}"#
+            r#"{"schemaVersion":6,"documentId":"doc-1","revision":0,"renderProfile":{"kind":"clean","version":1},"rootOrder":[],"elements":{}}"#
         );
     }
 

@@ -479,7 +479,7 @@ export async function runPlaygroundSketchBenchmark(): Promise<PlaygroundSketchBe
 
 export async function runPlaygroundTextBenchmark(): Promise<PlaygroundTextBenchmarkReport> {
   const engine = await createWasmEngine({
-    schemaVersion: 5,
+    schemaVersion: 6,
     documentId: 'text-fixture',
     revision: 0,
     renderProfile: { kind: 'clean', version: 1 },
@@ -591,7 +591,7 @@ export async function runPlaygroundTextBenchmark(): Promise<PlaygroundTextBenchm
 
 export async function runPlaygroundScenePatchBenchmark(): Promise<PlaygroundScenePatchBenchmarkReport> {
   const engine = await createWasmEngine({
-    schemaVersion: 5,
+    schemaVersion: 6,
     documentId: 'scene-patch-benchmark',
     revision: 0,
     renderProfile: { kind: 'clean', version: 1 },
@@ -792,7 +792,7 @@ export async function runPlaygroundPersistenceBenchmark(): Promise<PlaygroundPer
 
 export async function runPlaygroundMigrationBenchmark(): Promise<PlaygroundMigrationBenchmarkReport> {
   const engine = await createWasmEngine({
-    schemaVersion: 5,
+    schemaVersion: 6,
     documentId: 'migration-runner',
     revision: 0,
     renderProfile: { kind: 'clean', version: 1 },
@@ -1088,7 +1088,7 @@ export async function runPlaygroundOperationBenchmark(): Promise<PlaygroundOpera
 
 function operationDocument(documentId: string): NodeInkDocumentV1 {
   return {
-    schemaVersion: 5,
+    schemaVersion: 6,
     documentId,
     revision: 0,
     renderProfile: { kind: 'clean', version: 1 },
@@ -1863,7 +1863,7 @@ function benchmarkEnvironment() {
 
 function sketchFixtureDocument(): NodeInkDocumentV1 {
   return {
-    schemaVersion: 5,
+    schemaVersion: 6,
     documentId: 'sketch-fixture',
     revision: 0,
     renderProfile: { kind: 'clean', version: 1 },

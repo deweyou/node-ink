@@ -247,8 +247,8 @@ describe('sha256Hex', () => {
 });
 
 describe('recoverCopyOnWriteV1', () => {
-  it('opens a valid V5 snapshot without requesting a persisted copy', async () => {
-    const candidate = migrationCandidate('head', 5, currentPayload());
+  it('opens a valid V6 snapshot without requesting a persisted copy', async () => {
+    const candidate = migrationCandidate('head', 6, currentPayload());
 
     const recovered = await recoverCopyOnWriteV1({
       candidates: [candidate],
@@ -282,7 +282,7 @@ describe('recoverCopyOnWriteV1', () => {
     expect([...legacy]).toEqual(original);
     if (recovered.ok) {
       expect(JSON.parse(new TextDecoder().decode(recovered.canonicalPayload))).toMatchObject({
-        schemaVersion: 5,
+        schemaVersion: 6,
         revision: 5,
         renderProfile: { kind: 'clean', version: 1 },
       });
@@ -290,9 +290,9 @@ describe('recoverCopyOnWriteV1', () => {
   });
 
   it('records a hash mismatch and deterministically falls back to stable', async () => {
-    const corruptHead = migrationCandidate('head', 5, currentPayload());
+    const corruptHead = migrationCandidate('head', 6, currentPayload());
     corruptHead.snapshot.integrity.digest = 'wrong';
-    const stable = migrationCandidate('stable', 5, currentPayload());
+    const stable = migrationCandidate('stable', 6, currentPayload());
 
     const recovered = await recoverCopyOnWriteV1({
       candidates: [corruptHead, stable],
@@ -489,11 +489,12 @@ function migrationPort() {
         parsed.schemaVersion !== 2 &&
         parsed.schemaVersion !== 3 &&
         parsed.schemaVersion !== 4 &&
-        parsed.schemaVersion !== 5
+        parsed.schemaVersion !== 5 &&
+        parsed.schemaVersion !== 6
       ) {
         return failedMigrationAttempt('schema', 'unknown_schema', parsed.schemaVersion ?? -1);
       }
-      const migrated = parsed.schemaVersion !== 5;
+      const migrated = parsed.schemaVersion !== 6;
       const document: NodeInkDocumentV1 = {
         ...createBlankDocument(parsed.documentId ?? 'doc-1'),
         revision: (parsed.revision ?? 0) + (migrated ? 1 : 0),
@@ -501,7 +502,7 @@ function migrationPort() {
       return {
         result: {
           sourceSchemaVersion: parsed.schemaVersion,
-          targetSchemaVersion: 5,
+          targetSchemaVersion: 6,
           migrated,
           document,
           canonicalPayload: JSON.stringify(document),
@@ -519,7 +520,7 @@ function failedMigrationAttempt(stage: string, code: string, sourceSchemaVersion
       stage,
       code,
       sourceSchemaVersion,
-      targetSchemaVersion: 5,
+      targetSchemaVersion: 6,
       message: code,
       recovery: 'try_next_snapshot_then_readonly_diagnostic' as const,
     },

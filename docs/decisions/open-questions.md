@@ -245,6 +245,14 @@
 - Schema V5 copy-on-write 接收 V4 数值 strokeWidth：`<=2 → s`、`<=4 → m`、`<=6 → l`、其余有效值 `→ xl`，revision 增加 1，源 payload 不修改。V0–V3 继续通过同一 Rust migration 路径直达 V5。
 - 产品不定义 `Clean` 与 `Sketch` 两套整板主题。旧 `renderProfile` 暂留作兼容 seam；solid/dashed/dotted、元素级 hand-drawn/roughness、旧字段最终迁移与删除均进入 TODO，待核心编辑能力稳定后作为可混用的元素样式设计。
 
+### D-34 Schema V6 Line/Arrow 单段曲线编辑
+
+- Line 与恰好两个 points 的 Arrow 增加 `curve: { kind: 'quadratic'; control: Vec2 } | null`；`null` 是规范直线。Polyline 和旧多点 Arrow 不支持 curve，也不把现有折线隐式重解释为曲线。
+- 单选两点 Line/Arrow 时显示两个方形 endpoint handle 与一个圆形 midpoint bend handle，不显示矩形 bounds ring。圆点代表 quadratic 在 `t=0.5` 的实际曲线中点；拖回 chord midpoint 时持久值规范化为 `null`。
+- Rust 持有 world/local 换算、control 推导、preview、curve extrema bounds、自适应 hit-test 与 Arrow endpoint tangent。PointerUp 提交一个 `update_path_curve` Transaction；no-op、preview 与取消不增加 revision/history，Undo/Redo 恢复完整曲线语义。
+- Arrow head 使用最终 world-space endpoint tangent 定向，但 Size 的 head length/opening 不因 control 靠近 endpoint 而缩水。Scene、selection bounds 与 hit-test 使用同一解析结果。
+- Schema V5 copy-on-write 只给 Line/Arrow 增加 `curve: null` 并将 revision 增加 1，源 payload 不修改；V0–V4 继续通过 Rust migration 直达 V6。普通曲线 Arrow 仍不是 Connector；binding、ports、routing 和多控制点编辑继续独立设计。
+
 ## 22. 需要产品负责人决策的问题
 
 以下问题不阻碍继续评审文档，但会阻碍对应功能进入实现。
@@ -331,4 +339,4 @@
 P-01 已确认，Phase 0 可以实施。进入相应产品功能前必须确认其余问题；未到决策时点的问题可以保留待确认，但不能由实现者自行选择用户可见行为。
 
 ---
-*Last updated: 2026-07-23 | Reason: confirm the Phase 1B direct-manipulation contract*
+*Last updated: 2026-07-23 | Reason: confirm the Schema V6 midpoint curve-editing contract*

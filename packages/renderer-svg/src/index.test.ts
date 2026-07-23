@@ -263,7 +263,7 @@ describe('SvgRenderer', () => {
     );
   });
 
-  it('renders indexed vertex handles at stable screen sizes and marks the active vertex', () => {
+  it('renders path editing handles at stable screen sizes without a bounding ring', () => {
     const target = document.createElement('div');
     const renderer = new SvgRenderer();
     renderer.mount(target);
@@ -290,6 +290,11 @@ describe('SvgRenderer', () => {
           vertexIndex: 1,
           selected: true,
         },
+        {
+          id: 'curve' as const,
+          kind: 'curve' as const,
+          position: { x: 60, y: 40 },
+        },
       ],
       selectionPaddingWorld: 3,
       marquee: null,
@@ -300,15 +305,22 @@ describe('SvgRenderer', () => {
 
     const first = target.querySelector('[data-nodeink-selection-handle="vertex:0"]');
     const selected = target.querySelector('[data-nodeink-selection-handle="vertex:1"]');
+    const curve = target.querySelector('[data-nodeink-selection-handle="curve"]');
     expect(target.querySelector('[data-nodeink-selection-outline]')).toBeNull();
     expect(first?.getAttribute('width')).toBe('4');
     expect(first?.getAttribute('fill')).toContain('--nodeink-selection-handle-fill');
     expect(selected?.getAttribute('fill')).toContain('--nodeink-selection-color');
+    expect(curve?.tagName).toBe('circle');
+    expect(curve?.getAttribute('r')).toBe('2.5');
+    expect(curve?.getAttribute('fill')).toContain('--nodeink-selection-curve-fill');
 
     renderer.setOverlay({ ...overlay, selectionPaddingWorld: 6 });
     expect(
       target.querySelector('[data-nodeink-selection-handle="vertex:0"]')?.getAttribute('width'),
     ).toBe('8');
+    expect(target.querySelector('[data-nodeink-selection-handle="curve"]')?.getAttribute('r')).toBe(
+      '5',
+    );
   });
 
   it.each([Number.NaN, Number.POSITIVE_INFINITY, -1])(
