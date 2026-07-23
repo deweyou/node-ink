@@ -44,14 +44,14 @@ describe('SvgRenderer', () => {
     const target = document.createElement('div');
     const renderer = new SvgRenderer();
     renderer.mount(target);
-    const first = renderer.applySnapshot(strokeScene(1, 'M 1 2 L 3 4'));
+    const first = renderer.applySnapshot(strokeScene(1, 'M 1 2 Q 2 3 3 4'));
     const firstPath = target.querySelector('path');
 
-    const second = renderer.applySnapshot(strokeScene(2, 'M 1 2 L 5 6'));
+    const second = renderer.applySnapshot(strokeScene(2, 'M 1 2 Q 3 4 5 6'));
     const updatedPath = target.querySelector('path');
 
     expect(updatedPath).toBe(firstPath);
-    expect(updatedPath?.getAttribute('d')).toBe('M 1 2 L 5 6');
+    expect(updatedPath?.getAttribute('d')).toBe('M 1 2 Q 3 4 5 6');
     expect(updatedPath?.getAttribute('stroke-linecap')).toBe('round');
     expect(first).toMatchObject({ ok: true, sceneRevision: 1, changedNodeCount: 1 });
     expect(second).toMatchObject({ ok: true, sceneRevision: 2, changedNodeCount: 1 });
@@ -109,6 +109,57 @@ describe('SvgRenderer', () => {
     text.nodes['text-1:run']!.transform = affine;
     renderer.applySnapshot(text);
     expect(target.querySelector('text')?.getAttribute('transform')).toBe('matrix(0 1 -1 0 120 48)');
+  });
+
+  it('keeps document stroke width stable across element resize while following camera zoom', () => {
+    const target = document.createElement('div');
+    const renderer = new SvgRenderer();
+    renderer.mount(target);
+    const svg = target.querySelector('svg')!;
+    Object.defineProperty(svg, 'getBoundingClientRect', {
+      value: () => ({ width: 960, height: 640 }),
+    });
+    renderer.setViewport({ x: 0, y: 0, width: 480, height: 320 });
+
+    const stretched = scene(1, 24);
+    const stretchedPath = strokeScene(1, 'M 1 2 L 3 4').nodes['stroke-1:path']!;
+    stretched.rootNodeIds.push(stretchedPath.id);
+    stretched.nodes[stretchedPath.id] = stretchedPath;
+    stretched.nodes['rect-1:shape']!.transform = {
+      a: 4,
+      b: 0,
+      c: 0,
+      d: 0.5,
+      e: 0,
+      f: 0,
+    };
+    stretchedPath.transform = stretched.nodes['rect-1:shape']!.transform;
+    renderer.applySnapshot(stretched);
+
+    const rectangle = target.querySelector('[data-scene-node-id="rect-1:shape"]');
+    const path = target.querySelector('[data-scene-node-id="stroke-1:path"]');
+    expect(rectangle?.getAttribute('stroke-width')).toBe('4');
+    expect(rectangle?.getAttribute('vector-effect')).toBe('non-scaling-stroke');
+    expect(path?.getAttribute('stroke-width')).toBe('6');
+    expect(path?.getAttribute('vector-effect')).toBe('non-scaling-stroke');
+
+    stretched.sceneRevision = 2;
+    stretched.nodes['rect-1:shape']!.transform = {
+      a: 0.25,
+      b: 0,
+      c: 0,
+      d: 8,
+      e: 0,
+      f: 0,
+    };
+    stretchedPath.transform = stretched.nodes['rect-1:shape']!.transform;
+    renderer.applySnapshot(stretched);
+    expect(rectangle?.getAttribute('stroke-width')).toBe('4');
+    expect(path?.getAttribute('stroke-width')).toBe('6');
+
+    renderer.setViewport({ x: 0, y: 0, width: 960, height: 640 });
+    expect(rectangle?.getAttribute('stroke-width')).toBe('2');
+    expect(path?.getAttribute('stroke-width')).toBe('3');
   });
 
   it('updates the viewport independently of scene revision', () => {

@@ -701,6 +701,11 @@ export class EditorWebController implements EditorWebControllerV1 {
 
     const commandId = this.#createId();
     if (action.type === 'pointer_events') {
+      const down = action.events.find((event) => event.phase === 'down');
+      if (down && this.#textEditor) {
+        this.#textEditor.commit();
+        return { update: await this.#engine.currentUpdate() };
+      }
       if (this.#snapshot.activeTool === 'freehand') {
         const batch = this.#freehandInput.convert(action.events, this.#createId);
         if (!batch) {
@@ -717,7 +722,6 @@ export class EditorWebController implements EditorWebControllerV1 {
         };
       }
       if (this.#snapshot.activeTool === 'text') {
-        const down = action.events.find((event) => event.phase === 'down');
         if (down && !this.#textEditor) {
           const target = await this.#engine.beginTextEditAt(down.point);
           this.openTextEditor(target.element, down.point, target.update.selection.visualBounds);
@@ -860,6 +864,7 @@ export class EditorWebController implements EditorWebControllerV1 {
       fontSize: element?.fontSize ?? NODEINK_DEFAULT_TEXT_SIZE,
       fontWeight: element?.fontWeight ?? 400,
       textAlign: element?.textAlign ?? NODEINK_DEFAULT_TEXT_STYLE.textAlign,
+      color: element?.color ?? NODEINK_DEFAULT_TEXT_STYLE.color,
       onCommit: (value) => {
         if (this.#textEditor === overlay) {
           this.#textEditor = null;

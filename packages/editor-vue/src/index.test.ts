@@ -35,8 +35,7 @@ describe('NodeInkEditor', () => {
     expect(button(target, 'Rectangle').disabled).toBe(false);
     expect(button(target, 'Move').disabled).toBe(true);
     expect(button(target, 'Delete').disabled).toBe(true);
-    expect(button(target, 'Clean').ariaPressed).toBe('true');
-    expect(button(target, 'Sketch').ariaPressed).toBe('false');
+    expect(target.querySelector('[aria-label="Rendering profile"]')).toBeNull();
     expect(button(target, '100%').title).toBe('回正并适应全部内容');
     expect(button(target, '100%').ariaLabel).toBe('回正并适应全部内容，当前 100%');
 
@@ -176,7 +175,7 @@ describe('NodeInkEditor', () => {
     }
   });
 
-  it('dispatches rendering profiles and contextual selection styles', async () => {
+  it('dispatches contextual selection styles without exposing experimental profiles', async () => {
     const controller = new StubController();
     const target = document.createElement('div');
     app = createApp(NodeInkEditor, { controller });
@@ -184,23 +183,11 @@ describe('NodeInkEditor', () => {
     await nextTick();
 
     expect(target.querySelector('[aria-label="Selection style"]')).toBeNull();
-    button(target, 'Sketch').click();
-    expect(controller.actions.at(-1)).toEqual({
-      type: 'set_render_profile',
-      profile: 'sketch',
-    });
+    expect(target.querySelector('[aria-label="Rendering profile"]')).toBeNull();
 
     controller.setSnapshot({
       ...controller.getSnapshot(),
       activeElementId: 'rect-1',
-      renderProfile: {
-        kind: 'sketch',
-        version: 1,
-        seed: 1_313_817_669,
-        roughness: 1.2,
-        bowing: 0.8,
-        fillStyle: 'hachure',
-      },
       selectionStyle: {
         kind: 'rect',
         fill: { kind: 'solid', color: '#d1fae5' },
@@ -210,8 +197,6 @@ describe('NodeInkEditor', () => {
     });
     await nextTick();
 
-    expect(button(target, 'Clean').ariaPressed).toBe('false');
-    expect(button(target, 'Sketch').ariaPressed).toBe('true');
     expect(target.querySelector('[aria-label="Selection style"]')).not.toBeNull();
     expect(labelledButton(target, 'Fill Mint').ariaPressed).toBe('true');
     expect(labelledButton(target, 'Fill Blue').ariaPressed).toBe('false');

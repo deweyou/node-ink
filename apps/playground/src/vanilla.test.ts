@@ -23,6 +23,7 @@ describe('Vanilla playground selection actions', () => {
 
     const root = requireElement<HTMLElement>(document, '#root');
     expect(root.querySelector('.nodeink-kicker')?.textContent).toBe('NodeInk · Phase 1B');
+    expect(root.querySelector('[aria-label="Rendering profile"]')).toBeNull();
     expect(root.querySelector('[data-status]')?.textContent).toContain('No selection');
     expect(actionButton(root, 'copy').disabled).toBe(true);
     expect(actionButton(root, 'paste').disabled).toBe(false);

@@ -14,7 +14,7 @@
 
 ### D-02 Phase 1 分段
 
-- Phase 1A 证明 Camera、矩形、文本、自由笔、选择/移动、Undo/Redo、Clean/Sketch、SVG 和单文档可靠保存。
+- Phase 1A 证明 Camera、矩形、文本、自由笔、选择/移动、Undo/Redo、Render Profile 的引擎边界、SVG 和单文档可靠保存；当前产品界面统一使用 Clean。
 - Phase 1B 再补齐基础形状、完整变换、分组、吸附、多文档和恢复体验。
 
 ### D-03 Rust/TypeScript 边界
@@ -57,7 +57,7 @@
 ### D-10 UI 体验方向
 
 - 体验基准贴近 tldraw 的画布优先、直接操作、单一活动工具和上下文属性，以及 Excalidraw 的低门槛绘制、工具易发现与手绘亲和力。
-- NodeInk 保留自己的本地优先、可靠恢复、Clean/Sketch 双风格和结构化图表能力，不复制两者的协作、分享、模板或品牌视觉。
+- NodeInk 保留自己的本地优先、可靠恢复、可演进的风格系统和结构化图表能力，不复制两者的协作、分享、模板或品牌视觉；当前产品以 Clean 为统一基线。
 - Phase 1 UI 只呈现已可用能力，不为未来功能放置空入口。
 
 ### D-11 Vite+ 工具链
@@ -194,7 +194,8 @@
 
 - Rust 持有非持久 Tool State，首期工具为 `select | freehand`；状态随 Engine Update 返回，但不进入 Document、序列化、Camera 或 Undo/Redo。
 - React、Vue 与 Vanilla 只通过同一个 Controller 切换工具；`V` 选择、`P` 自由笔，活动按钮使用 `aria-pressed`，创建矩形显式回到 Select。
-- 自由笔复用 S2 的 Float64Array batch-2 传输，PointerUp 形成一个 `create_stroke` Transaction；单击规范化为稳定圆点，取消与失焦只清除 preview。
+- 自由笔复用 S2 的 Float64Array batch-2 传输，PointerUp 形成一个 `create_stroke` Transaction；单击规范化为稳定圆点，`Shift` 把当前预览与提交约束为起点到最新点的直线。DOM capture loss、pointer cancel 与窗口失焦提交已经显示的采样；只有 `Escape` 或工具切换等显式编辑器取消才清除 preview。
+- Document 保留原始自由笔采样点且不增加 Schema 字段；Clean Scene resolver 对三点以上笔迹生成确定性的 midpoint quadratic path，预览与提交使用相同解析。选择 bounds 使用曲线解析极值，hit-test 使用同一曲线的有界误差展开；单击圆点、两点笔迹和 `Shift` 直线不参与平滑。V1 固定中等平滑，不暴露 UI 参数。
 - Phase 1 使用 mouse/trackpad/pen 的位置输入和固定 3px 笔宽，不承诺 pressure、可变宽轮廓或移动触摸编辑。这些能力需要独立几何、命中和设备验收。
 
 ### D-29 Phase 1A 产品文本与固定字体
@@ -202,12 +203,13 @@
 - 画布文本固定使用随应用加载的 `Noto Sans SC Variable`（`@fontsource-variable/noto-sans-sc@5.3.0`，OFL-1.1）；UI 字体仍使用系统栈。Host 在创建 Engine 前等待 400/500 weight 可用，失败时明确阻止进入可写编辑器。
 - `TextElementV1` 持久化内容、位置、24px/400 默认样式、可选 `maxWidth` 与非空 `fontFingerprint`；创建、更新、清空删除、移动及 Undo/Redo 全部经过 Rust Command/Transaction。
 - Rust 发出 `textMeasureRequest`，浏览器用固定字体测量并通过 `provideTextMetrics` 回填；metrics cache 与 Scene revision 属于瞬态解析状态，不增加 Document revision 或 Undo history。换行索引统一按 Unicode code point，而不是 JavaScript UTF-16 code unit。
-- IME buffer 只存在于 HTML textarea overlay。Enter 插入换行，`Cmd/Ctrl+Enter` 或 blur 提交一次，`Escape` 取消；空白新文本不产生 Command，清空已有文本走 `delete_elements`。
+- IME buffer 只存在于无输入框外观的 HTML textarea overlay，只显示文字与原生 caret。Enter 插入换行，`Cmd/Ctrl+Enter`、点击画布空白或 blur 提交一次，`Escape` 取消；空白新文本不产生 Command，清空已有文本走 `delete_elements`。
 - Text 工具快捷键为 `T`；Text 单击开始创建，Select 对已有文本的双击通过 Rust 语义命中进入编辑，不能依赖 SVG DOM target。
 
-### D-30 Phase 1A 持久样式与 Clean/Sketch
+### D-30 Phase 1A 持久样式与内部 Render Profile
 
-- `renderProfile` 是 Rust Document 的持久字段；UI 只暴露 `Clean | Sketch`。Sketch v1 使用固定 preset：`seed=1313817669`、`roughness=1.2`、`bowing=0.8`、`fillStyle=hachure`，不把 benchmark 参数面板直接暴露给用户。
+- `renderProfile` 仍是 Rust Document 的持久字段，但 2026-07-23 起 React、Vue、Vanilla 产品 UI 不再暴露 `Clean | Sketch`，当前界面和新文档统一使用 Clean。现有字段不做破坏性迁移，旧快照仍可由引擎读取。
+- Sketch v1 固定 preset（`seed=1313817669`、`roughness=1.2`、`bowing=0.8`、`fillStyle=hachure`）与确定性 resolver 仅作为内部兼容、benchmark 和架构验证边界保留，不再构成当前视觉产品契约。核心编辑能力成熟后再统一设计风格系统/Sketch v2。
 - 元素样式同样属于 Document：矩形持久 fill/stroke/strokeWidth，自由笔持久 stroke/strokeWidth，文本持久 color/fontSize/fontWeight/textAlign。Style 与 Profile 修改都通过一次 Rust Command/Transaction，并形成一个可理解的 Undo entry。
 - Phase 1A 使用固定 preset：fill 为 mint/blue/amber/none，stroke/text color 为 ink/emerald/blue/rose，线宽为 1/2/4px，字号为 18/24/32px，文本对齐为 start/center/end。协议只接受显式 none 或 canonical 小写六位 sRGB hex，不接受任意 CSS paint。
 - Rust 从选中语义元素派生只读 style presentation；React、Vue、Vanilla 不读取 SVG 属性或反序列化 Document 来猜测当前值。右侧样式面板是画布 overlay，只在可编辑选择存在时显示。
@@ -216,7 +218,7 @@
 ### D-31 Phase 1B 选择、变换、层级与编辑动作
 
 - 框选按 painted visual bounds 相交；`Shift` 对点击/框选结果执行 toggle。普通点击组内内容选择最外层 Group，`Cmd/Ctrl+click` 穿透到 leaf；允许嵌套 Group，但 Group 只接收同 parent 兄弟项。
-- 选择框提供 8 个 resize handle 与 1 个 rotate handle；不允许越零翻转。`Shift` 等比、`Alt` 中心缩放、`Shift` 旋转按 15°。Stroke width 不随 resize 变粗，混合多选/Group 使用完整 affine composition。
+- 选择框提供 8 个 resize handle 与 1 个 rotate handle；不允许越零翻转。`Shift` 等比、`Alt` 中心缩放、`Shift` 移动锁定主方向轴、`Shift` 旋转吸附到绝对 45° 倍数。PointerDown 后文档手势持有权保持到 PointerUp，Camera/modifier 门控变化不能丢弃完成事件；DOM capture loss、pointer cancel 与窗口失焦提交最后一个可见 transform，只有 `Escape` 或工具切换等显式编辑器取消才恢复手势前文档。Stroke width 不随 resize 变粗，混合多选/Group 使用完整 affine composition。
 - Group 插入原选择最高绘制位置并保留 child order；删除 Group 删除 subtree，保留 child 必须显式 Ungroup。Z-order 仅作用同 parent，稳定保留多选内部顺序，边界动作是 no-op。
 - Clipboard 是 Rust 生成/校验、TS 仅暂存的内部版本化 opaque payload；Copy 无 revision，Cut/Paste 各一个 Undo entry，Paste 全量 remap ID 并按 24px screen-space 级联偏移。
 - 本期只做六种 Align，不做 Distribute。Snap 只对未选元素 edges/centers，阈值 6px screen-space，`Cmd/Ctrl` 临时关闭；tie-break 为最小修正量、绘制顺序、稳定 ID，Guide 只在实际 snap 时展示。

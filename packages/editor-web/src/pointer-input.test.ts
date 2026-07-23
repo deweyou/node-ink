@@ -58,6 +58,7 @@ describe('attachPointerInput', () => {
       pointerEvent('pointermove', {
         clientX: 45,
         clientY: 65,
+        shiftKey: true,
         coalescedEvents: [
           pointerEvent('pointermove', { clientX: 35, clientY: 55 }),
           pointerEvent('pointermove', { clientX: 45, clientY: 65 }),
@@ -83,7 +84,7 @@ describe('attachPointerInput', () => {
           sequence: 2,
           phase: 'move',
           point: { x: 25, y: 35 },
-          modifiers: { shift: false, alt: false, metaOrCtrl: false },
+          modifiers: { shift: true, alt: false, metaOrCtrl: false },
           screenScale: 2,
         },
         {
@@ -91,7 +92,7 @@ describe('attachPointerInput', () => {
           sequence: 3,
           phase: 'move',
           point: { x: 35, y: 45 },
-          modifiers: { shift: false, alt: false, metaOrCtrl: false },
+          modifiers: { shift: true, alt: false, metaOrCtrl: false },
           screenScale: 2,
         },
       ],
@@ -114,7 +115,7 @@ describe('attachPointerInput', () => {
     expect(batches).toHaveLength(3);
   });
 
-  it('ignores non-primary down and handles cancel without capture', () => {
+  it('ignores non-primary down and cancel for a gesture it does not own', () => {
     const target = document.createElement('div');
     mockBounds(target);
     const releasePointerCapture = vi.fn();
@@ -129,8 +130,7 @@ describe('attachPointerInput', () => {
     target.dispatchEvent(pointerEvent('pointerdown', { button: 2 }));
     target.dispatchEvent(pointerEvent('pointercancel'));
 
-    expect(listener).toHaveBeenCalledOnce();
-    expect(listener.mock.calls[0]?.[0]).toMatchObject([{ phase: 'cancel', sequence: 1 }]);
+    expect(listener).not.toHaveBeenCalled();
     expect(releasePointerCapture).not.toHaveBeenCalled();
   });
 
@@ -155,7 +155,29 @@ describe('attachPointerInput', () => {
     expect(setPointerCapture).not.toHaveBeenCalled();
   });
 
-  it('cancels an active gesture on window blur and lost pointer capture', () => {
+  it('keeps ownership through pointer up after a document gesture starts', () => {
+    const target = document.createElement('div');
+    mockBounds(target);
+    Object.assign(target, {
+      setPointerCapture: vi.fn(),
+      hasPointerCapture: () => true,
+      releasePointerCapture: vi.fn(),
+    });
+    const batches: NormalizedPointerEventV1[][] = [];
+    let acceptsDocumentInput = true;
+    attachPointerInput(target, (events) => batches.push(events), {
+      shouldHandleEvent: () => acceptsDocumentInput,
+    });
+
+    target.dispatchEvent(pointerEvent('pointerdown', { clientX: 20, clientY: 30 }));
+    acceptsDocumentInput = false;
+    target.dispatchEvent(pointerEvent('pointermove', { clientX: 40, clientY: 50 }));
+    target.dispatchEvent(pointerEvent('pointerup', { clientX: 60, clientY: 70 }));
+
+    expect(batches.map((batch) => batch[0]?.phase)).toEqual(['down', 'move', 'up']);
+  });
+
+  it('finalizes the last visible gesture position after a DOM interruption', () => {
     const target = document.createElement('div');
     document.body.append(target);
     mockBounds(target);
@@ -167,12 +189,29 @@ describe('attachPointerInput', () => {
     attachPointerInput(target, (events) => batches.push(events));
 
     target.dispatchEvent(pointerEvent('pointerdown', { clientX: 30, clientY: 50 }));
+    target.dispatchEvent(pointerEvent('pointermove', { clientX: 50, clientY: 70 }));
     window.dispatchEvent(new Event('blur'));
     target.dispatchEvent(pointerEvent('pointerdown', { clientX: 40, clientY: 60 }));
+    target.dispatchEvent(pointerEvent('pointermove', { clientX: 70, clientY: 90 }));
     target.dispatchEvent(pointerEvent('lostpointercapture'));
+    target.dispatchEvent(pointerEvent('pointerdown', { clientX: 80, clientY: 100 }));
+    target.dispatchEvent(pointerEvent('pointermove', { clientX: 110, clientY: 130 }));
+    target.dispatchEvent(pointerEvent('pointercancel', { clientX: 0, clientY: 0 }));
 
-    expect(batches.map((batch) => batch[0]?.phase)).toEqual(['down', 'cancel', 'down', 'cancel']);
-    expect(batches[1]?.[0]).toMatchObject({ sequence: 2, point: { x: 20, y: 30 } });
+    expect(batches.map((batch) => batch[0]?.phase)).toEqual([
+      'down',
+      'move',
+      'up',
+      'down',
+      'move',
+      'up',
+      'down',
+      'move',
+      'up',
+    ]);
+    expect(batches[2]?.[0]).toMatchObject({ sequence: 3, point: { x: 40, y: 50 } });
+    expect(batches[5]?.[0]).toMatchObject({ sequence: 3, point: { x: 60, y: 70 } });
+    expect(batches[8]?.[0]).toMatchObject({ sequence: 3, point: { x: 100, y: 110 } });
   });
 
   it('maps a primary double click to semantic canvas coordinates', () => {

@@ -112,6 +112,33 @@ describe('attachCameraInput', () => {
     expect(binding.shouldHandleDocumentPointer(primaryDown)).toBe(true);
   });
 
+  it('releases Camera gesture ownership when pointer capture is lost', () => {
+    const target = cameraTarget();
+    const binding = attachCameraInput(target, vi.fn());
+    const cameraDown = pointerEvent('pointerdown', { button: 1, pointerId: 7 });
+    target.dispatchEvent(cameraDown);
+    expect(binding.shouldHandleDocumentPointer(cameraDown)).toBe(false);
+
+    target.dispatchEvent(pointerEvent('lostpointercapture', { pointerId: 7 }));
+
+    const documentDown = pointerEvent('pointerdown', { pointerId: 7 });
+    expect(binding.shouldHandleDocumentPointer(documentDown)).toBe(true);
+  });
+
+  it('releases Camera gesture ownership and pointer capture when the window blurs', () => {
+    const target = cameraTarget();
+    const releasePointerCapture = vi.fn();
+    Object.assign(target, { releasePointerCapture });
+    const binding = attachCameraInput(target, vi.fn());
+    const cameraDown = pointerEvent('pointerdown', { button: 1, pointerId: 7 });
+    target.dispatchEvent(cameraDown);
+
+    window.dispatchEvent(new Event('blur'));
+
+    expect(releasePointerCapture).toHaveBeenCalledWith(7);
+    expect(binding.shouldHandleDocumentPointer(pointerEvent('pointerdown'))).toBe(true);
+  });
+
   it('detaches all listeners', () => {
     const ownerDocument = document.implementation.createHTMLDocument();
     const target = cameraTarget(ownerDocument);

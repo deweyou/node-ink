@@ -649,6 +649,28 @@ describe('EditorWebController', () => {
     expect(engine.commands.at(-1)?.command.type).toBe('create_rectangle');
   });
 
+  it('commits sampled freehand input when the DOM gesture is interrupted', async () => {
+    const engine = new StubEngine();
+    const ids = ['tool-command', 'stroke-1', 'move-command', 'interrupt-command'];
+    const controller = new EditorWebController({
+      engine,
+      renderer: new StubRenderer(),
+      createId: () => ids.shift() ?? 'fallback',
+    });
+    await controller.mount(document.createElement('div'));
+    await controller.dispatch({ type: 'set_tool', tool: 'freehand' });
+
+    await controller.dispatch({ type: 'pointer_events', events: [pointerEvent('down', 1)] });
+    await controller.dispatch({ type: 'pointer_events', events: [pointerEvent('move', 2)] });
+    await controller.dispatch({ type: 'pointer_events', events: [pointerEvent('cancel', 3)] });
+
+    expect(engine.strokeBatches.at(-1)).toMatchObject({
+      phase: 'up',
+      sequenceStart: 3,
+      strokeId: null,
+    });
+  });
+
   it('uses Select pointer routing and Escape tool semantics', async () => {
     const engine = new StubEngine('rect-1');
     await engine.setSelection(['rect-1'], 'rect-1');
@@ -731,6 +753,35 @@ describe('EditorWebController', () => {
       documentRevision: 1,
       sceneRevision: 2,
       elementCount: 1,
+    });
+  });
+
+  it('commits the active text draft when the canvas is clicked', async () => {
+    const engine = new StubEngine();
+    const ids = ['unused-pointer', 'create-command', 'text-1'];
+    const controller = new EditorWebController({
+      engine,
+      renderer: new StubRenderer(),
+      createId: () => ids.shift() ?? 'fallback',
+    });
+    const target = document.createElement('div');
+    await controller.mount(target);
+    await controller.dispatch({ type: 'set_tool', tool: 'text' });
+    await controller.dispatch({ type: 'pointer_events', events: [pointerEvent('down', 1)] });
+    const input = target.querySelector('textarea');
+    expect(input).not.toBeNull();
+    if (input) {
+      input.value = '点击空白提交';
+      input.dispatchEvent(new InputEvent('input', { bubbles: true }));
+    }
+
+    await controller.dispatch({ type: 'pointer_events', events: [pointerEvent('down', 2)] });
+    await vi.waitFor(() => expect(engine.commands).toHaveLength(1));
+
+    expect(target.querySelector('textarea')).toBeNull();
+    expect(engine.commands[0]?.command).toMatchObject({
+      type: 'create_text',
+      text: { text: '点击空白提交' },
     });
   });
 
@@ -983,6 +1034,7 @@ describe('EditorWebController', () => {
       'pointermove',
       'pointerup',
       'pointercancel',
+      'lostpointercapture',
       'wheel',
       'pointerdown',
       'pointermove',
@@ -996,6 +1048,7 @@ describe('EditorWebController', () => {
       'pointermove',
       'pointerup',
       'pointercancel',
+      'lostpointercapture',
       'wheel',
       'pointerdown',
       'pointermove',
@@ -1004,7 +1057,7 @@ describe('EditorWebController', () => {
       'lostpointercapture',
       'dblclick',
     ]);
-    expect(secondAdd).toHaveBeenCalledTimes(11);
+    expect(secondAdd).toHaveBeenCalledTimes(12);
     expect(secondRemove).not.toHaveBeenCalled();
     expect(renderer.mountCalls).toBe(2);
 
@@ -1022,6 +1075,7 @@ describe('EditorWebController', () => {
       'pointermove',
       'pointerup',
       'pointercancel',
+      'lostpointercapture',
       'wheel',
     ]);
     expect(engine.disposeCalls).toBe(1);

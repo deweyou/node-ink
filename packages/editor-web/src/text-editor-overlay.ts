@@ -13,6 +13,7 @@ export interface TextEditorOverlayOptionsV1 {
   fontSize?: number;
   fontWeight?: 400 | 500;
   textAlign?: TextAlignV1;
+  color?: string;
   onCommit: (value: string) => void;
   onCancel: () => void;
 }
@@ -33,6 +34,7 @@ export function attachTextEditorOverlay({
   fontSize = NODEINK_DEFAULT_TEXT_SIZE,
   fontWeight = 400,
   textAlign = 'start',
+  color,
   onCommit,
   onCancel,
 }: TextEditorOverlayOptionsV1): TextEditorOverlayV1 {
@@ -46,6 +48,9 @@ export function attachTextEditorOverlay({
   input.style.fontFamily = `'${NODEINK_CANVAS_FONT_FAMILY}', sans-serif`;
   input.style.fontWeight = String(fontWeight);
   input.style.textAlign = textAlign === 'start' ? 'left' : textAlign === 'end' ? 'right' : 'center';
+  if (color) {
+    input.style.color = color;
+  }
   let currentCamera = camera;
   let closed = false;
   let buffer = initialValue;
@@ -59,9 +64,10 @@ export function attachTextEditorOverlay({
     input.style.lineHeight = '1.25';
   };
   const resizeInput = () => {
+    input.style.width = '1px';
     input.style.height = '0';
     input.style.height = `${Math.max(input.scrollHeight, fontSize * currentCamera.zoom * 1.25)}px`;
-    input.style.width = `${Math.max(180, Math.min(560, input.scrollWidth + 24))}px`;
+    input.style.width = `${Math.max(2, Math.min(560, input.scrollWidth + 2))}px`;
   };
   const close = () => {
     if (closed) {

@@ -19,6 +19,8 @@ pub struct StrokeInputBatchV1 {
     pub phase: StrokePhaseV1,
     pub points: Vec<Vec2>,
     pub stroke_id: Option<ElementId>,
+    #[serde(default)]
+    pub straight_line: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -62,6 +64,7 @@ enum StrokeState {
         points: Vec<Vec2>,
         last_sequence: u64,
         expected_revision: u64,
+        straight_line: bool,
     },
 }
 
@@ -95,13 +98,16 @@ impl StrokeMachine {
 
     pub fn preview(&self) -> Option<StrokePreview> {
         let StrokeState::Drawing {
-            stroke_id, points, ..
+            stroke_id,
+            points,
+            straight_line,
+            ..
         } = &self.state
         else {
             return None;
         };
         Some(StrokePreview {
-            stroke: stroke_element(stroke_id.clone(), points),
+            stroke: stroke_element(stroke_id.clone(), points, *straight_line),
         })
     }
 
@@ -125,12 +131,13 @@ impl StrokeMachine {
             points: vec![point],
             last_sequence: batch.sequence_start,
             expected_revision,
+            straight_line: batch.straight_line,
         };
         let ignored = batch.points.len().saturating_sub(1);
         (
             ignored,
             StrokeTransition::Preview(StrokePreview {
-                stroke: stroke_element(stroke_id, &[point]),
+                stroke: stroke_element(stroke_id, &[point], batch.straight_line),
             }),
         )
     }
@@ -141,6 +148,7 @@ impl StrokeMachine {
             stroke_id,
             points,
             last_sequence,
+            straight_line,
             ..
         } = &mut self.state
         else {
@@ -156,10 +164,11 @@ impl StrokeMachine {
             batch.sequence_start,
             batch.points.into_iter(),
         );
+        *straight_line = batch.straight_line;
         (
             ignored,
             StrokeTransition::Preview(StrokePreview {
-                stroke: stroke_element(stroke_id.clone(), points),
+                stroke: stroke_element(stroke_id.clone(), points, *straight_line),
             }),
         )
     }
@@ -171,6 +180,7 @@ impl StrokeMachine {
             points,
             last_sequence,
             expected_revision,
+            straight_line,
         } = &mut self.state
         else {
             return (batch.points.len(), StrokeTransition::None);
@@ -185,11 +195,12 @@ impl StrokeMachine {
             batch.sequence_start,
             batch.points.into_iter(),
         );
+        *straight_line = batch.straight_line;
         let transition = if points.is_empty() {
             StrokeTransition::Cancelled
         } else {
             StrokeTransition::Commit(StrokeCommit {
-                stroke: stroke_element(stroke_id.clone(), points),
+                stroke: stroke_element(stroke_id.clone(), points, *straight_line),
                 expected_revision: *expected_revision,
             })
         };
@@ -211,8 +222,12 @@ impl StrokeMachine {
     }
 }
 
-fn stroke_element(id: ElementId, points: &[Vec2]) -> StrokeElementV1 {
-    let mut normalized_points = points.to_vec();
+fn stroke_element(id: ElementId, points: &[Vec2], straight_line: bool) -> StrokeElementV1 {
+    let mut normalized_points = if straight_line && points.len() > 1 {
+        vec![points[0], points[points.len() - 1]]
+    } else {
+        points.to_vec()
+    };
     if normalized_points.len() == 1 {
         normalized_points.push(normalized_points[0]);
     }

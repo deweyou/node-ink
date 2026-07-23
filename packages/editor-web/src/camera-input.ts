@@ -12,6 +12,7 @@ export function attachCameraInput(
   onCameraAction: CameraActionListener,
 ): CameraInputBindingV1 {
   const ownerDocument = target.ownerDocument;
+  const windowTarget = ownerDocument.defaultView;
   let spacePressed = false;
   let activePointerId: number | null = null;
   let previousPoint = { x: 0, y: 0 };
@@ -60,6 +61,20 @@ export function attachCameraInput(
     activePointerId = null;
     releasePointer(target, event.pointerId);
   };
+  const handleLostPointerCapture = (event: PointerEvent) => {
+    if (event.pointerId === activePointerId) {
+      activePointerId = null;
+    }
+  };
+  const handleWindowBlur = () => {
+    if (activePointerId === null) {
+      return;
+    }
+    const pointerId = activePointerId;
+    activePointerId = null;
+    releasePointer(target, pointerId);
+    spacePressed = false;
+  };
   const handleWheel = (event: WheelEvent) => {
     const scale = wheelDeltaScale(event, target);
     if (event.ctrlKey || event.metaKey) {
@@ -85,7 +100,9 @@ export function attachCameraInput(
   target.addEventListener('pointermove', handlePointerMove);
   target.addEventListener('pointerup', finishPointer);
   target.addEventListener('pointercancel', finishPointer);
+  target.addEventListener('lostpointercapture', handleLostPointerCapture);
   target.addEventListener('wheel', handleWheel, { passive: false });
+  windowTarget?.addEventListener('blur', handleWindowBlur);
 
   return {
     detach() {
@@ -95,12 +112,19 @@ export function attachCameraInput(
       target.removeEventListener('pointermove', handlePointerMove);
       target.removeEventListener('pointerup', finishPointer);
       target.removeEventListener('pointercancel', finishPointer);
+      target.removeEventListener('lostpointercapture', handleLostPointerCapture);
       target.removeEventListener('wheel', handleWheel);
+      windowTarget?.removeEventListener('blur', handleWindowBlur);
       activePointerId = null;
       spacePressed = false;
     },
     shouldHandleDocumentPointer(event) {
-      return !event.defaultPrevented && event.button !== 1 && !spacePressed;
+      return (
+        event.pointerId !== activePointerId &&
+        !event.defaultPrevented &&
+        event.button !== 1 &&
+        !spacePressed
+      );
     },
   };
 }

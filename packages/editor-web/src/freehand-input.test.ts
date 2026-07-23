@@ -16,6 +16,7 @@ describe('FreehandInputAdapterV1', () => {
       phase: 'down',
       points: [{ x: 10, y: 20 }],
       strokeId: 'stroke-1',
+      straightLine: false,
     });
     expect(adapter.convert([event('move', 2, 12, 22), event('move', 3, 14, 24)], createId)).toEqual(
       {
@@ -27,6 +28,7 @@ describe('FreehandInputAdapterV1', () => {
           { x: 14, y: 24 },
         ],
         strokeId: null,
+        straightLine: false,
       },
     );
     expect(adapter.convert([event('up', 4, 16, 26)], createId)).toMatchObject({
@@ -36,14 +38,15 @@ describe('FreehandInputAdapterV1', () => {
     expect(adapter.convert([event('down', 5, 30, 40)], createId)?.strokeId).toBe('stroke-2');
   });
 
-  it('ignores unrelated pointers and resets after cancellation', () => {
+  it('ignores unrelated pointers and finalizes sampled ink after DOM cancellation', () => {
     const adapter = new FreehandInputAdapterV1();
     const createId = () => 'stroke-1';
     adapter.convert([event('down', 1, 0, 0)], createId);
 
     expect(adapter.convert([{ ...event('move', 1, 1, 1), pointerId: 8 }], createId)).toBeNull();
     expect(adapter.convert([event('cancel', 2, 0, 0)], createId)).toMatchObject({
-      phase: 'cancel',
+      phase: 'up',
+      points: [{ x: 0, y: 0 }],
     });
     expect(adapter.convert([event('move', 3, 2, 2)], createId)).toBeNull();
   });
@@ -56,6 +59,28 @@ describe('FreehandInputAdapterV1', () => {
         () => 'stroke-1',
       ),
     ).toBeNull();
+  });
+
+  it('transports Shift as straight-line intent without dropping the stroke', () => {
+    const adapter = new FreehandInputAdapterV1();
+    const shiftedDown = {
+      ...event('down', 1, 10, 20),
+      modifiers: { shift: true, alt: false, metaOrCtrl: false },
+    };
+    const shiftedUp = {
+      ...event('up', 2, 80, 90),
+      modifiers: { shift: true, alt: false, metaOrCtrl: false },
+    };
+
+    expect(adapter.convert([shiftedDown], () => 'stroke-1')).toMatchObject({
+      phase: 'down',
+      straightLine: true,
+    });
+    expect(adapter.convert([shiftedUp], () => 'unused')).toMatchObject({
+      phase: 'up',
+      straightLine: true,
+      points: [{ x: 80, y: 90 }],
+    });
   });
 });
 

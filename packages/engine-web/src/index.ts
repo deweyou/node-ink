@@ -63,6 +63,7 @@ interface WasmEngineHandle {
     phase: string,
     coordinates: Float64Array,
     strokeId: string | undefined,
+    straightLine: boolean,
     commandId: string,
   ): string;
   resolveSceneProfile(profileJson: string): string;
@@ -235,6 +236,7 @@ class WasmEnginePort implements EnginePortV1 {
               batch.phase,
               packCoordinates(batch),
               batch.strokeId ?? undefined,
+              batch.straightLine === true,
               commandId,
             );
       return parseStrokeUpdate(serialized);

@@ -15,6 +15,7 @@ mod selection_geometry;
 mod sketch;
 mod snapping;
 mod stroke;
+mod stroke_geometry;
 mod style;
 mod text;
 mod tool;
@@ -50,6 +51,7 @@ pub use sketch::{ENGINE_ALGORITHM_VERSION, RenderProfileV1, SketchFillStyleV1};
 use sketch::{sketch_rectangle, sketch_stroke};
 pub use stroke::{StrokeInputBatchV1, StrokePhaseV1};
 use stroke::{StrokeMachine, StrokePreview, StrokeTransition};
+use stroke_geometry::{resolved_stroke_path_data, stroke_visual_bounds};
 pub use style::{
     DEFAULT_INK_COLOR, DEFAULT_RECTANGLE_FILL_COLOR, DEFAULT_RECTANGLE_STROKE_COLOR,
     DEFAULT_RECTANGLE_STROKE_WIDTH, DEFAULT_STROKE_WIDTH, ElementStylePatchV1, FillV1,
@@ -2266,27 +2268,7 @@ fn element_local_visual_bounds(
             .ok()
         }
         ElementRecordV1::Stroke(stroke) => {
-            let mut points = stroke.points.iter().copied();
-            let first = points.next()?;
-            let (min_x, min_y, max_x, max_y) = points.fold(
-                (first.x, first.y, first.x, first.y),
-                |(min_x, min_y, max_x, max_y), point| {
-                    (
-                        min_x.min(point.x),
-                        min_y.min(point.y),
-                        max_x.max(point.x),
-                        max_y.max(point.y),
-                    )
-                },
-            );
-            let half_width = stroke.stroke_width / 2.0;
-            VisualAabb::new(
-                min_x - half_width,
-                min_y - half_width,
-                max_x - min_x + stroke.stroke_width,
-                max_y - min_y + stroke.stroke_width,
-            )
-            .ok()
+            stroke_visual_bounds(&stroke.points, stroke.stroke_width)
         }
         ElementRecordV1::Text(text) => text_metrics.metric_for(text).map(|metric| {
             VisualAabb::new(
@@ -2715,7 +2697,7 @@ fn insert_stroke_scene_node(
             id: scene_node_id,
             source_element_id: stroke.id.clone(),
             transform: world_transform,
-            path_data: stroke_path_data(&stroke.points),
+            path_data: resolved_stroke_path_data(&stroke.points),
             fill: "none".to_string(),
             stroke: stroke.stroke.clone(),
             stroke_width: stroke.stroke_width,
@@ -2727,19 +2709,6 @@ fn insert_stroke_scene_node(
     };
     root_node_ids.push(path.id.clone());
     nodes.insert(path.id.clone(), SceneNodeV1::Path(path));
-}
-
-fn stroke_path_data(points: &[Vec2]) -> String {
-    let mut path = String::new();
-    for (index, point) in points.iter().enumerate() {
-        if index == 0 {
-            path.push_str("M ");
-        } else {
-            path.push_str(" L ");
-        }
-        path.push_str(&format!("{} {}", point.x, point.y));
-    }
-    path
 }
 
 fn fnv1a64_hex(bytes: &[u8]) -> String {
@@ -3949,7 +3918,7 @@ mod tests {
         let selected = engine
             .handle_pointer_events(
                 "select-stroke".to_string(),
-                vec![pointer_event_at(PointerPhaseV1::Down, 1, 16.0, 26.0)],
+                vec![pointer_event_at(PointerPhaseV1::Down, 1, 16.0, 24.0)],
             )
             .unwrap();
 
@@ -4017,7 +3986,10 @@ mod tests {
         let SceneNodeV1::Path(preview_path) = &preview.update.scene.nodes["stroke-1:path"] else {
             panic!("stroke preview should resolve to a path");
         };
-        assert_eq!(preview_path.path_data, "M 10 20 L 12 22 L 14 24 L 16 26");
+        assert_eq!(
+            preview_path.path_data,
+            "M 10 20 Q 10 20 11 21 Q 12 22 13 23 Q 14 24 15 25 Q 16 26 16 26"
+        );
         assert_eq!(preview.processed_point_count, 3);
         assert!(engine.document().elements.is_empty());
 
@@ -4079,6 +4051,40 @@ mod tests {
     }
 
     #[test]
+    fn shift_freehand_previews_and_commits_only_the_straight_line_endpoints() {
+        let mut engine = Engine::open(NodeInkDocumentV1::blank("doc-1")).unwrap();
+        engine.set_active_tool(EditorToolV1::Freehand);
+        let mut down = stroke_batch(StrokePhaseV1::Down, 1, &[(10.0, 20.0)], Some("line-1"));
+        down.straight_line = true;
+        engine
+            .handle_stroke_batch("line".to_string(), down)
+            .unwrap();
+
+        let mut preview_batch =
+            stroke_batch(StrokePhaseV1::Move, 2, &[(30.0, 25.0), (60.0, 80.0)], None);
+        preview_batch.straight_line = true;
+        let preview = engine
+            .handle_stroke_batch("line".to_string(), preview_batch)
+            .unwrap();
+        let SceneNodeV1::Path(path) = &preview.update.scene.nodes["line-1:path"] else {
+            panic!("straight stroke preview should resolve to a path");
+        };
+        assert_eq!(path.path_data, "M 10 20 L 60 80");
+
+        let mut up = stroke_batch(StrokePhaseV1::Up, 4, &[(90.0, 100.0)], None);
+        up.straight_line = true;
+        let committed = engine.handle_stroke_batch("line".to_string(), up).unwrap();
+        assert!(committed.did_commit);
+        let ElementRecordV1::Stroke(line) = &engine.document().elements["line-1"] else {
+            panic!("straight line should remain a stroke element");
+        };
+        assert_eq!(
+            line.points,
+            vec![Vec2 { x: 10.0, y: 20.0 }, Vec2 { x: 90.0, y: 100.0 }]
+        );
+    }
+
+    #[test]
     fn stroke_batches_filter_wrong_pointers_and_out_of_order_points() {
         let mut engine = Engine::open(NodeInkDocumentV1::blank("doc-1")).unwrap();
         engine.set_active_tool(EditorToolV1::Freehand);
@@ -4115,7 +4121,10 @@ mod tests {
         let SceneNodeV1::Path(path) = &overlap.update.scene.nodes["stroke-1:path"] else {
             panic!("stroke preview should resolve to a path");
         };
-        assert_eq!(path.path_data, "M 0 0 L 1 1 L 2 2 L 3 3");
+        assert_eq!(
+            path.path_data,
+            "M 0 0 Q 0 0 0.5 0.5 Q 1 1 1.5 1.5 Q 2 2 2.5 2.5 Q 3 3 3 3"
+        );
 
         let ignored_cancel = engine
             .handle_stroke_batch(
@@ -5331,6 +5340,7 @@ mod tests {
             phase,
             points: points.iter().map(|&(x, y)| Vec2 { x, y }).collect(),
             stroke_id: stroke_id.map(str::to_string),
+            straight_line: false,
         }
     }
 }

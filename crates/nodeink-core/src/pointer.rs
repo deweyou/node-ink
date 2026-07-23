@@ -26,6 +26,8 @@ fn default_screen_scale() -> f64 {
     1.0
 }
 
+const CLICK_DRAG_THRESHOLD_SCREEN_PX: f64 = 3.0;
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NormalizedPointerEventV1 {
@@ -123,6 +125,15 @@ enum PointerState {
         last_sequence: u64,
         expected_revision: u64,
         gesture: TransformGesture,
+    },
+    ShiftTarget {
+        pointer_id: u32,
+        target_element_id: ElementId,
+        selected_element_ids: Vec<ElementId>,
+        target_was_selected: bool,
+        origin: Vec2,
+        last_sequence: u64,
+        expected_revision: u64,
     },
     Marquee {
         pointer_id: u32,
@@ -228,10 +239,17 @@ impl PointerMachine {
                 }
                 if let Some(element_id) = target_element_id {
                     if input.modifiers.shift {
-                        return EventOutcome::accepted(
-                            PointerTransition::None,
-                            Some(PointerSelectionChange::Toggle(element_id)),
-                        );
+                        let target_was_selected = selected_element_ids.contains(&element_id);
+                        self.state = PointerState::ShiftTarget {
+                            pointer_id: input.pointer_id,
+                            target_element_id: element_id,
+                            selected_element_ids,
+                            target_was_selected,
+                            origin: input.point,
+                            last_sequence: input.sequence,
+                            expected_revision,
+                        };
+                        return EventOutcome::accepted(PointerTransition::None, None);
                     }
                     let was_selected = selected_element_ids.contains(&element_id);
                     let element_ids = if was_selected {
@@ -266,6 +284,80 @@ impl PointerMachine {
                     PointerTransition::None,
                     (!input.modifiers.shift).then_some(PointerSelectionChange::Replace(None)),
                 )
+            }
+            PointerState::ShiftTarget {
+                pointer_id,
+                target_element_id,
+                selected_element_ids,
+                target_was_selected,
+                origin,
+                last_sequence,
+                expected_revision,
+            } => {
+                if input.pointer_id != *pointer_id || input.sequence <= *last_sequence {
+                    return EventOutcome::Ignored;
+                }
+                *last_sequence = input.sequence;
+                if input.phase == PointerPhaseV1::Cancel {
+                    self.state = PointerState::Idle;
+                    return EventOutcome::accepted(PointerTransition::Cancelled, None);
+                }
+                let delta = Point2D::new(input.point.x - origin.x, input.point.y - origin.y);
+                let crossed_drag_threshold =
+                    delta.x.hypot(delta.y) * input.screen_scale >= CLICK_DRAG_THRESHOLD_SCREEN_PX;
+                if !crossed_drag_threshold {
+                    if input.phase == PointerPhaseV1::Up {
+                        let element_id = target_element_id.clone();
+                        self.state = PointerState::Idle;
+                        return EventOutcome::accepted(
+                            PointerTransition::None,
+                            Some(PointerSelectionChange::Toggle(element_id)),
+                        );
+                    }
+                    return EventOutcome::accepted(PointerTransition::None, None);
+                }
+
+                let mut element_ids = selected_element_ids.clone();
+                if !*target_was_selected {
+                    element_ids.push(target_element_id.clone());
+                }
+                let transform = gesture_transform(
+                    &TransformGesture::Move,
+                    *origin,
+                    input.point,
+                    input.modifiers,
+                )
+                .expect("validated pointer points produce a translation");
+                let preview = PointerTransformPreview {
+                    element_ids: element_ids.clone(),
+                    transform,
+                    kind: PointerTransformKind::Move,
+                    disable_snap: input.modifiers.meta_or_ctrl,
+                };
+                let selection = (!*target_was_selected)
+                    .then(|| PointerSelectionChange::Toggle(target_element_id.clone()));
+                let transition = if input.phase == PointerPhaseV1::Up {
+                    let commit = PointerCommit {
+                        element_ids,
+                        transform,
+                        kind: PointerTransformKind::Move,
+                        disable_snap: input.modifiers.meta_or_ctrl,
+                        expected_revision: *expected_revision,
+                    };
+                    self.state = PointerState::Idle;
+                    PointerTransition::Commit(commit)
+                } else {
+                    self.state = PointerState::Transforming {
+                        pointer_id: input.pointer_id,
+                        element_ids,
+                        origin: *origin,
+                        last_sequence: input.sequence,
+                        expected_revision: *expected_revision,
+                        gesture: TransformGesture::Move,
+                    };
+                    PointerTransition::Preview(PointerPreview::Transform(preview))
+                };
+                EventOutcome::accepted(transition, selection)
             }
             PointerState::Transforming {
                 pointer_id,
@@ -383,7 +475,15 @@ fn gesture_transform(
 ) -> Option<Affine2D> {
     match gesture {
         TransformGesture::Move => {
-            Affine2D::translation(Point2D::new(point.x - origin.x, point.y - origin.y)).ok()
+            let mut delta = Point2D::new(point.x - origin.x, point.y - origin.y);
+            if modifiers.shift {
+                if delta.x.abs() >= delta.y.abs() {
+                    delta.y = 0.0;
+                } else {
+                    delta.x = 0.0;
+                }
+            }
+            Affine2D::translation(delta).ok()
         }
         TransformGesture::Rotate { bounds } => {
             let center = Point2D::new(bounds.center.x, bounds.center.y);
@@ -391,8 +491,9 @@ fn gesture_transform(
             let current_angle = (point.y - center.y).atan2(point.x - center.x);
             let mut delta = current_angle - start_angle;
             if modifiers.shift {
-                let step = std::f64::consts::PI / 12.0;
-                delta = (delta / step).round() * step;
+                let step = std::f64::consts::FRAC_PI_4;
+                let final_orientation = bounds.rotation + delta;
+                delta = (final_orientation / step).round() * step - bounds.rotation;
             }
             Affine2D::rotation(delta).ok()?.around(center).ok()
         }
@@ -549,6 +650,64 @@ mod tests {
     }
 
     #[test]
+    fn shift_click_toggles_selection_while_shift_drag_starts_axis_locked_move() {
+        let targeted = |mut input: NormalizedPointerEventV1| {
+            input.modifiers.shift = true;
+            TargetedPointerEvent {
+                input,
+                target_element_id: Some("rect".to_string()),
+                selected_element_ids: vec!["rect".to_string()],
+                target_handle: None,
+                oriented_bounds: None,
+            }
+        };
+        let mut click_machine = PointerMachine::default();
+        click_machine.process_batch(
+            7,
+            vec![targeted(event(
+                PointerPhaseV1::Down,
+                1,
+                Vec2 { x: 2.0, y: 3.0 },
+            ))],
+        );
+        let click = click_machine.process_batch(
+            7,
+            vec![targeted(event(
+                PointerPhaseV1::Up,
+                2,
+                Vec2 { x: 2.0, y: 3.0 },
+            ))],
+        );
+        assert_eq!(
+            click.selection_change,
+            Some(PointerSelectionChange::Toggle("rect".to_string()))
+        );
+
+        let mut drag_machine = PointerMachine::default();
+        drag_machine.process_batch(
+            7,
+            vec![targeted(event(
+                PointerPhaseV1::Down,
+                1,
+                Vec2 { x: 2.0, y: 3.0 },
+            ))],
+        );
+        let drag = drag_machine.process_batch(
+            7,
+            vec![targeted(event(
+                PointerPhaseV1::Move,
+                2,
+                Vec2 { x: 42.0, y: 13.0 },
+            ))],
+        );
+        let PointerTransition::Preview(PointerPreview::Transform(preview)) = drag.transition else {
+            panic!("Shift drag should start a transform preview")
+        };
+        assert_eq!((preview.transform.e, preview.transform.f), (40.0, 0.0));
+        assert_eq!(drag.selection_change, None);
+    }
+
+    #[test]
     fn blank_drag_produces_marquee_without_document_commit() {
         let mut machine = PointerMachine::default();
         let targeted = |input| TargetedPointerEvent {
@@ -632,12 +791,39 @@ mod tests {
     }
 
     #[test]
-    fn shift_rotation_snaps_to_fifteen_degrees() {
+    fn shift_move_locks_to_the_dominant_axis() {
+        let horizontal = gesture_transform(
+            &TransformGesture::Move,
+            Vec2 { x: 10.0, y: 10.0 },
+            Vec2 { x: 50.0, y: 24.0 },
+            PointerModifiersV1 {
+                shift: true,
+                ..PointerModifiersV1::default()
+            },
+        )
+        .unwrap();
+        assert_eq!((horizontal.e, horizontal.f), (40.0, 0.0));
+
+        let vertical = gesture_transform(
+            &TransformGesture::Move,
+            Vec2 { x: 10.0, y: 10.0 },
+            Vec2 { x: 20.0, y: 60.0 },
+            PointerModifiersV1 {
+                shift: true,
+                ..PointerModifiersV1::default()
+            },
+        )
+        .unwrap();
+        assert_eq!((vertical.e, vertical.f), (0.0, 50.0));
+    }
+
+    #[test]
+    fn shift_rotation_snaps_absolute_orientation_to_forty_five_degrees() {
         let bounds = OrientedSelectionBoundsV1 {
             center: Vec2 { x: 0.0, y: 0.0 },
             width: 100.0,
             height: 80.0,
-            rotation: 0.0,
+            rotation: 0.2,
         };
         let transform = gesture_transform(
             &TransformGesture::Rotate { bounds },
@@ -650,6 +836,7 @@ mod tests {
         )
         .unwrap();
         let angle = transform.b.atan2(transform.a);
-        assert!((angle - std::f64::consts::PI / 12.0).abs() < 1e-10);
+        let final_orientation = bounds.rotation + angle;
+        assert!((final_orientation - std::f64::consts::FRAC_PI_4).abs() < 1e-10);
     }
 }

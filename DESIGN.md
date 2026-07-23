@@ -36,7 +36,7 @@ The interface should disappear until the user needs it. Content owns the visual 
 - Show only implemented actions; do not seed the UI with disabled future-product promises.
 - Use compact desktop controls with generous canvas space.
 - Preserve predictable, explicit state transitions over decorative motion.
-- Let Clean and Sketch rendering express content style; application chrome stays restrained.
+- Use Clean as the stable product baseline while interaction capabilities mature; treat alternative rendering as a later coherent style-system decision.
 
 ## Typography
 
@@ -71,14 +71,16 @@ The interface should disappear until the user needs it. Content owns the visual 
 - UI actions and programmatic actions must converge on the same Controller and Rust Command path.
 - Tool changes are explicit; history availability is reflected immediately in control state.
 - Select, Draw, and Text are persistent tools. `V`, `P`, and `T` activate them, active buttons use `aria-pressed`, Draw uses a crosshair, Text uses a text cursor, and creating a rectangle returns to Select.
-- Text starts from a canvas click in Text or a semantic double-click on existing text in Select. Editing uses a fixed-font HTML textarea overlay; Enter inserts a line, `Cmd/Ctrl+Enter` or blur commits one Transaction, and `Escape` cancels. Clearing existing text deletes the element through the normal undoable Command path.
-- The top bar exposes one document-level segmented profile control: Clean or Sketch. Sketch uses a fixed v1 preset; seed, roughness, bowing, and hatch parameters are not end-user controls in Phase 1A.
-- Context styles use a fixed accessible palette and discrete presets: rectangle fill/stroke/width, freehand stroke/width, and text color/size/alignment. “No fill” is explicit; arbitrary CSS colors, opacity, dash, and custom Sketch parameters remain outside this slice.
-- Each profile or style press is one Rust Command and one Undo entry. Current values use `aria-pressed` and a visible check/state treatment, not color alone.
-- Freehand uses fixed 3px round ink in this slice. Pen pressure, variable-width outlines, mobile touch editing, and style controls are separate capabilities.
+- Text starts from a canvas click in Text or a semantic double-click on existing text in Select. Editing uses a fixed-font HTML textarea overlay with no field chrome, so only the text and native caret are visible; Enter inserts a line, `Cmd/Ctrl+Enter`, a blank-canvas click, or blur commits one Transaction, and `Escape` cancels. Clearing existing text deletes the element through the normal undoable Command path.
+- The current product surface is Clean-only and exposes no Render Profile control. The persisted profile field and deterministic Sketch resolver remain internal compatibility seams until a later style-system/Sketch v2 design replaces the experimental visual contract.
+- Context styles use a fixed accessible palette and discrete presets: rectangle fill/stroke/width, freehand stroke/width, and text color/size/alignment. “No fill” is explicit; arbitrary CSS colors, opacity, dash, and experimental rendering parameters remain outside this slice.
+- Each style press is one Rust Command and one Undo entry. Current values use `aria-pressed` and a visible check/state treatment, not color alone.
+- Freehand uses fixed 3px round ink in this slice. Multi-point strokes resolve through deterministic midpoint quadratic curves so preview, committed paint, selection bounds, and hit testing follow one smooth geometry while the Document retains its original samples. Click dots and two-point or `Shift` strokes stay exact. A DOM interruption such as capture loss, pointer cancel, or window blur commits the samples already shown; only explicit editor cancellation such as `Escape` or tool switching discards the preview. Pen pressure, variable-width outlines, mobile touch editing, smoothing controls, and style controls are separate capabilities.
 - The Camera percentage is relative to the current fit-content zoom. Clicking it recenters all content with 64px screen padding; content changes may update the percentage but must not move the Camera automatically.
 - A primary click selects the topmost semantic element; an empty-canvas click or `Escape` clears selection. `Delete`, `Backspace`, and the visible Delete button invoke the same undoable element-deletion action.
 - Selection uses a straight solid-blue ring separated from painted bounds by a 6px screen-space gap. Phase 1B adds eight square resize handles, a rotate connector/handle, a translucent marquee, and restrained snap guides; their stroke, size, hit regions, and spacing stay screen-space stable and overlay paint itself ignores pointer events.
+- Once a canvas PointerDown owns a document gesture, later move/up events remain on that gesture even if modifier or Camera gates change. A DOM interruption such as capture loss, pointer cancel, or window blur commits the last visible transform; only explicit editor cancellation such as `Escape` or tool switching restores the pre-gesture document. `Shift` locks moves to the dominant axis, preserves resize aspect ratio, and snaps final rotation to absolute 45° increments.
+- Rectangle and path stroke width is persistent style, not transform geometry. Element or Group resize must not stretch it; Camera zoom still projects the style width with the rest of the document.
 - Persistence uses five explicit presentation states shared by every host: `未保存`, `保存中`, `已保存`, `保存失败`, and `只读`.
 - A save failure remains visible with an explicit `重试` action. Read-only mode explains why editing is unavailable instead of silently disabling controls.
 - Avoid ornamental transitions. Honor reduced-motion preferences.
@@ -108,4 +110,4 @@ The interface should disappear until the user needs it. Content owns the visual 
 
 ---
 
-_Last updated: 2026-07-23 | Reason: confirm Phase 1A style presets and Clean/Sketch product controls_
+_Last updated: 2026-07-23 | Reason: standardize the current product on Clean and defer the visual style system_

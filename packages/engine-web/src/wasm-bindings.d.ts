@@ -20,6 +20,7 @@ declare module '*nodeink_engine.js' {
       phase: string,
       coordinates: Float64Array,
       strokeId: string | undefined,
+      straightLine: boolean,
       commandId: string,
     ): string;
     resolveSceneProfile(profileJson: string): string;
